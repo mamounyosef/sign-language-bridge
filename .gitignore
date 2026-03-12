@@ -4,7 +4,9 @@ __pycache__/
 *$py.class
 .vscode/
 
-data/keypoints/train/
+data/keypoints/
+data/keypoints_preprocessed/
+.virtual_documents/
 
 # C extensions
 *.so
