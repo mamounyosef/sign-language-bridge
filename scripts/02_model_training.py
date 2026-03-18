@@ -8,6 +8,7 @@ from pathlib import Path
 from functools import partial, wraps
 from typing import Optional, Tuple
 import math
+import random
 
 import numpy as np
 import pandas as pd
@@ -29,6 +30,7 @@ import os
 import math
 from collections import Counter
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+import sacrebleu
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # print(f"Using device: {device}")
@@ -43,6 +45,16 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
+
+# %%
+# ─── Training Constants ───
+
+# Maximum loss value for perplexity calculation to prevent overflow
+# math.exp(20) ≈ 485 million — a reasonable max for display
+# Without this cap, loss spikes (early training, bad batches) cause PPL in billions or inf (loss > ~710)
+# This clamps displayed perplexity to a sane maximum while keeping the actual loss value intact
+MAX_PPL_CAP = 20
+
 # %%
 ## Configuration
 
@@ -59,8 +71,8 @@ CONFIG = {
     'coord_dim': 2,             # x, y (z dropped)
 
     # ── Sequence Lengths ──
-    'max_keypoint_frames': 200, # At 20 FPS = 10s (max clip ~8s)
-    'max_text_tokens': 100,     # Excluding BOS/EOS
+    'max_keypoint_frames': 160, # At 20 FPS = 10s (max clip ~8s)
+    'max_text_tokens': 50,     # Excluding BOS/EOS
 
     # ── Tokenizer / Decoder ──
     'decoder_model_name': 'google/gemma-3-270m',
@@ -70,14 +82,14 @@ CONFIG = {
     # ── MLP Projection ──
     'projection_hidden_dim': 512,
     'projection_d_model': 512,  # Output dim → encoder input
-    'projection_dropout': 0.1,
+    'projection_dropout': 0.15,  # Increased from 0.1 to combat overfitting
 
     # ── Transformer Encoder ──
     'encoder_d_model': 512,
     'encoder_num_heads': 8,
     'encoder_num_layers': 6,
     'encoder_feedforward_dim': 2048,
-    'encoder_dropout': 0.1,
+    'encoder_dropout': 0.15,  # Increased from 0.1 to combat overfitting
     'encoder_max_len': 5000,
 
     # ── Cross-Attention ──
@@ -95,6 +107,20 @@ CONFIG = {
     'lora_modules_to_save': ["embed_tokens", "lm_head"],
     'lora_dropout': 0.1,
     'lora_bias': "none",
+
+    # ── Data Augmentation ──
+    'aug_temporal_jitter': True,       # Enable temporal jitter augmentation
+    'aug_temporal_jitter_range': 2,    # Max frames to shift (±2)
+    'aug_temporal_jitter_prob': 0.5,   # Probability of applying
+    'aug_gaussian_noise': True,        # Enable Gaussian noise
+    'aug_noise_std': 0.01,             # Noise std for normalized coords
+    'aug_noise_prob': 0.5,             # Probability of applying
+    'aug_spatial_shift': True,         # Enable spatial translation (X/Y shift)
+    'aug_spatial_shift_range': 0.05,   # Max shift as fraction (±5% applied to all frames/landmarks)
+    'aug_spatial_shift_prob': 0.5,     # Probability of applying
+    'aug_spatial_scale': True,         # Enable spatial scaling (resize skeleton)
+    'aug_spatial_scale_range': (0.9, 1.1),  # Scale factor range (90%-110% size)
+    'aug_spatial_scale_prob': 0.5,     # Probability of applying
 }
 
 # print("Configuration loaded ✓")
@@ -123,18 +149,23 @@ MAX_KEYPOINT_FRAMES = CONFIG['max_keypoint_frames']
 MAX_TEXT_TOKENS = CONFIG['max_text_tokens']
 
 class SignLanguageDataset(Dataset):
-    def __init__(self, manifest, tokenizer, max_frames=MAX_KEYPOINT_FRAMES, max_tokens=MAX_TEXT_TOKENS):
+    def __init__(self, manifest, tokenizer, max_frames=MAX_KEYPOINT_FRAMES, max_tokens=MAX_TEXT_TOKENS,
+                 train=False, augment_config=None):
         """
         Args:
             manifest: List of dicts with keys: sentence_name, text, duration, keypoint_path
             tokenizer: Pretrained tokenizer (Gemma 3)
             max_frames: Max keypoint frames (truncate if longer)
             max_tokens: Max text tokens excluding BOS/EOS (truncate if longer)
+            train: Whether this is training data (enables augmentation)
+            augment_config: Dict with augmentation parameters (uses CONFIG if None)
         """
         self.manifest = manifest
         self.tokenizer = tokenizer
         self.max_frames = max_frames
         self.max_tokens = max_tokens
+        self.train = train
+        self.aug_config = augment_config if augment_config is not None else CONFIG
     
     def __len__(self):
         return len(self.manifest)
@@ -161,7 +192,60 @@ class SignLanguageDataset(Dataset):
         # Convert keypoints to torch tensors
         keypoints = torch.from_numpy(keypoints).float()  # (T, N, 2)
         mask = torch.from_numpy(mask).bool()  # (T, N) - bool for attention masking
-        
+
+        # ── Data Augmentation (training only) ──
+        if self.train:
+            # Temporal jitter: shift sequence by ±max_shift frames
+            if self.aug_config.get('aug_temporal_jitter', False) and random.random() < self.aug_config.get('aug_temporal_jitter_prob', 0.5):
+                max_shift = self.aug_config.get('aug_temporal_jitter_range', 2)
+                shift = random.randint(-max_shift, max_shift)
+                if shift != 0:
+                    T = keypoints.shape[0]
+                    if shift > 0:
+                        # Shift right: pad at start, truncate at end
+                        keypoints = torch.cat([torch.zeros(shift, *keypoints.shape[1:]), keypoints[:-shift]], dim=0)
+                        mask = torch.cat([torch.zeros(shift, *mask.shape[1:], dtype=torch.bool), mask[:-shift]], dim=0)
+                    else:
+                        # Shift left: truncate at start, pad at end
+                        keypoints = torch.cat([keypoints[-shift:], torch.zeros(-shift, *keypoints.shape[1:])], dim=0)
+                        mask = torch.cat([mask[-shift:], torch.zeros(-shift, *mask.shape[1:], dtype=torch.bool)], dim=0)
+
+            # Gaussian noise: add small perturbations to coordinates
+            if self.aug_config.get('aug_gaussian_noise', False) and random.random() < self.aug_config.get('aug_noise_prob', 0.5):
+                noise_std = self.aug_config.get('aug_noise_std', 0.01)
+                # Only add noise to valid keypoints (where mask is True)
+                noise = torch.randn_like(keypoints) * noise_std
+                keypoints = keypoints + noise * mask.unsqueeze(-1).float()  # Apply only where mask=True
+
+            # Spatial shift: translate all keypoints by consistent X/Y offset
+            if self.aug_config.get('aug_spatial_shift', False) and random.random() < self.aug_config.get('aug_spatial_shift_prob', 0.5):
+                shift_range = self.aug_config.get('aug_spatial_shift_range', 0.05)
+                # Sample independent shifts for X and Y axes (applied to ALL frames/landmarks)
+                shift_x = random.uniform(-shift_range, shift_range)
+                shift_y = random.uniform(-shift_range, shift_range)
+
+                # Apply consistent translation to all valid keypoints
+                # keypoints: (T, N, 2) where [..., 0] is X and [..., 1] is Y
+                shift_tensor = torch.tensor([shift_x, shift_y], dtype=keypoints.dtype)
+                keypoints = keypoints + shift_tensor * mask.unsqueeze(-1).float()  # Apply only where mask=True
+
+            # Spatial scaling: resize skeleton around centroid (simulates different signer sizes/distances)
+            if self.aug_config.get('aug_spatial_scale', False) and random.random() < self.aug_config.get('aug_spatial_scale_prob', 0.5):
+                scale_range = self.aug_config.get('aug_spatial_scale_range', (0.9, 1.1))
+                scale_factor = random.uniform(scale_range[0], scale_range[1])
+
+                # Scale around centroid to avoid position drift
+                # Only use valid keypoints to compute centroid
+                if mask.any():
+                    centroid = keypoints[mask].mean(dim=0)  # (2,) - average X,Y of valid keypoints
+
+                    # Scale all keypoints around centroid (keypoints - centroid) * scale + centroid
+                    keypoints_scaled = centroid + (keypoints - centroid) * scale_factor
+
+                    # Apply only to valid keypoints, preserve invalid ones as-is
+                    mask_expanded = mask.unsqueeze(-1)  # (T, N, 1) -> broadcasts to (T, N, 2)
+                    keypoints = torch.where(mask_expanded, keypoints_scaled, keypoints)
+
         # Tokenize text
         text = sample['text']
         token_ids = self.tokenizer.encode(text, add_special_tokens=False)
@@ -497,66 +581,11 @@ class CrossAttentionModule(nn.Module):
         # Cast back to original dtype
         return output.to(original_dtype)
 
-class Gemma3DecoderLayerWithOptionalCrossAttention(nn.Module):
-    """Gemma 3 decoder layer with optional cross-attention."""
-    def __init__(self, original_layer, cross_attn_module=None):
-        super().__init__()
-        self.self_attn = original_layer.self_attn
-        self.mlp = original_layer.mlp
-        self.input_layernorm = original_layer.input_layernorm
-        self.post_attention_layernorm = original_layer.post_attention_layernorm
-        self.pre_feedforward_layernorm = original_layer.pre_feedforward_layernorm
-        self.post_feedforward_layernorm = original_layer.post_feedforward_layernorm
-        self.cross_attn_module = cross_attn_module  # None if no cross-attention
-    
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        encoder_hidden_states: Optional[torch.Tensor] = None,
-        attention_mask: Optional[torch.Tensor] = None,
-        encoder_attention_mask: Optional[torch.Tensor] = None,
-        position_ids: Optional[torch.LongTensor] = None,
-        past_key_value: Optional[Tuple[torch.Tensor]] = None,
-        output_attentions: bool = False,
-        use_cache: bool = False,
-        **kwargs,
-    ):
-        # 1. Self-Attention
-        residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
-        hidden_states, self_attn_weights, present_key_value = self.self_attn(
-            hidden_states,
-            attention_mask=attention_mask,
-            position_ids=position_ids,
-            past_key_value=past_key_value,
-            output_attentions=output_attentions,
-            use_cache=use_cache,
-        )
-        hidden_states = self.post_attention_layernorm(hidden_states)
-        hidden_states = residual + hidden_states
-
-        # 2. Cross-Attention (if this layer has it)
-        if self.cross_attn_module is not None and encoder_hidden_states is not None:
-            hidden_states = self.cross_attn_module(
-                hidden_states, encoder_hidden_states, encoder_attention_mask
-            )
-
-        # 3. MLP
-        residual = hidden_states
-        hidden_states = self.pre_feedforward_layernorm(hidden_states)
-        hidden_states = self.mlp(hidden_states)
-        hidden_states = self.post_feedforward_layernorm(hidden_states)
-        hidden_states = residual + hidden_states
-        
-        if output_attentions:
-            return (hidden_states, present_key_value, self_attn_weights)
-        return (hidden_states, present_key_value)
-
 
 # %%
 ## Step 12: Build Complete Encoder-Decoder Model
 
-# ========== UPDATED WRAPPED LAYER WITH POSITION EMBEDDINGS FIX ==========
+# ========== WRAPPED DECODER LAYER WITH CROSS-ATTENTION ==========
 
 class Gemma3DecoderLayerWithOptionalCrossAttention(nn.Module):
     """Gemma 3 decoder layer with optional cross-attention."""
@@ -587,6 +616,9 @@ class Gemma3DecoderLayerWithOptionalCrossAttention(nn.Module):
         position_embeddings_local: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         **kwargs,
     ):
+        # KV-cache not supported with cross-attention wrapper
+        assert not use_cache, "KV-cache not supported with cross-attention wrapper"
+
         # 1. Self-Attention
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
@@ -757,10 +789,6 @@ def patch_gemma_model_forward(model):
     model.base_model.model.model.forward = patched_forward
     print("✓ Patched Gemma with hybrid attention + encoder-decoder support")
 
-
-# ========== RE-WRAP DECODER LAYERS WITH FIXED CLASS ==========
-# Note: Must re-wrap since the class definition changed
-
 # ========== COMPLETE MODEL ==========
 class SignLanguageTranslationModel(nn.Module):
     def __init__(self, keypoint_projection, encoder, encoder_projection, decoder, tokenizer):
@@ -770,7 +798,7 @@ class SignLanguageTranslationModel(nn.Module):
         self.encoder_projection = encoder_projection
         self.decoder = decoder
         self.tokenizer = tokenizer
-        self.loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, label_smoothing=0.15)
+        self.loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
 
     def forward(self, keypoints, keypoint_mask, token_ids, text_attention_mask, return_loss=True):
         device = keypoints.device
@@ -807,16 +835,33 @@ class SignLanguageTranslationModel(nn.Module):
 
     @torch.no_grad()
     def generate(self, keypoints, keypoint_mask, max_new_tokens=50, temperature=1.0, top_k=50):
-        device = keypoints.device
+        """
+        Generate text from keypoints with support for batched inputs.
 
-        # Bug #4: cast keypoints to projection dtype
+        Args:
+            keypoints: (B, T, N, 2) - batched keypoints
+            keypoint_mask: (B, T, N) - batched masks
+            max_new_tokens: maximum tokens to generate
+            temperature: sampling temperature (0 = greedy)
+            top_k: top-k sampling
+
+        Returns:
+            dict with 'generated_ids' (B, L) and 'generated_text' (list of B strings)
+        """
+        device = keypoints.device
+        batch_size = keypoints.shape[0]
+
+        # Encode keypoints
         encoder_input = self.keypoint_projection(keypoints.to(next(self.keypoint_projection.parameters()).dtype))
         encoder_padding_mask = ~(keypoint_mask.any(dim=-1))
         encoder_output = self.encoder(encoder_input, src_key_padding_mask=encoder_padding_mask)
-        # Bug #3: use next().dtype instead of self.decoder.dtype
         encoder_hidden_states = self.encoder_projection(encoder_output).to(next(self.decoder.parameters()).dtype)
 
-        generated_ids = torch.tensor([[self.tokenizer.bos_token_id]], device=device, dtype=torch.long)
+        # Initialize generation: (B, 1) with BOS token for each sample
+        generated_ids = torch.full((batch_size, 1), self.tokenizer.bos_token_id, device=device, dtype=torch.long)
+
+        # Track which sequences are still generating (not ended with EOS)
+        active_sequences = torch.ones(batch_size, dtype=torch.bool, device=device)
 
         for _ in range(max_new_tokens):
             outputs = self.decoder(
@@ -827,11 +872,11 @@ class SignLanguageTranslationModel(nn.Module):
                 return_dict=True,
             )
 
-            next_token_logits = outputs.logits[:, -1, :]
+            next_token_logits = outputs.logits[:, -1, :]  # (B, vocab_size)
 
             # Greedy decoding if temperature is 0 or very low
             if temperature < 1e-5:
-                next_token = next_token_logits.argmax(dim=-1, keepdim=True)
+                next_token = next_token_logits.argmax(dim=-1, keepdim=True)  # (B, 1)
             else:
                 next_token_logits = next_token_logits / temperature
 
@@ -840,64 +885,24 @@ class SignLanguageTranslationModel(nn.Module):
                     next_token_logits[indices_to_remove] = float('-inf')
 
                 probs = torch.softmax(next_token_logits, dim=-1)
-                next_token = torch.multinomial(probs, num_samples=1)
+                next_token = torch.multinomial(probs, num_samples=1)  # (B, 1)
+
             generated_ids = torch.cat([generated_ids, next_token], dim=1)
 
-            if next_token.item() == self.tokenizer.eos_token_id:
+            # Update active sequences: mark as inactive if EOS is generated
+            active_sequences &= (next_token.squeeze(-1) != self.tokenizer.eos_token_id)
+
+            # Stop if all sequences have generated EOS
+            if not active_sequences.any():
                 break
 
-        generated_text = self.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
-        return {'generated_ids': generated_ids, 'generated_text': generated_text}
+        # Decode all generated sequences
+        generated_texts = [
+            self.tokenizer.decode(ids, skip_special_tokens=True)
+            for ids in generated_ids
+        ]
 
-
-# %%
-## Step 13: Detailed Model Parameter Count
-
-# %%
-# ## Quick Training Test (100 samples, 3 epochs, no saving)
-
-# import torch
-# import torch.optim as optim
-# from torch.utils.data import DataLoader, Subset
-
-# # Small subset
-# test_indices = list(range(100))
-# test_subset = Subset(train_dataset, test_indices)
-# test_train_loader = DataLoader(test_subset, batch_size=4, shuffle=True, collate_fn=collate_fn_with_tokenizer)
-
-# # Optimizer
-# optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()), lr=1e-4)
-
-# model.train()
-
-# print("Quick training test (100 samples, 3 epochs)...")
-# for epoch in range(3):
-#     total_loss = 0
-#     num_batches = 0
-    
-#     for batch in test_train_loader:
-#         optimizer.zero_grad()
-        
-#         output = model(
-#             keypoints=batch['keypoints'].to(device),
-#             keypoint_mask=batch['keypoint_mask'].to(device),
-#             token_ids=batch['token_ids'].to(device),
-#             text_attention_mask=batch['text_attention_mask'].to(device),
-#             return_loss=True,
-#         )
-        
-#         loss = output['loss']
-#         loss.backward()
-#         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-#         optimizer.step()
-        
-#         total_loss += loss.item()
-#         num_batches += 1
-    
-#     avg_loss = total_loss / num_batches
-#     print(f"  Epoch {epoch+1}/3 — Loss: {avg_loss:.4f}")
-
-# print("✓ Test complete. Loss should be decreasing.")
+        return {'generated_ids': generated_ids, 'generated_text': generated_texts}
 
 # %%
 ## Training Configuration
@@ -909,11 +914,11 @@ TRAIN_CONFIG = {
 
     # ── Learning Rates (separate for different components) ──
     # Encoder + Cross-attention (new, untrained components)
-    'encoder_lr': 6e-5,              # Higher LR for new encoder/cross-attn
-    'encoder_min_lr': 6e-7,
+    'encoder_lr': 5e-5,              # Higher LR for new encoder/cross-attn
+    'encoder_min_lr': 5e-8,
     # LoRA adapters (fine-tuning pretrained decoder)
     'decoder_lr': 4e-5,              # Lower LR for LoRA fine-tuning
-    'decoder_min_lr': 4e-7,
+    'decoder_min_lr': 4e-8,
 
     'warmup_steps': 320,
     'weight_decay': 0.05,
@@ -921,7 +926,7 @@ TRAIN_CONFIG = {
     'max_grad_norm': 0.5,
 
     # ── Gradient Accumulation ──
-    'grad_accum_steps': 10,          # effective batch = batch_size * grad_accum_steps
+    'grad_accum_steps': 8,          # effective batch = batch_size * grad_accum_steps
 
     # ── Logging ──
     'log_every_steps': 10,          # print training stats every N optimizer steps
@@ -938,9 +943,14 @@ TRAIN_CONFIG = {
     'max_eval_batches': 60,         # max batches for validation loss computation
     'max_generate_samples': 50,     # max samples for BLEU/ROUGE generation
     'num_print_samples': 3,         # how many generated samples to print during eval
+    'val_gen_batch_size': 16,       # batch size for validation generation (speeds up BLEU/ROUGE)
 
     # ── Early Stopping ──
-    'early_stopping_patience': 20,   # stop after N evaluations without improvement
+    'early_stopping_patience': 25,   # stop after N evaluations without improvement
+
+    # ── DataLoader Workers ──
+    'train_num_workers': 4,          # workers for training DataLoader
+    'val_num_workers': 2,            # workers for validation DataLoader
 }
 
 
@@ -949,55 +959,29 @@ TRAIN_CONFIG = {
 
 def compute_bleu(references, hypotheses, max_n=4):
     """
-    Compute corpus-level BLEU score (BLEU-1 through BLEU-max_n).
-    Returns BLEU-4 as a percentage (0-100).
+    Compute corpus-level BLEU score using sacrebleu for standardized, reproducible metrics.
+
+    Args:
+        references: List of reference strings
+        hypotheses: List of hypothesis strings
+        max_n: Maximum n-gram order (1 for BLEU-1, 4 for BLEU-4)
+
+    Returns:
+        BLEU score as a percentage (0-100) with proper tokenization normalization.
     """
     if not references or not hypotheses:
         return 0.0
 
-    clipped_counts = [0] * max_n
-    total_counts = [0] * max_n
-    ref_len = 0
-    hyp_len = 0
+    # sacrebleu expects List[List[str]] where outer list is reference SETS, not sentences
+    # We have ONE reference set containing all reference sentences: [references]
+    bleu = sacrebleu.corpus_bleu(
+        hypotheses,
+        [references],  # Single reference set with all sentences
+        max_ngram_order=max_n,
+        tokenize='13a'  # Standard Moses tokenizer (most common in literature)
+    )
 
-    for ref, hyp in zip(references, hypotheses):
-        ref_tokens = ref.strip().split()
-        hyp_tokens = hyp.strip().split()
-
-        if not hyp_tokens:
-            continue
-
-        ref_len += len(ref_tokens)
-        hyp_len += len(hyp_tokens)
-
-        for n in range(1, max_n + 1):
-            ref_ngrams = Counter(
-                tuple(ref_tokens[i:i + n])
-                for i in range(len(ref_tokens) - n + 1)
-            )
-            hyp_ngrams = Counter(
-                tuple(hyp_tokens[i:i + n])
-                for i in range(len(hyp_tokens) - n + 1)
-            )
-
-            for ng in hyp_ngrams:
-                clipped_counts[n - 1] += min(hyp_ngrams[ng], ref_ngrams.get(ng, 0))
-            total_counts[n - 1] += sum(hyp_ngrams.values())
-
-    if hyp_len == 0:
-        return 0.0
-
-    # Brevity penalty
-    bp = min(1.0, math.exp(1 - ref_len / hyp_len))
-
-    # Geometric mean of clipped precisions
-    log_avg = 0.0
-    for n in range(max_n):
-        if total_counts[n] == 0 or clipped_counts[n] == 0:
-            return 0.0
-        log_avg += math.log(clipped_counts[n] / total_counts[n]) / max_n
-
-    return bp * math.exp(log_avg) * 100
+    return bleu.score  # Already in 0-100 scale
 
 
 def compute_rouge_l(references, hypotheses):
@@ -1137,11 +1121,11 @@ def get_cuda_mem():
 
 @torch.no_grad()
 def validate(model, val_loader, val_dataset, tokenizer, device,
-             max_eval_batches, max_generate_samples, num_print_samples):
+             max_eval_batches, max_generate_samples, num_print_samples, val_gen_batch_size):
     """
     Run validation: compute loss, perplexity, token accuracy,
-    then generate text for BLEU & ROUGE-L.
-    
+    then generate text for BLEU & ROUGE-L using batched generation.
+
     Returns dict with all validation metrics.
     """
     model.eval()
@@ -1176,10 +1160,10 @@ def validate(model, val_loader, val_dataset, tokenizer, device,
         total_tokens += mask.sum().item()
 
     avg_loss = total_loss / max(num_batches, 1)
-    perplexity = math.exp(min(avg_loss, 20))  # cap to avoid inf
+    perplexity = math.exp(min(avg_loss, MAX_PPL_CAP))
     token_acc = (total_correct / max(total_tokens, 1)) * 100
 
-    # ── Part 2: Generate Text for BLEU / ROUGE-L ──
+    # ── Part 2: Generate Text for BLEU / ROUGE-L (Batched for speed) ──
     references = []
     hypotheses = []
     sample_pairs = []  # (ref, hyp) pairs for printing
@@ -1188,31 +1172,59 @@ def validate(model, val_loader, val_dataset, tokenizer, device,
     num_samples = min(max_generate_samples, len(val_dataset))
     sample_indices = torch.randperm(len(val_dataset), generator=torch.Generator().manual_seed(42))[:num_samples].tolist()
 
-    for idx in sample_indices:
-        sample = val_dataset[idx]
+    # Process in batches for faster generation
+    for batch_start in range(0, num_samples, val_gen_batch_size):
+        batch_end = min(batch_start + val_gen_batch_size, num_samples)
+        batch_indices = sample_indices[batch_start:batch_end]
+        batch_samples = [val_dataset[idx] for idx in batch_indices]
 
-        # Reference text: decode token_ids (skip BOS/EOS)
-        ref_text = tokenizer.decode(sample['token_ids'][1:-1], skip_special_tokens=True).strip()
+        # Extract and collate keypoints/masks (pad to max length in this batch)
+        keypoints_list = [s['keypoints'] for s in batch_samples]
+        keypoint_mask_list = [s['keypoint_mask'] for s in batch_samples]
+        token_ids_list = [s['token_ids'] for s in batch_samples]
 
-        # Generate (greedy decoding for deterministic, reproducible evaluation)
+        max_frames = max(kp.shape[0] for kp in keypoints_list)
+        batch_size = len(batch_samples)
+        num_landmarks = keypoints_list[0].shape[1]
+
+        # Pad keypoints and masks
+        padded_keypoints = torch.zeros(batch_size, max_frames, num_landmarks, 2)
+        padded_masks = torch.zeros(batch_size, max_frames, num_landmarks, dtype=torch.bool)
+
+        for i, (kp, mask) in enumerate(zip(keypoints_list, keypoint_mask_list)):
+            T = kp.shape[0]
+            padded_keypoints[i, :T] = kp
+            padded_masks[i, :T] = mask
+
+        # Batch generate (greedy decoding for deterministic, reproducible evaluation)
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             gen_output = model.generate(
-                keypoints=sample['keypoints'].unsqueeze(0).to(device, non_blocking=True),
-                keypoint_mask=sample['keypoint_mask'].unsqueeze(0).to(device, non_blocking=True),
+                keypoints=padded_keypoints.to(device, non_blocking=True),
+                keypoint_mask=padded_masks.to(device, non_blocking=True),
                 max_new_tokens=50,
-                temperature=0.0,  # Greedy decoding for faster, deterministic validation
+                temperature=0.0,  # Greedy decoding
                 top_k=50,
             )
-        hyp_text = gen_output['generated_text'].strip()
 
-        references.append(ref_text)
-        hypotheses.append(hyp_text)
+        # Decode all outputs in batch
+        batch_hypotheses = gen_output['generated_text']  # List of strings or single string
+        if isinstance(batch_hypotheses, str):
+            batch_hypotheses = [batch_hypotheses]
 
-        if len(sample_pairs) < num_print_samples:
-            sample_pairs.append((ref_text, hyp_text))
+        # Extract references and store results
+        for i, (tokens, hyp_text) in enumerate(zip(token_ids_list, batch_hypotheses)):
+            ref_text = tokenizer.decode(tokens[1:-1], skip_special_tokens=True).strip()
+            hyp_text = hyp_text.strip()
+
+            references.append(ref_text)
+            hypotheses.append(hyp_text)
+
+            if len(sample_pairs) < num_print_samples:
+                sample_pairs.append((ref_text, hyp_text))
 
     # Compute generation metrics
     bleu1 = compute_bleu(references, hypotheses, max_n=1)  # Early learning signal
+    bleu2 = compute_bleu(references, hypotheses, max_n=2)  # Bigram precision
     bleu4 = compute_bleu(references, hypotheses, max_n=4)  # Strict metric
     rouge_l = compute_rouge_l(references, hypotheses)
 
@@ -1223,6 +1235,7 @@ def validate(model, val_loader, val_dataset, tokenizer, device,
         'val_ppl': perplexity,
         'token_acc': token_acc,
         'bleu1': bleu1,
+        'bleu2': bleu2,
         'bleu4': bleu4,
         'rouge_l': rouge_l,
         'sample_pairs': sample_pairs,
@@ -1235,6 +1248,7 @@ def validate(model, val_loader, val_dataset, tokenizer, device,
 
 # %%
 ## Training Loop
+
 
 def train(model, train_loader, val_loader, val_dataset, tokenizer,
           optimizer_encoder, optimizer_decoder, scheduler_encoder, scheduler_decoder,
@@ -1251,6 +1265,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
     max_eval_batches = train_config['max_eval_batches']
     max_generate_samples = train_config['max_generate_samples']
     num_print_samples = train_config['num_print_samples']
+    val_gen_batch_size = train_config['val_gen_batch_size']
     patience = train_config['early_stopping_patience']
 
     # Calculate total optimizer steps
@@ -1296,16 +1311,22 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                     return_loss=True,
                 )
 
-            # Scale loss for gradient accumulation
-            loss = output['loss'] / grad_accum_steps
+            # ── Optimizer step check ──
+            is_accum_step = (micro_step + 1) % grad_accum_steps == 0
+            is_last_step = (micro_step + 1) == len(train_loader)
+
+            # Scale loss for gradient accumulation (handle partial last batch correctly)
+            if is_last_step and not is_accum_step:
+                # Last partial batch: only accumulate remaining steps
+                actual_accum_steps = (micro_step + 1) % grad_accum_steps
+            else:
+                actual_accum_steps = grad_accum_steps
+
+            loss = output['loss'] / actual_accum_steps
             loss.backward()
 
             epoch_loss += output['loss'].item()
             epoch_microbatches += 1
-
-            # ── Optimizer step (every grad_accum_steps micro-batches) ──
-            is_accum_step = (micro_step + 1) % grad_accum_steps == 0
-            is_last_step = (micro_step + 1) == len(train_loader)
 
             if is_accum_step or is_last_step:
                 # Gradient clipping
@@ -1338,7 +1359,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                     # Calculate ETA
                     eta_seconds = (elapsed / global_step) * (total_optimizer_steps - global_step)
 
-                    train_ppl = math.exp(min(avg_loss, 20))
+                    train_ppl = math.exp(min(avg_loss, MAX_PPL_CAP))
 
                     print("=" * 180)
                     print(
@@ -1381,7 +1402,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
 
                     val_metrics = validate(
                         model, val_loader, val_dataset, tokenizer, device,
-                        max_eval_batches, max_generate_samples, num_print_samples,
+                        max_eval_batches, max_generate_samples, num_print_samples, val_gen_batch_size,
                     )
 
                     cuda_mem, cuda_peak = get_cuda_mem()
@@ -1397,6 +1418,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                         print(f"  Raw values: loss={val_metrics['val_loss']}, ppl={val_metrics['val_ppl']}, acc={val_metrics['token_acc']}")
 
                     print(f"  BLEU-1: {val_metrics['bleu1']:.4f} | "
+                          f"BLEU-2: {val_metrics['bleu2']:.4f} | "
                           f"BLEU-4: {val_metrics['bleu4']:.4f} | "
                           f"ROUGE-L: {val_metrics['rouge_l']:.3f}%")
                     print(f"  (Evaluated on {val_metrics['num_eval_batches']} batches, "
@@ -1416,6 +1438,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                         'val_loss': f"{val_metrics['val_loss']:.6f}",
                         'val_ppl': f"{val_metrics['val_ppl']:.4f}",
                         'bleu1': f"{val_metrics['bleu1']:.4f}",
+                        'bleu2': f"{val_metrics['bleu2']:.4f}",
                         'bleu4': f"{val_metrics['bleu4']:.4f}",
                         'rouge_l': f"{val_metrics['rouge_l']:.4f}",
                         'token_acc': f"{val_metrics['token_acc']:.4f}",
@@ -1443,6 +1466,10 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                     print(f"{'─' * 60}\n")
 
                     model.train()
+
+                    # Clear CUDA cache after validation to free temporary generation memory
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
 
                     # ── Early stopping ──
                     if evals_without_improvement >= patience:
@@ -1509,7 +1536,6 @@ def main():
     except:
         pass
 
-    # From original line ~100
     # Paths
     TRAIN_CSV = CONFIG['data_train_csv']
     KEYPOINTS_DIR = CONFIG['keypoints_train_dir']
@@ -1550,8 +1576,6 @@ def main():
     else:
         print(f'\nKeypoint file not found: {keypoint_path}')
 
-
-    # From original line ~144
     # Paths
     TRAIN_CSV = CONFIG['data_train_csv']
     KEYPOINTS_DIR = CONFIG['keypoints_train_dir']
@@ -1590,9 +1614,6 @@ def main():
         for name in missing[:5]:
             print(f'  {name}')
 
-
-
-    # From original line ~187
     VAL_CSV = CONFIG['data_val_csv']
     KEYPOINTS_VAL_DIR = CONFIG['keypoints_val_dir']
 
@@ -1615,8 +1636,6 @@ def main():
 
     print(f'Val manifest: {len(val_manifest)} samples')
 
-
-    # From original line ~213
     # Load tokenizer
     tokenizer = AutoTokenizer.from_pretrained(CONFIG['decoder_model_name'])
 
@@ -1644,8 +1663,6 @@ def main():
         token_str = tokenizer.decode([token_id])
         print(f"  {i}: {token_id:5d} -> '{token_str}'")
 
-
-    # From original line ~244
     # Gemma tokenizer already has all special tokens we need
     print("Special tokens verification:")
     print(f"  BOS token: {tokenizer.bos_token} (id={tokenizer.bos_token_id}) ✓")
@@ -1666,11 +1683,9 @@ def main():
     print(f"\nNote: BOS/EOS will be added explicitly in Dataset class")
     print(f"      PAD (id={tokenizer.pad_token_id}) will be used for batching")
 
-
-    # From original line ~332
-    # Create updated dataset with tokenizer
-    train_dataset = SignLanguageDataset(manifest, tokenizer)
-    val_dataset = SignLanguageDataset(val_manifest, tokenizer)
+    # Create datasets with augmentation enabled for training
+    train_dataset = SignLanguageDataset(manifest, tokenizer, train=True, augment_config=CONFIG)
+    val_dataset = SignLanguageDataset(val_manifest, tokenizer, train=False)  # No augmentation for validation
     print(f'Train dataset: {len(train_dataset)} samples')
     print(f'Val dataset: {len(val_dataset)} samples')
     print(f'Max keypoint frames: {MAX_KEYPOINT_FRAMES}')
@@ -1690,9 +1705,6 @@ def main():
     print(f"  Decoder input = token_ids[:-1] (BOS to second-to-last)")
     print(f"  Labels = token_ids[1:] (second to EOS)")
 
-
-
-    # From original line ~420
     # Create partial function with pad_token_id for DataLoader
     collate_fn_with_tokenizer = partial(collate_fn, pad_token_id=tokenizer.pad_token_id)
 
@@ -1716,8 +1728,6 @@ def main():
     print(f"  First 10: {batch['token_ids'][0, :10].tolist()}")
     print(f"  Attention mask first 10: {batch['text_attention_mask'][0, :10].tolist()}")
 
-
-    # From original line ~482
     # Load pretrained decoder in fp16
     model_name = CONFIG['decoder_model_name']
     decoder = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16, device_map=device)
@@ -1741,8 +1751,6 @@ def main():
     # for name, module in decoder.named_modules():
     #     print(f"{name}: {type(module).__name__}")
 
-
-    # From original line ~514
     # Configure LoRA with comprehensive coverage
     lora_config = LoraConfig(
         r=CONFIG['lora_r'],
@@ -1792,7 +1800,6 @@ def main():
     print(f"  → Smaller model + lower rank = better fit for 20k samples!")
 
 
-    # From original line ~610
     # Create projection layer
     projection = KeypointProjection(
         num_landmarks=CONFIG['num_landmarks'],
@@ -1820,7 +1827,6 @@ def main():
     print(f"  (LayerNorm ensures stable distribution for encoder input)")
 
 
-    # From original line ~731
     # Create encoder
     encoder = TransformerEncoder(
         d_model=CONFIG['encoder_d_model'],
@@ -1861,7 +1867,6 @@ def main():
     print(f"\nEncoder ready to produce hidden states for decoder cross-attention!")
 
 
-    # From original line ~889
     # Configuration for Gemma 3 270M
     ENCODER_DIM = CONFIG['encoder_d_model']
     BOTTLENECK_DIM = CONFIG['bottleneck_dim']
@@ -1918,9 +1923,6 @@ def main():
         else:
             cross_attn_modules[layer_idx] = shared_modules[layer_idx]
 
-    for module in set(id(m) for m in cross_attn_modules.values()):
-        pass
-
     for module in {id(m): m for m in cross_attn_modules.values()}.values():
         module.to(torch.bfloat16)
 
@@ -1934,18 +1936,6 @@ def main():
 
     # Create encoder projection
     encoder_projection = EncoderProjection(encoder_dim=ENCODER_DIM).to(torch.bfloat16)
-
-    # Wrap all decoder layers (path after LoRA: base_model.model.model.layers)
-    num_layers = len(decoder.base_model.model.model.layers)
-    for i in range(num_layers):
-        original_layer = decoder.base_model.model.model.layers[i]
-        cross_attn_module = cross_attn_modules.get(i, None)  # None if layer doesn't have cross-attn
-        decoder.base_model.model.model.layers[i] = Gemma3DecoderLayerWithOptionalCrossAttention(
-            original_layer,
-            cross_attn_module=cross_attn_module
-        )
-
-    print(f"\n✓ Wrapped {num_layers} Gemma decoder layers")
 
     # Count parameters
     cross_attn_params = sum(
@@ -2001,7 +1991,6 @@ def main():
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"  Total trainable: {total_params / 1e6:.2f}M params")
     
-    # From original line ~1342
     def count_parameters(module):
         return sum(p.numel() for p in module.parameters())
 
@@ -2038,34 +2027,41 @@ def main():
     print(f"  Trainable: {total_trainable_all / 1e6:>8.2f}M  ({(total_trainable_all/max(total_all, 1))*100:>5.1f}%)")
     print("=" * 60 + "\n")
 
-
-    # From original line ~1463
     print("TRAIN_CONFIG loaded ✓")
     for k, v in TRAIN_CONFIG.items():
         print(f"  {k}: {v}")
 
     # %%
-    # DataLoaders
+    # DataLoaders with configurable workers (auto-capped to CPU count)
+    import os
+    max_workers = os.cpu_count() or 4
+    train_workers = min(TRAIN_CONFIG['train_num_workers'], max_workers)
+    val_workers = min(TRAIN_CONFIG['val_num_workers'], max_workers)
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=TRAIN_CONFIG['batch_size'],
         shuffle=True,
         collate_fn=collate_fn_with_tokenizer,
-        num_workers=4,
+        num_workers=train_workers,
         pin_memory=True,
-        prefetch_factor=4,
-        persistent_workers=True  # Keep workers alive between epochs
+        prefetch_factor=min(train_workers, 4) if train_workers > 0 else None,
+        persistent_workers=train_workers > 0  # Only if using workers
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=TRAIN_CONFIG['batch_size'],
         shuffle=False,
         collate_fn=collate_fn_with_tokenizer,
-        num_workers=4,
+        num_workers=val_workers,
         pin_memory=True,
-        prefetch_factor=4,
-        persistent_workers=True  # Keep workers alive between validations
+        prefetch_factor=min(val_workers, 4) if val_workers > 0 else None,
+        persistent_workers=val_workers > 0  # Only if using workers
     )
+
+    print(f"\n📦 DataLoaders:")
+    print(f"  Train workers: {train_workers} (config: {TRAIN_CONFIG['train_num_workers']}, max: {max_workers})")
+    print(f"  Val workers: {val_workers} (config: {TRAIN_CONFIG['val_num_workers']}, max: {max_workers})")
 
     # Separate optimizers for encoder and decoder with different LRs
     # Optimizer 1: Encoder + Cross-attention (new, untrained components)
@@ -2200,8 +2196,6 @@ def main():
     print("=" * 60)
 
     # %%
-
-    # From original line ~2094
     # Initialize managers
     ckpt_manager = CheckpointManager(
         checkpoint_dir=TRAIN_CONFIG['checkpoint_dir'],
@@ -2223,7 +2217,7 @@ def main():
         fieldnames=[
             'timestamp', 'global_step', 'epoch',
             'val_loss', 'val_ppl',
-            'bleu1', 'bleu4', 'rouge_l', 'token_acc',
+            'bleu1', 'bleu2', 'bleu4', 'rouge_l', 'token_acc',
             'cuda_mem_gb', 'cuda_peak_gb',
             'elapsed_sec',
         ],
