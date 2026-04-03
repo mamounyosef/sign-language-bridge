@@ -1,8 +1,10 @@
-# %% [markdown]
-# # SignBridge - Model Training & Inference
 
-# %%
 ## Imports & Setup
+
+# Disable TensorFlow backend to avoid protobuf conflicts (PyTorch-only project)
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow logging
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN warnings
 
 from pathlib import Path
 from functools import partial, wraps
@@ -18,19 +20,23 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.optim import AdamW
+import torch._dynamo
 
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, DynamicCache
 from transformers.modeling_outputs import BaseModelOutputWithPast
 from peft import LoraConfig, get_peft_model
+from torch.utils.tensorboard import SummaryWriter
 
 ## Additional Imports for Training
 import time
 import csv
-import os
-import math
 from collections import Counter
-from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR, ConstantLR
 import sacrebleu
+
+import tempfile
+import shutil
+import torch.multiprocessing as mp
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # print(f"Using device: {device}")
@@ -57,13 +63,12 @@ MAX_PPL_CAP = 20
 
 # %%
 ## Configuration
-
 CONFIG = {
     # ── Data Paths ──
-    'data_train_csv': Path('..') / 'data' / '(final)_how2sign_train_filtered.csv',
-    'data_val_csv': Path('..') / 'data' / '(final)_how2sign_val_filtered.csv',
-    'keypoints_train_dir': Path('..') / 'data' / 'keypoints_preprocessed' / 'train',
-    'keypoints_val_dir': Path('..') / 'data' / 'keypoints_preprocessed' / 'val',
+    'data_train_csv': Path('..') / 'data' / 'final_full_train_dataset.tsv',
+    'data_val_csv': Path('..') / 'data' / 'final_full_val_dataset.tsv',
+    'keypoints_train_dir': Path('..') / 'data' / 'full_dataset_keypoints_preprocessed' / 'train',
+    'keypoints_val_dir': Path('..') / 'data' / 'full_dataset_keypoints_preprocessed' / 'val',
     'csv_sep': '\t',
 
     # ── Keypoint Dimensions ──
@@ -87,7 +92,7 @@ CONFIG = {
     # ── Transformer Encoder ──
     'encoder_d_model': 512,
     'encoder_num_heads': 8,
-    'encoder_num_layers': 6,
+    'encoder_num_layers': 4,
     'encoder_feedforward_dim': 2048,
     'encoder_dropout': 0.15,  # Increased from 0.1 to combat overfitting
     'encoder_max_len': 5000,
@@ -96,15 +101,15 @@ CONFIG = {
     'bottleneck_dim': 448,      # 448 / 8 heads = 56 dims/head
     'cross_attn_num_heads': 8,
     'cross_attn_dropout': 0.1,
-    'cross_attn_layers': [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 15, 16, 17],   # 14 out of 18
-    'weight_sharing_pairs': [(2, 3), (5, 6), (10, 12), (14, 15)],           # 4 pairs
+    'cross_attn_layers': [0, 2, 9, 15, 17],  # 5 out of 18
+    'weight_sharing_pairs': [],              # 2 pairs
 
     # ── LoRA ──
-    'lora_r': 16,
-    'lora_alpha': 32,
+    'lora_r': 8,
+    'lora_alpha': 16,
     'lora_target_modules': ["q_proj", "k_proj", "v_proj", "o_proj",
                             "gate_proj", "up_proj", "down_proj"],
-    'lora_modules_to_save': ["embed_tokens", "lm_head"],
+    'lora_modules_to_save': [],  # embed_tokens and lm_head kept frozen
     'lora_dropout': 0.1,
     'lora_bias': "none",
 
@@ -123,26 +128,76 @@ CONFIG = {
     'aug_spatial_scale_prob': 0.5,     # Probability of applying
 }
 
-# print("Configuration loaded ✓")
+## Training Configuration
+TRAIN_CONFIG = {
+    # ── Core Training ──
+    'num_epochs': 30,
+    'batch_size': 6,
 
-# %%
-## Step 1: Load and Inspect One Sample
+    # ── Gradient Accumulation ──
+    'grad_accum_steps': 8,          # effective batch = batch_size * grad_accum_steps
 
-# %%
-## Step 2a: Build Dataset Manifest
+    # ── Learning Rates (separate for different components) ──
+    # Encoder + Cross-attention (new, untrained components)
+    'encoder_lr': 4e-5,              # Higher LR for new encoder/cross-attn
+    'encoder_min_lr': 4e-7, # 1% of initial LR
+    # LoRA adapters (fine-tuning pretrained decoder)
+    'decoder_lr': 3e-5,              # Lower LR for LoRA fine-tuning
+    'decoder_min_lr': 3e-7, # 1% of initial LR
 
-# %%
-## Step 2b: Build Validation Manifest
+    'warmup_steps': 250,
+    'weight_decay': 0.05,
+    'adam_betas': (0.9, 0.98),
+    'max_grad_norm': 0.6,
 
-# %%
-## Step 4: Setup Gemma 3 270M Tokenizer
+    # ── Logging ──
+    'log_every_steps': 10,          # print training stats every N optimizer steps
+    'train_log_file': Path('..') / 'saved_metrics' / 'train_log.csv',
+    'val_log_file': Path('..') / 'saved_metrics' / 'val_log.csv',
+    'gen_samples_log_file': Path('..') / 'saved_metrics' / 'gen_samples_log.csv',
+    'tensorboard_dir': Path('..') / 'saved_metrics' / 'tensorboard' / 'signbridge_training',
 
-# %%
-## Step 5: Verify Special Tokens (Gemma has all tokens already!)
+    # ── Checkpointing ──
+    'save_every_steps': 400,        # save checkpoint every N optimizer steps
+    'keep_last_n_checkpoints': 3,   # sliding window: keep only last N periodic checkpoints
+    'checkpoint_dir': Path('..') / 'checkpoints',
 
-# %%
-# $$
-## Step 6: Update Dataset to Tokenize Text (with BOS/EOS, max_length, error handling)
+    # ── Evaluation ──
+    'eval_every_steps': 220,        # run validation every N optimizer steps (after threshold)
+    'eval_every_steps_warmup': 900, # run validation every N steps while below eval_warmup_threshold
+    'eval_warmup_threshold': 2000,  # step at which to switch from warmup to normal eval frequency
+                                    # counter resets at threshold: next eval at threshold + eval_every_steps
+    'max_eval_batches': 60,         # max batches for validation loss computation
+    'max_generate_samples': 200,     # max samples for BLEU/ROUGE generation
+    'num_print_samples': 3,         # how many generated samples to print during eval
+    'val_gen_batch_size': 16,       # batch size for validation generation (speeds up BLEU/ROUGE)
+    'val_beam_size': 4,             # beam search width for validation generation (1 = greedy)
+    'val_repetition_penalty': 1.2,  # repetition penalty for validation generation (1.0 = off)
+    'val_use_kv_cache': True,       # use KV-cache during generation (faster, disable if issues)
+
+    # ── Early Stopping ──
+    'early_stopping_patience': 25,   # stop after N evaluations without improvement
+
+    # ── DataLoader config ──
+    'train_num_workers': 4,          # workers for training DataLoader
+    'train_prefetch_factor': 2,      # prefetch factor for training DataLoader
+    'val_num_workers': 2,            # workers for validation DataLoader
+    'val_prefetch_factor': 2,        # prefetch factor for validation DataLoader
+
+    # ── Resuming ──
+    'resume_training': False,       # set to True to load a checkpoint
+    'load_best_model': False,       # if True, loads best_model.pt instead of periodic checkpoint
+    'resume_checkpoint_step': 5600, # step number of the checkpoint to load if load_best_model is False
+
+    # ── Decoder Freeze Phase ──
+    # Freezes the entire decoder (LoRA + embeddings + norms — everything) for the first N
+    # optimizer steps, forcing cross-attention to establish a real signal before Gemma adapts.
+    # Cross-attention + encoder continue to train normally throughout this phase.
+    # The decoder LR schedule starts its own independent clock only after the freeze ends,
+    # so its warmup → cosine decay runs over the remaining training window, not the full run.
+    'freeze_decoder': True,          # if True, freeze decoder for the first N optimizer steps
+    'decoder_freeze_steps': 2000,    # number of optimizer steps to keep the decoder frozen
+}
 
 # Max sequence lengths (safety caps to avoid OOM)
 MAX_KEYPOINT_FRAMES = CONFIG['max_keypoint_frames']
@@ -265,13 +320,13 @@ class SignLanguageDataset(Dataset):
             'sentence_name': sample['sentence_name']  # For debugging
         }
 
-# ● The 3 dimensions explained:
-#   torch.Size([144, 116, 3]) means:
-#   - 144 = Number of frames (T) - temporal dimension
-#   - 116 = Number of landmarks (N) - 60 face + 14 pose + 42 hands
-#   - 3 = Coordinates (x, y, z) for each landmark
+        # ● The 3 dimensions explained:
+        #   torch.Size([144, 116, 3]) means:
+        #   - 144 = Number of frames (T) - temporal dimension
+        #   - 116 = Number of landmarks (N) - 60 face + 14 pose + 42 hands
+        #   - 3 = Coordinates (x, y, z) for each landmark
 
-#   So shape is (T, N, C) = (frames, landmarks, coordinates)
+        #   So shape is (T, N, C) = (frames, landmarks, coordinates)
 
 # %%
 ## Step 7: Create Collate Function for Batching
@@ -375,6 +430,23 @@ def collate_fn(batch, pad_token_id):
 # %%
 ## Step 9: Build MLP Projection Layer
 
+def init_from_scratch_weights(module, std=0.02):
+    """
+    Applies standard Transformer initialization (Normal(0, std)) to 
+    from-scratch layers.
+    """
+    for name, param in module.named_parameters():
+        if 'bias' in name:
+            if param.requires_grad:
+                nn.init.zeros_(param)
+        elif 'weight' in name:
+            if 'norm' in name.lower():
+                if param.requires_grad:
+                    nn.init.ones_(param)
+            else:
+                if param.requires_grad and param.dim() >= 2:
+                    nn.init.normal_(param, mean=0.0, std=std)
+
 class KeypointProjection(nn.Module):
     def __init__(self, num_landmarks=116, coord_dim=2, hidden_dim=512, d_model=512):
         """
@@ -400,6 +472,8 @@ class KeypointProjection(nn.Module):
         
         self.input_dim = input_dim
         self.d_model = d_model
+        
+        init_from_scratch_weights(self)
     
     def forward(self, keypoints):
         """
@@ -494,6 +568,8 @@ class TransformerEncoder(nn.Module):
             num_layers=num_layers
         )
         
+        init_from_scratch_weights(self)
+        
     def forward(self, x, src_key_padding_mask=None):
         """
         Args:
@@ -522,6 +598,8 @@ class EncoderProjection(nn.Module):
         """Normalizes encoder outputs."""
         super().__init__()
         self.layer_norm = nn.LayerNorm(encoder_dim)
+        
+        init_from_scratch_weights(self)
     
     def forward(self, encoder_outputs):
         return self.layer_norm(encoder_outputs)
@@ -544,14 +622,17 @@ class CrossAttentionModule(nn.Module):
         )
         
         self.cross_attn_out_proj = nn.Linear(bottleneck_dim, hidden_size)  # 448 → 640
+        self.cross_attn_layer_norm = nn.LayerNorm(hidden_size)
+        self.dropout = nn.Dropout(dropout)
+        
+        # Apply standard normal initialization
+        init_from_scratch_weights(self)
 
-        # Zero-init output projection: cross-attention starts as no-op, learns gradually
+        # OVERRIDE: Zero-init output projection
+        # Cross-attention starts as no-op, learns gradually
         # This prevents the decoder from learning to suppress random noise at init
         nn.init.zeros_(self.cross_attn_out_proj.weight)
         nn.init.zeros_(self.cross_attn_out_proj.bias)
-
-        self.cross_attn_layer_norm = nn.LayerNorm(hidden_size)
-        self.dropout = nn.Dropout(dropout)
         
     def forward(self, hidden_states, encoder_hidden_states, encoder_attention_mask):
         original_dtype = hidden_states.dtype
@@ -616,8 +697,8 @@ class Gemma3DecoderLayerWithOptionalCrossAttention(nn.Module):
         position_embeddings_local: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
         **kwargs,
     ):
-        # KV-cache not supported with cross-attention wrapper
-        assert not use_cache, "KV-cache not supported with cross-attention wrapper"
+        # KV-cache is supported: self_attn updates the cache in-place,
+        # cross-attention doesn't need caching (encoder output is constant during generation)
 
         # 1. Self-Attention
         residual = hidden_states
@@ -697,53 +778,87 @@ def patch_gemma_model_forward(model):
         device = hidden_states.device
         dtype = hidden_states.dtype
 
-        if position_ids is None:
-            if cache_position is not None:
-                position_ids = cache_position.unsqueeze(0)
-            else:
-                position_ids = torch.arange(seq_len, device=device).unsqueeze(0)
+        # ── KV-Cache support ──
+        # Create cache if use_cache=True and none provided
+        if use_cache and past_key_values is None:
+            past_key_values = DynamicCache()
+
+        # Determine how many tokens have been cached
+        past_seen_tokens = 0
+        if past_key_values is not None and hasattr(past_key_values, 'get_seq_length'):
+            past_seen_tokens = past_key_values.get_seq_length()
 
         if cache_position is None:
-            cache_position = torch.arange(seq_len, device=device)
+            cache_position = torch.arange(
+                past_seen_tokens, past_seen_tokens + seq_len, device=device
+            )
+
+        if position_ids is None:
+            position_ids = cache_position.unsqueeze(0)
 
         # Dual rotary embeddings
         position_embeddings_global = rotary_emb(hidden_states, position_ids)
         position_embeddings_local = rotary_emb_local(hidden_states, position_ids)
 
-        # Build both attention masks
-        def create_full_causal_mask(seq_len, device, dtype, attn_mask=None):
-            fill_val = -1e4 if dtype == torch.float16 else -1e9
-            mask = torch.triu(torch.ones(seq_len, seq_len, device=device, dtype=torch.bool), diagonal=1)
-            mask = torch.where(mask,
-                torch.full([], fill_val, device=device, dtype=dtype),
-                torch.zeros([], device=device, dtype=dtype))
-            mask = mask.unsqueeze(0).unsqueeze(0)
-            if attn_mask is not None:
-                padding = attn_mask.unsqueeze(1).unsqueeze(2).to(dtype)
-                padding = (1.0 - padding) * fill_val
-                mask = mask + padding
-            return mask
-
-        def create_sliding_window_mask(seq_len, window_size, device, dtype, attn_mask=None):
-            fill_val = -1e4 if dtype == torch.float16 else -1e9
-            row_idx = torch.arange(seq_len, device=device).unsqueeze(1)
-            col_idx = torch.arange(seq_len, device=device).unsqueeze(0)
-            can_attend = (col_idx <= row_idx) & ((row_idx - col_idx) < window_size)
-            mask = torch.where(~can_attend,
-                torch.full([], fill_val, device=device, dtype=dtype),
-                torch.zeros([], device=device, dtype=dtype))
-            mask = mask.unsqueeze(0).unsqueeze(0)
-            if attn_mask is not None:
-                padding = attn_mask.unsqueeze(1).unsqueeze(2).to(dtype)
-                padding = (1.0 - padding) * fill_val
-                mask = mask + padding
-            return mask
-
+        # ── Build attention masks ──
         window_size = getattr(config, 'sliding_window', 4096)
-        causal_mask_mapping = {
-            "full_attention": create_full_causal_mask(seq_len, device, dtype, attention_mask),
-            "sliding_attention": create_sliding_window_mask(seq_len, window_size, device, dtype, attention_mask),
-        }
+        fill_val = -1e4 if dtype == torch.float16 else -1e9
+        total_len = past_seen_tokens + seq_len  # full sequence length including cache
+
+        if past_seen_tokens > 0 and seq_len == 1:
+            # Decode mode: single new token attending to all cached + self
+            # Full attention: new token can attend to everything → no masking
+            full_mask = torch.zeros(1, 1, 1, total_len, device=device, dtype=dtype)
+
+            # Sliding window: mask positions outside the window
+            if total_len > window_size:
+                positions = torch.arange(total_len, device=device)
+                current_pos = cache_position[0]
+                out_of_window = (current_pos - positions) >= window_size
+                sliding_mask = torch.where(
+                    out_of_window,
+                    torch.full([], fill_val, device=device, dtype=dtype),
+                    torch.zeros([], device=device, dtype=dtype),
+                ).unsqueeze(0).unsqueeze(0).unsqueeze(0)  # (1, 1, 1, total_len)
+            else:
+                sliding_mask = torch.zeros(1, 1, 1, total_len, device=device, dtype=dtype)
+
+            causal_mask_mapping = {
+                "full_attention": full_mask,
+                "sliding_attention": sliding_mask,
+            }
+        else:
+            # Prefill or training mode: full causal masks (seq_len × seq_len)
+            def create_full_causal_mask(seq_len, device, dtype, attn_mask=None):
+                mask = torch.triu(torch.ones(seq_len, seq_len, device=device, dtype=torch.bool), diagonal=1)
+                mask = torch.where(mask,
+                    torch.full([], fill_val, device=device, dtype=dtype),
+                    torch.zeros([], device=device, dtype=dtype))
+                mask = mask.unsqueeze(0).unsqueeze(0)
+                if attn_mask is not None:
+                    padding = attn_mask.unsqueeze(1).unsqueeze(2).to(dtype)
+                    padding = (1.0 - padding) * fill_val
+                    mask = mask + padding
+                return mask
+
+            def create_sliding_window_mask(seq_len, window_size, device, dtype, attn_mask=None):
+                row_idx = torch.arange(seq_len, device=device).unsqueeze(1)
+                col_idx = torch.arange(seq_len, device=device).unsqueeze(0)
+                can_attend = (col_idx <= row_idx) & ((row_idx - col_idx) < window_size)
+                mask = torch.where(~can_attend,
+                    torch.full([], fill_val, device=device, dtype=dtype),
+                    torch.zeros([], device=device, dtype=dtype))
+                mask = mask.unsqueeze(0).unsqueeze(0)
+                if attn_mask is not None:
+                    padding = attn_mask.unsqueeze(1).unsqueeze(2).to(dtype)
+                    padding = (1.0 - padding) * fill_val
+                    mask = mask + padding
+                return mask
+
+            causal_mask_mapping = {
+                "full_attention": create_full_causal_mask(seq_len, device, dtype, attention_mask),
+                "sliding_attention": create_sliding_window_mask(seq_len, window_size, device, dtype, attention_mask),
+            }
 
         all_hidden_states = () if output_hidden_states else None
         all_self_attns = () if output_attentions else None
@@ -781,7 +896,7 @@ def patch_gemma_model_forward(model):
 
         return BaseModelOutputWithPast(
             last_hidden_state=hidden_states,
-            past_key_values=past_key_values,
+            past_key_values=past_key_values if use_cache else None,
             hidden_states=all_hidden_states,
             attentions=all_self_attns,
         )
@@ -833,8 +948,150 @@ class SignLanguageTranslationModel(nn.Module):
 
         return {'logits': logits}
 
+    def _apply_repetition_penalty(self, logits, generated_ids, penalty):
+        """Apply repetition penalty to logits for previously generated tokens.
+        Positive logits are divided by penalty, negative logits are multiplied.
+        This discourages the model from repeating tokens it has already produced.
+        """
+        if penalty == 1.0:
+            return logits
+        # Gather logits for previously generated tokens
+        score = torch.gather(logits, 1, generated_ids)
+        # Penalize: reduce positive scores, amplify negative scores
+        score = torch.where(score > 0, score / penalty, score * penalty)
+        logits = logits.scatter(1, generated_ids, score)
+        return logits
+
     @torch.no_grad()
-    def generate(self, keypoints, keypoint_mask, max_new_tokens=50, temperature=1.0, top_k=50):
+    def _beam_search_single(self, encoder_hidden_states, encoder_padding_mask,
+                            device, max_new_tokens, beam_size, repetition_penalty, use_kv_cache=True):
+        """
+        Beam search for a single sample. Beams are batched for GPU efficiency.
+
+        Args:
+            encoder_hidden_states: (1, T, D) - single sample encoder output
+            encoder_padding_mask: (1, T) - single sample mask
+            device: torch device
+            max_new_tokens: max tokens to generate
+            beam_size: number of beams
+            repetition_penalty: penalty for repeated tokens
+
+        Returns:
+            best_sequence: (L,) tensor of token IDs
+        """
+        eos_id = self.tokenizer.eos_token_id
+        bos_id = self.tokenizer.bos_token_id
+
+        # Expand encoder states for all beams: (1, T, D) → (K, T, D)
+        enc_hs = encoder_hidden_states.expand(beam_size, -1, -1).contiguous()
+        enc_mask = encoder_padding_mask.expand(beam_size, -1).contiguous()
+
+        # Initialize: all beams start with BOS
+        generated = torch.full((beam_size, 1), bos_id, dtype=torch.long, device=device)
+
+        # Log-probability scores for each beam
+        beam_scores = torch.zeros(beam_size, device=device)
+        beam_scores[1:] = -1e9  # Only beam 0 is active initially
+
+        completed = []  # List of (length_normalized_score, sequence)
+        past_key_values = None  # KV-cache for self-attention
+
+        for step in range(max_new_tokens):
+            # With KV-cache: only pass the new token after the first step
+            if use_kv_cache and past_key_values is not None:
+                input_ids = generated[:, -1:]
+            else:
+                input_ids = generated
+
+            outputs = self.decoder(
+                input_ids=input_ids,
+                encoder_hidden_states=enc_hs,
+                encoder_attention_mask=enc_mask,
+                use_cache=use_kv_cache,
+                return_dict=True,
+                past_key_values=past_key_values if use_kv_cache else None,
+            )
+
+            if use_kv_cache:
+                past_key_values = outputs.past_key_values
+            logits = outputs.logits[:, -1, :]  # (K, vocab_size)
+
+            # Apply repetition penalty
+            if repetition_penalty != 1.0:
+                logits = self._apply_repetition_penalty(logits, generated, repetition_penalty)
+
+            log_probs = torch.log_softmax(logits, dim=-1)  # (K, V)
+            vocab_size = log_probs.shape[-1]
+
+            # Compute next scores: beam_score + log_prob for each candidate
+            next_scores = beam_scores.unsqueeze(1) + log_probs  # (K, V)
+            flat_scores = next_scores.view(-1)  # (K * V)
+
+            # Select top 2*K candidates (extra to handle EOS completions)
+            num_candidates = min(2 * beam_size, flat_scores.shape[0])
+            top_scores, top_flat_idx = flat_scores.topk(num_candidates)
+
+            beam_idx = top_flat_idx // vocab_size   # Which beam each came from
+            token_idx = top_flat_idx % vocab_size   # Which token was selected
+
+            new_beams = []
+            new_scores_list = []
+            new_beam_source_indices = []  # Track source beam for cache reordering
+
+            for i in range(len(top_scores)):
+                if len(new_beams) >= beam_size:
+                    break
+
+                b = beam_idx[i].item()
+                t = token_idx[i].item()
+                s = top_scores[i].item()
+
+                new_seq = torch.cat([generated[b], torch.tensor([t], device=device)])
+
+                if t == eos_id:
+                    # Completed beam — store with length-normalized score
+                    completed.append((s / len(new_seq), new_seq))
+                else:
+                    new_beams.append(new_seq)
+                    new_scores_list.append(s)
+                    new_beam_source_indices.append(b)
+
+            # All beams ended with EOS this step
+            if len(new_beams) == 0:
+                break
+
+            # Pad to beam_size if needed (some beams completed)
+            while len(new_beams) < beam_size:
+                new_beams.append(new_beams[-1].clone())
+                new_scores_list.append(-1e9)
+                new_beam_source_indices.append(new_beam_source_indices[-1])
+
+            # Reorder KV-cache to match the new beam assignments
+            if use_kv_cache and past_key_values is not None:
+                cache_reorder_idx = torch.tensor(
+                    new_beam_source_indices[:beam_size], dtype=torch.long, device=device
+                )
+                past_key_values.reorder_cache(cache_reorder_idx)
+
+            generated = torch.stack(new_beams[:beam_size])
+            beam_scores = torch.tensor(new_scores_list[:beam_size], device=device)
+
+            # Early stop: enough completed hypotheses
+            if len(completed) >= beam_size:
+                break
+
+        if completed:
+            # Return highest-scoring completed sequence
+            completed.sort(key=lambda x: x[0], reverse=True)
+            return completed[0][1]
+        else:
+            # No beam produced EOS — return best active beam
+            best = beam_scores.argmax().item()
+            return generated[best]
+
+    @torch.no_grad()
+    def generate(self, keypoints, keypoint_mask, max_new_tokens=50, temperature=1.0,
+                 top_k=50, repetition_penalty=1.0, beam_size=1, use_kv_cache=True):
         """
         Generate text from keypoints with support for batched inputs.
 
@@ -844,6 +1101,9 @@ class SignLanguageTranslationModel(nn.Module):
             max_new_tokens: maximum tokens to generate
             temperature: sampling temperature (0 = greedy)
             top_k: top-k sampling
+            repetition_penalty: penalty factor for repeated tokens (1.0 = no penalty)
+            beam_size: number of beams for beam search (1 = greedy/sampling)
+            use_kv_cache: whether to use KV-cache for faster generation
 
         Returns:
             dict with 'generated_ids' (B, L) and 'generated_text' (list of B strings)
@@ -851,28 +1111,67 @@ class SignLanguageTranslationModel(nn.Module):
         device = keypoints.device
         batch_size = keypoints.shape[0]
 
-        # Encode keypoints
+        # Encode keypoints (shared by all decoding strategies)
         encoder_input = self.keypoint_projection(keypoints.to(next(self.keypoint_projection.parameters()).dtype))
         encoder_padding_mask = ~(keypoint_mask.any(dim=-1))
         encoder_output = self.encoder(encoder_input, src_key_padding_mask=encoder_padding_mask)
         encoder_hidden_states = self.encoder_projection(encoder_output).to(next(self.decoder.parameters()).dtype)
 
-        # Initialize generation: (B, 1) with BOS token for each sample
-        generated_ids = torch.full((batch_size, 1), self.tokenizer.bos_token_id, device=device, dtype=torch.long)
+        # ── Beam Search Path ──
+        if beam_size > 1:
+            # Process each sample individually (beams are batched per sample)
+            all_sequences = []
+            for i in range(batch_size):
+                best_seq = self._beam_search_single(
+                    encoder_hidden_states[i:i+1],
+                    encoder_padding_mask[i:i+1],
+                    device, max_new_tokens, beam_size, repetition_penalty, use_kv_cache,
+                )
+                all_sequences.append(best_seq)
 
-        # Track which sequences are still generating (not ended with EOS)
+            # Decode and pad for return
+            generated_texts = [
+                self.tokenizer.decode(seq, skip_special_tokens=True)
+                for seq in all_sequences
+            ]
+            max_len = max(seq.shape[0] for seq in all_sequences)
+            padded_ids = torch.full((batch_size, max_len), self.tokenizer.pad_token_id,
+                                   device=device, dtype=torch.long)
+            for i, seq in enumerate(all_sequences):
+                padded_ids[i, :seq.shape[0]] = seq
+
+            return {'generated_ids': padded_ids, 'generated_text': generated_texts}
+
+        # ── Greedy / Sampling Path ──
+        generated_ids = torch.full((batch_size, 1), self.tokenizer.bos_token_id, device=device, dtype=torch.long)
         active_sequences = torch.ones(batch_size, dtype=torch.bool, device=device)
+        past_key_values = None  # KV-cache for self-attention
 
         for _ in range(max_new_tokens):
+            # With KV-cache: only pass the new token after the first step
+            if use_kv_cache and past_key_values is not None:
+                input_ids = generated_ids[:, -1:]
+            else:
+                input_ids = generated_ids
+
             outputs = self.decoder(
-                input_ids=generated_ids,
+                input_ids=input_ids,
                 encoder_hidden_states=encoder_hidden_states,
                 encoder_attention_mask=encoder_padding_mask,
-                use_cache=False,
+                use_cache=use_kv_cache,
                 return_dict=True,
+                past_key_values=past_key_values if use_kv_cache else None,
             )
 
+            if use_kv_cache:
+                past_key_values = outputs.past_key_values
             next_token_logits = outputs.logits[:, -1, :]  # (B, vocab_size)
+
+            # Apply repetition penalty
+            if repetition_penalty != 1.0:
+                next_token_logits = self._apply_repetition_penalty(
+                    next_token_logits, generated_ids, repetition_penalty
+                )
 
             # Greedy decoding if temperature is 0 or very low
             if temperature < 1e-5:
@@ -904,56 +1203,6 @@ class SignLanguageTranslationModel(nn.Module):
 
         return {'generated_ids': generated_ids, 'generated_text': generated_texts}
 
-# %%
-## Training Configuration
-
-TRAIN_CONFIG = {
-    # ── Core Training ──
-    'num_epochs': 30,
-    'batch_size': 8,
-
-    # ── Learning Rates (separate for different components) ──
-    # Encoder + Cross-attention (new, untrained components)
-    'encoder_lr': 5e-5,              # Higher LR for new encoder/cross-attn
-    'encoder_min_lr': 5e-8,
-    # LoRA adapters (fine-tuning pretrained decoder)
-    'decoder_lr': 4e-5,              # Lower LR for LoRA fine-tuning
-    'decoder_min_lr': 4e-8,
-
-    'warmup_steps': 320,
-    'weight_decay': 0.05,
-    'adam_betas': (0.9, 0.999),
-    'max_grad_norm': 0.5,
-
-    # ── Gradient Accumulation ──
-    'grad_accum_steps': 8,          # effective batch = batch_size * grad_accum_steps
-
-    # ── Logging ──
-    'log_every_steps': 10,          # print training stats every N optimizer steps
-    'train_log_file': Path('..') / 'saved_metrics' / 'train_log.csv',
-    'val_log_file': Path('..') / 'saved_metrics' / 'val_log.csv',
-
-    # ── Checkpointing ──
-    'save_every_steps': 400,        # save checkpoint every N optimizer steps
-    'keep_last_n_checkpoints': 3,   # sliding window: keep only last N periodic checkpoints
-    'checkpoint_dir': Path('..') / 'checkpoints',
-
-    # ── Evaluation ──
-    'eval_every_steps': 160,        # run validation every N optimizer steps
-    'max_eval_batches': 60,         # max batches for validation loss computation
-    'max_generate_samples': 50,     # max samples for BLEU/ROUGE generation
-    'num_print_samples': 3,         # how many generated samples to print during eval
-    'val_gen_batch_size': 16,       # batch size for validation generation (speeds up BLEU/ROUGE)
-
-    # ── Early Stopping ──
-    'early_stopping_patience': 25,   # stop after N evaluations without improvement
-
-    # ── DataLoader Workers ──
-    'train_num_workers': 4,          # workers for training DataLoader
-    'val_num_workers': 2,            # workers for validation DataLoader
-}
-
-
 ## Helper Functions: Metrics, Checkpointing, CSV Logging
 # ─── Metric Functions ───
 
@@ -974,14 +1223,31 @@ def compute_bleu(references, hypotheses, max_n=4):
 
     # sacrebleu expects List[List[str]] where outer list is reference SETS, not sentences
     # We have ONE reference set containing all reference sentences: [references]
-    bleu = sacrebleu.corpus_bleu(
+    bleu_result = sacrebleu.corpus_bleu(
         hypotheses,
         [references],  # Single reference set with all sentences
-        max_ngram_order=max_n,
         tokenize='13a'  # Standard Moses tokenizer (most common in literature)
     )
 
-    return bleu.score  # Already in 0-100 scale
+    # sacrebleu computes BLEU-4 by default with all n-gram precisions
+    # To get BLEU-1, BLEU-2, etc., we compute geometric mean of first N precisions
+    if max_n == 4:
+        # Return full BLEU-4 score
+        return bleu_result.score
+    else:
+        # Extract first max_n precisions and compute BLEU-n manually
+        precisions = bleu_result.precisions[:max_n]  # List of individual n-gram precisions
+        bp = bleu_result.bp  # Brevity penalty
+
+        # Geometric mean of precisions (in log space to avoid underflow)
+        if any(p == 0 for p in precisions):
+            return 0.0
+
+        log_precision_sum = sum(math.log(p) for p in precisions)
+        geo_mean = math.exp(log_precision_sum / max_n)
+
+        # BLEU = brevity_penalty * geometric_mean_of_precisions
+        return bp * geo_mean
 
 
 def compute_rouge_l(references, hypotheses):
@@ -1034,12 +1300,38 @@ class CheckpointManager:
         self.periodic_checkpoints = []  # list of paths (oldest first)
         self.best_path = self.checkpoint_dir / 'best_model.pt'
 
+    def _atomic_save(self, state_dict, path):
+        """Atomically save checkpoint to prevent corruption on disk errors."""
+
+
+        # Save to temporary file first
+        temp_fd, temp_path = tempfile.mkstemp(dir=self.checkpoint_dir, suffix='.pt.tmp')
+        try:
+            # Close the file descriptor, torch.save will open it again
+            os.close(temp_fd)
+
+            # Save to temp file
+            torch.save(state_dict, temp_path)
+
+            # Atomic rename (replaces old file if exists)
+            shutil.move(temp_path, path)
+            return True
+        except Exception as e:
+            # Clean up temp file on error
+            if Path(temp_path).exists():
+                Path(temp_path).unlink()
+            raise RuntimeError(f"Failed to save checkpoint to {path}: {e}")
+
     def save_periodic(self, state_dict, step):
         """Save a periodic checkpoint with sliding window eviction."""
         path = self.checkpoint_dir / f'checkpoint_step_{step}.pt'
-        torch.save(state_dict, path)
-        self.periodic_checkpoints.append(path)
-        print(f"  💾 Saved periodic checkpoint: {path.name}")
+        try:
+            self._atomic_save(state_dict, path)
+            self.periodic_checkpoints.append(path)
+            print(f"  💾 Saved periodic checkpoint: {path.name}")
+        except RuntimeError as e:
+            print(f"  ⚠️  Warning: {e}")
+            return
 
         # Evict oldest if exceeding window
         while len(self.periodic_checkpoints) > self.keep_last_n:
@@ -1049,12 +1341,17 @@ class CheckpointManager:
                 print(f"  🗑️  Evicted old checkpoint: {old_path.name}")
 
     def save_best(self, state_dict):
-        """Save the best model (always kept, never evicted)."""
-        torch.save(state_dict, self.best_path)
-        print(f"  ⭐ Saved best model: {self.best_path.name}")
+        """Save the best model (always kept, never evicted). Uses atomic save to prevent corruption."""
+        try:
+            self._atomic_save(state_dict, self.best_path)
+            print(f"  ⭐ Saved best model: {self.best_path.name}")
+        except RuntimeError as e:
+            print(f"  ⚠️  Warning: Failed to save best model: {e}")
+            print(f"  💡 Check disk space - you may need to free up storage!")
 
-    def _build_state_dict(self, model, optimizer_encoder, optimizer_decoder, scheduler_encoder, scheduler_decoder, epoch, global_step, best_val_loss):
-        return {
+    def _build_state_dict(self, model, optimizer_encoder, optimizer_decoder, scheduler_encoder, scheduler_decoder, epoch, global_step, best_val_loss, evals_without_improvement, elapsed_sec):
+        
+        state = {
             'model_state_dict': model.state_dict(),
             'optimizer_encoder_state_dict': optimizer_encoder.state_dict(),
             'optimizer_decoder_state_dict': optimizer_decoder.state_dict(),
@@ -1063,7 +1360,15 @@ class CheckpointManager:
             'epoch': epoch,
             'global_step': global_step,
             'best_val_loss': best_val_loss,
+            'evals_without_improvement': evals_without_improvement,
+            'elapsed_sec': elapsed_sec,
+            'rng_state': torch.get_rng_state(),
+            'numpy_rng_state': np.random.get_state(),
+            'python_rng_state': random.getstate(),
         }
+        if torch.cuda.is_available():
+            state['cuda_rng_state_all'] = torch.cuda.get_rng_state_all()
+        return state
 
 
 # ─── CSV Logger ───
@@ -1121,7 +1426,8 @@ def get_cuda_mem():
 
 @torch.no_grad()
 def validate(model, val_loader, val_dataset, tokenizer, device,
-             max_eval_batches, max_generate_samples, num_print_samples, val_gen_batch_size):
+             max_eval_batches, max_generate_samples, num_print_samples, val_gen_batch_size,
+             val_beam_size=1, val_repetition_penalty=1.0, val_use_kv_cache=True):
     """
     Run validation: compute loss, perplexity, token accuracy,
     then generate text for BLEU & ROUGE-L using batched generation.
@@ -1196,14 +1502,17 @@ def validate(model, val_loader, val_dataset, tokenizer, device,
             padded_keypoints[i, :T] = kp
             padded_masks[i, :T] = mask
 
-        # Batch generate (greedy decoding for deterministic, reproducible evaluation)
+        # Batch generate (beam search for higher-quality evaluation outputs)
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
             gen_output = model.generate(
                 keypoints=padded_keypoints.to(device, non_blocking=True),
                 keypoint_mask=padded_masks.to(device, non_blocking=True),
                 max_new_tokens=50,
-                temperature=0.0,  # Greedy decoding
+                temperature=0.0,
                 top_k=50,
+                repetition_penalty=val_repetition_penalty,
+                beam_size=val_beam_size,
+                use_kv_cache=val_use_kv_cache,
             )
 
         # Decode all outputs in batch
@@ -1239,6 +1548,7 @@ def validate(model, val_loader, val_dataset, tokenizer, device,
         'bleu4': bleu4,
         'rouge_l': rouge_l,
         'sample_pairs': sample_pairs,
+        'all_pairs': list(zip(references, hypotheses)),  # All (ref, hyp) pairs for CSV logging
         'num_eval_batches': num_batches,
         'num_gen_samples': num_samples,
     }
@@ -1252,7 +1562,8 @@ def validate(model, val_loader, val_dataset, tokenizer, device,
 
 def train(model, train_loader, val_loader, val_dataset, tokenizer,
           optimizer_encoder, optimizer_decoder, scheduler_encoder, scheduler_decoder,
-          device, train_config, ckpt_manager, train_csv_logger, val_csv_logger):
+          device, train_config, ckpt_manager, train_csv_logger, val_csv_logger, gen_samples_csv_logger, tb_writer,
+          start_epoch=1, start_global_step=0, best_val_loss=float('inf'), start_evals_without_improvement=0, start_elapsed_sec=0.0):
     """Full training loop with all bells and whistles."""
 
     # Unpack config
@@ -1262,22 +1573,28 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
     log_every = train_config['log_every_steps']
     save_every = train_config['save_every_steps']
     eval_every = train_config['eval_every_steps']
+    eval_every_warmup = train_config.get('eval_every_steps_warmup', eval_every)
+    eval_warmup_threshold = train_config.get('eval_warmup_threshold', 0)
     max_eval_batches = train_config['max_eval_batches']
     max_generate_samples = train_config['max_generate_samples']
     num_print_samples = train_config['num_print_samples']
     val_gen_batch_size = train_config['val_gen_batch_size']
+    val_beam_size = train_config['val_beam_size']
+    val_repetition_penalty = train_config['val_repetition_penalty']
+    val_use_kv_cache = train_config['val_use_kv_cache']
     patience = train_config['early_stopping_patience']
+    freeze_decoder = train_config.get('freeze_decoder', False)
+    decoder_freeze_steps = train_config.get('decoder_freeze_steps', 2000)
 
     # Calculate total optimizer steps
     steps_per_epoch = len(train_loader)
-    total_microbatch_steps = steps_per_epoch * num_epochs
-    total_optimizer_steps = total_microbatch_steps // grad_accum_steps
+    optimizer_steps_per_epoch = math.ceil(steps_per_epoch / grad_accum_steps)
+    total_optimizer_steps = optimizer_steps_per_epoch * num_epochs
 
     # State tracking
-    global_step = 0                 # optimizer steps
-    best_val_loss = float('inf')
-    evals_without_improvement = 0
-    training_start = time.time()
+    global_step = start_global_step # optimizer steps
+    evals_without_improvement = start_evals_without_improvement
+    training_start = time.time() - start_elapsed_sec
     step_losses = []                # losses between log intervals
     step_grad_norms = []            # grad norms between log intervals
     log_step_start = time.time()
@@ -1292,7 +1609,38 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
     print("🚀 TRAINING STARTED")
     print("=" * 60 + "\n")
 
-    for epoch in range(1, num_epochs + 1):
+    optimizer_steps_per_epoch = math.ceil(len(train_loader) / grad_accum_steps)
+
+    # Check if we finished the epoch exactly at the checkpoint step
+    steps_done_in_epoch = start_global_step % optimizer_steps_per_epoch
+    if steps_done_in_epoch == 0 and start_global_step > 0:
+        start_epoch += 1
+        print(f"  ⏭️ Checkpoint was at exact end of Epoch {start_epoch - 1}. Advancing to Epoch {start_epoch}.")
+
+    # ── Decoder Freeze Phase Setup ──
+    # Collect the exact parameter objects that optimizer_decoder manages.
+    # These are the same tensor references, so toggling requires_grad here affects
+    # gradient computation immediately (no optimizer rebuild needed).
+    decoder_params_for_freeze = [p for group in optimizer_decoder.param_groups for p in group['params']]
+
+    # Determine initial freeze state.
+    # Handles both fresh start (start_global_step=0) and mid-freeze resume correctly.
+    decoder_is_frozen = freeze_decoder and (start_global_step < decoder_freeze_steps)
+
+    if freeze_decoder:
+        if decoder_is_frozen:
+            for p in decoder_params_for_freeze:
+                p.requires_grad = False
+            remaining = decoder_freeze_steps - start_global_step
+            print(f"\n  🔒 Decoder FROZEN | Will unfreeze at step {decoder_freeze_steps} ({remaining} steps remaining)")
+            print(f"     Only Encoder + Cross-Attention will update during this phase.")
+        else:
+            # Resume past the freeze window — nothing to do
+            print(f"\n  ✅ Decoder freeze phase already completed (resumed at step {start_global_step} ≥ {decoder_freeze_steps})")
+    else:
+        print(f"\n  ℹ️  Decoder freeze phase: DISABLED")
+
+    for epoch in range(start_epoch, num_epochs + 1):
         epoch_start = time.time()
         epoch_loss = 0.0
         epoch_microbatches = 0
@@ -1300,7 +1648,18 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
         optimizer_encoder.zero_grad()
         optimizer_decoder.zero_grad()
 
+        # How many micro-batches to skip if resuming mid-epoch
+        micro_steps_already_processed = 0
+        if epoch == start_epoch and start_global_step > 0 and steps_done_in_epoch > 0:
+            micro_steps_already_processed = steps_done_in_epoch * grad_accum_steps
+            if micro_steps_already_processed > 0:
+                print(f"  ⏭️ Resuming mid-epoch. Fast-forwarding {micro_steps_already_processed} micro-batches...")
+
         for micro_step, batch in enumerate(train_loader):
+            # Mid-epoch skipping
+            if epoch == start_epoch and micro_step < micro_steps_already_processed:
+                continue
+
             # ── Forward pass with mixed precision ──
             with torch.amp.autocast('cuda', dtype=torch.bfloat16):
                 output = model(
@@ -1329,19 +1688,41 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
             epoch_microbatches += 1
 
             if is_accum_step or is_last_step:
-                # Gradient clipping
+                # Gradient clipping (frozen params have no grad, so norm is over encoder only during freeze)
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     model.parameters(), max_norm=max_grad_norm
                 ).item()
 
+                # Always step encoder + cross-attention
                 optimizer_encoder.step()
-                optimizer_decoder.step()
                 scheduler_encoder.step()
-                scheduler_decoder.step()
+
+                # Decoder optimizer and scheduler only step when NOT frozen.
+                # The decoder scheduler runs on its own independent clock: it is never
+                # stepped during the freeze phase, so its warmup → cosine decay starts
+                # from step 0 the moment the decoder is unfrozen.
+                if not decoder_is_frozen:
+                    optimizer_decoder.step()
+                    scheduler_decoder.step()
+
                 optimizer_encoder.zero_grad()
                 optimizer_decoder.zero_grad()
 
                 global_step += 1
+
+                # ── Unfreeze decoder once the freeze phase is complete ──
+                # Check after incrementing: global_step now equals the number of completed steps.
+                # When global_step reaches decoder_freeze_steps, the N frozen steps are done.
+                if decoder_is_frozen and global_step >= decoder_freeze_steps:
+                    decoder_is_frozen = False
+                    for p in decoder_params_for_freeze:
+                        p.requires_grad = True
+                    optimizer_decoder.zero_grad()  # clean slate before first decoder update
+                    print(f"\n{'=' * 60}")
+                    print(f"  🔓 Decoder UNFROZEN at step {global_step} — full training begins now")
+                    print(f"  Decoder LR schedule starting its warmup from this point.")
+                    print(f"{'=' * 60}\n")
+
                 step_losses.append(output['loss'].item())
                 step_grad_norms.append(grad_norm)
 
@@ -1350,7 +1731,8 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                     avg_loss = sum(step_losses) / len(step_losses)
                     avg_grad_norm = sum(step_grad_norms) / len(step_grad_norms)
                     encoder_lr = scheduler_encoder.get_last_lr()[0]
-                    decoder_lr = scheduler_decoder.get_last_lr()[0]
+                    # Decoder scheduler has not been stepped during freeze — guard against that
+                    decoder_lr = scheduler_decoder.get_last_lr()[0] if not decoder_is_frozen else 0.0
                     elapsed = time.time() - training_start
                     log_elapsed = time.time() - log_step_start
                     speed = len(step_losses) / max(log_elapsed, 1e-6)
@@ -1360,6 +1742,12 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                     eta_seconds = (elapsed / global_step) * (total_optimizer_steps - global_step)
 
                     train_ppl = math.exp(min(avg_loss, MAX_PPL_CAP))
+
+                    # Freeze-phase tag shown in the log line
+                    freeze_tag = (
+                        f" | DEC: FROZEN ({decoder_freeze_steps - global_step} steps left)"
+                        if decoder_is_frozen else ""
+                    )
 
                     print("=" * 180)
                     print(
@@ -1374,6 +1762,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                         f"VRAM: {cuda_mem:.3f}/{cuda_peak:.3f} GB (current/peak) | "
                         f"Elapsed: {format_time(elapsed)} | "
                         f"ETA: {format_time(eta_seconds)}"
+                        f"{freeze_tag}"
                     )
 
                     train_csv_logger.log({
@@ -1390,12 +1779,29 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                         'elapsed_sec': f"{elapsed:.1f}",
                     })
 
+                    # ── TensorBoard Logging ──
+                    tb_writer.add_scalar('Loss/Train', avg_loss, global_step)
+                    tb_writer.add_scalar('Perplexity/Train', train_ppl, global_step)
+                    tb_writer.add_scalar('GradNorm/Train', avg_grad_norm, global_step)
+                    tb_writer.add_scalar('Training/DecoderFrozen', 1.0 if decoder_is_frozen else 0.0, global_step)
+                    tb_writer.add_scalars('LearningRates', {
+                        'Encoder': encoder_lr,
+                        'Decoder': decoder_lr
+                    }, global_step)
+
                     step_losses.clear()
                     step_grad_norms.clear()
                     log_step_start = time.time()
 
                 # ── Validation ──
-                if global_step % eval_every == 0:
+                # Before eval_warmup_threshold: evaluate every eval_every_warmup steps.
+                # At and after the threshold: counter resets — evaluate every eval_every steps
+                # counting from the threshold (i.e. when (global_step - eval_warmup_threshold) % eval_every == 0).
+                if global_step < eval_warmup_threshold:
+                    _should_eval = (global_step % eval_every_warmup == 0)
+                else:
+                    _should_eval = ((global_step - eval_warmup_threshold) % eval_every == 0)
+                if _should_eval:
                     print(f"\n{'─' * 60}")
                     print(f"  📊 Validation @ Step {global_step} / Epoch {epoch}")
                     print(f"{'─' * 60}")
@@ -1403,6 +1809,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                     val_metrics = validate(
                         model, val_loader, val_dataset, tokenizer, device,
                         max_eval_batches, max_generate_samples, num_print_samples, val_gen_batch_size,
+                        val_beam_size, val_repetition_penalty, val_use_kv_cache,
                     )
 
                     cuda_mem, cuda_peak = get_cuda_mem()
@@ -1447,13 +1854,34 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                         'elapsed_sec': f"{elapsed:.1f}",
                     })
 
+                    # ── TensorBoard Logging ──
+                    tb_writer.add_scalar('Loss/Validation', val_metrics['val_loss'], global_step)
+                    tb_writer.add_scalar('Perplexity/Validation', val_metrics['val_ppl'], global_step)
+                    tb_writer.add_scalar('Metrics/TokenAccuracy', val_metrics['token_acc'], global_step)
+                    tb_writer.add_scalar('Metrics/ROUGE-L', val_metrics['rouge_l'], global_step)
+                    tb_writer.add_scalars('Metrics/BLEU', {
+                        'BLEU-1': val_metrics['bleu1'],
+                        'BLEU-2': val_metrics['bleu2'],
+                        'BLEU-4': val_metrics['bleu4']
+                    }, global_step)
+
+                    # Log all generated samples to separate CSV
+                    for ref_text, hyp_text in val_metrics['all_pairs']:
+                        gen_samples_csv_logger.log({
+                            'global_step': global_step,
+                            'epoch': epoch,
+                            'generated': hyp_text,
+                            'reference': ref_text,
+                            'elapsed_sec': f"{elapsed:.1f}",
+                        })
+
                     # ── Best model check ──
                     val_loss = val_metrics['val_loss']
                     if val_loss < best_val_loss:
                         best_val_loss = val_loss
                         evals_without_improvement = 0
                         state = ckpt_manager._build_state_dict(
-                            model, optimizer_encoder, optimizer_decoder, scheduler_encoder, scheduler_decoder, epoch, global_step, best_val_loss
+                            model, optimizer_encoder, optimizer_decoder, scheduler_encoder, scheduler_decoder, epoch, global_step, best_val_loss, evals_without_improvement, time.time() - training_start
                         )
                         ckpt_manager.save_best(state)
                         print(f"\n  ⭐ New best val loss: {best_val_loss:.4f}")
@@ -1483,12 +1911,13 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                         print(f"\n⏱️  Total training time: {format_time(total_time)}")
                         cuda_mem, cuda_peak = get_cuda_mem()
                         print(f"📊 Peak VRAM usage: {cuda_peak:.2f} GB")
+                        tb_writer.close()  # Close TensorBoard logging gracefully
                         return best_val_loss
 
                 # ── Periodic checkpoint ──
                 if global_step % save_every == 0:
                     state = ckpt_manager._build_state_dict(
-                        model, optimizer_encoder, optimizer_decoder, scheduler_encoder, scheduler_decoder, epoch, global_step, best_val_loss
+                        model, optimizer_encoder, optimizer_decoder, scheduler_encoder, scheduler_decoder, epoch, global_step, best_val_loss, evals_without_improvement, time.time() - training_start
                     )
                     ckpt_manager.save_periodic(state, global_step)
 
@@ -1530,7 +1959,6 @@ def main():
     global device
 
     # Fix for Windows multiprocessing with persistent workers
-    import torch.multiprocessing as mp
     try:
         mp.set_sharing_strategy('file_system')
     except:
@@ -1547,16 +1975,17 @@ def main():
 
     # Pick first example
     sample_row = df.sample(1).iloc[0]
-    sentence_name = sample_row['SENTENCE_NAME']
-    sentence_text = sample_row['SENTENCE']
+    sentence_name = sample_row['vid']
+    sentence_text = sample_row['text']
     duration_sec = sample_row['duration_sec']
 
     print(f'\nSample: {sentence_name}')
     print(f'Text: "{sentence_text}"')
     print(f'Duration: {duration_sec:.2f}s')
 
-    # Load keypoints
-    keypoint_path = KEYPOINTS_DIR / f'{sentence_name}.npz'
+    # Load keypoints (replace colons with dashes for Windows filenames)
+    keypoint_filename = sentence_name.replace(':', '-')
+    keypoint_path = KEYPOINTS_DIR / f'{keypoint_filename}.npz'
 
     if keypoint_path.exists():
         data = np.load(keypoint_path)
@@ -1588,10 +2017,12 @@ def main():
     missing = []
 
     for idx, row in tqdm(df.iterrows(), total=len(df), desc='Building manifest'):
-        sentence_name = row['SENTENCE_NAME']
-        text = row['SENTENCE']
-        duration = row['END_REALIGNED'] - row['START_REALIGNED']
-        keypoint_path = KEYPOINTS_DIR / f'{sentence_name}.npz'
+        sentence_name = row['vid']
+        text = row['text']
+        duration = row['duration_sec']
+        # Replace colons with dashes for Windows-compatible filenames
+        keypoint_filename = sentence_name.replace(':', '-')
+        keypoint_path = KEYPOINTS_DIR / f'{keypoint_filename}.npz'
 
         if keypoint_path.exists():
             manifest.append({
@@ -1621,10 +2052,12 @@ def main():
 
     val_manifest = []
     for idx, row in tqdm(df_val.iterrows(), total=len(df_val), desc='Building val manifest'):
-        sentence_name = row['SENTENCE_NAME']
-        text = row['SENTENCE']
-        duration = row['END_REALIGNED'] - row['START_REALIGNED']
-        keypoint_path = KEYPOINTS_VAL_DIR / f'{sentence_name}.npz'
+        sentence_name = row['vid']
+        text = row['text']
+        duration = row['duration_sec']
+        # Replace colons with dashes for Windows-compatible filenames
+        keypoint_filename = sentence_name.replace(':', '-')
+        keypoint_path = KEYPOINTS_VAL_DIR / f'{keypoint_filename}.npz'
 
         if keypoint_path.exists():
             val_manifest.append({
@@ -1794,17 +2227,16 @@ def main():
     print(f"  Num attention heads: {decoder.config.num_attention_heads}")
 
     print(f"\nHybrid LoRA strategy:")
-    print(f"  ✓ LoRA adapters: Self-attention + MLP (r=16, optimized for 270M model)")
-    print(f"  ✓ Fully trainable: Embeddings, lm_head, all norm layers (4 per layer)")
+    print(f"  ✓ LoRA adapters: Self-attention + MLP (r=8, α=16)")
+    print(f"  ✓ Fully trainable: All norm layers (4 per layer) — embed_tokens & lm_head FROZEN")
     print(f"  ✓ Cross-attention: Will be fully trainable when added (max learning capacity)")
-    print(f"  → Smaller model + lower rank = better fit for 20k samples!")
-
 
     # Create projection layer
     projection = KeypointProjection(
         num_landmarks=CONFIG['num_landmarks'],
         coord_dim=CONFIG['coord_dim'],
-        d_model=CONFIG['projection_d_model']
+        d_model=CONFIG['projection_d_model'],
+        hidden_dim=CONFIG['projection_hidden_dim'],
     ).to(torch.bfloat16)
 
     # Count parameters
@@ -1956,7 +2388,6 @@ def main():
     print(f"  • Bottleneck: {BOTTLENECK_DIM} dims (Query: {CONFIG['decoder_hidden_size']}→{BOTTLENECK_DIM}, Key/Value: {ENCODER_DIM}→{BOTTLENECK_DIM})")
     print(f"  • Cross-attention @ {BOTTLENECK_DIM} dims, Output: {BOTTLENECK_DIM}→{CONFIG['decoder_hidden_size']}")
     print(f"  • Selective: {len(layers_with_cross_attn)}/{TOTAL_LAYERS} layers, Weight sharing: {len(weight_sharing_pairs)} pairs → {unique_modules} unique")
-    print(f"  • Much better suited for 20k samples than Qwen!")
 
     # Re-apply cross attention wrapping with fixed class
     print("Re-wrapping decoder layers with fixed Gemma3DecoderLayerWithOptionalCrossAttention...")
@@ -1985,7 +2416,7 @@ def main():
     ).to(device)
 
     # Compile model (components already in bfloat16)
-    # model = torch.compile(model, backend="eager")
+    # model = torch.compile(model, backend="aot_eager") disabled to avoid issues
 
     print("\n✅ Complete Encoder-Decoder Model Created!")
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -2033,10 +2464,10 @@ def main():
 
     # %%
     # DataLoaders with configurable workers (auto-capped to CPU count)
-    import os
-    max_workers = os.cpu_count() or 4
-    train_workers = min(TRAIN_CONFIG['train_num_workers'], max_workers)
-    val_workers = min(TRAIN_CONFIG['val_num_workers'], max_workers)
+    train_workers = TRAIN_CONFIG['train_num_workers']
+    val_workers = TRAIN_CONFIG['val_num_workers']
+    train_prefetch_factor = TRAIN_CONFIG['train_prefetch_factor']
+    val_prefetch_factor = TRAIN_CONFIG['val_prefetch_factor']   
 
     train_loader = DataLoader(
         train_dataset,
@@ -2045,7 +2476,7 @@ def main():
         collate_fn=collate_fn_with_tokenizer,
         num_workers=train_workers,
         pin_memory=True,
-        prefetch_factor=min(train_workers, 4) if train_workers > 0 else None,
+        prefetch_factor= train_prefetch_factor if train_workers > 0 else None,
         persistent_workers=train_workers > 0  # Only if using workers
     )
     val_loader = DataLoader(
@@ -2055,13 +2486,13 @@ def main():
         collate_fn=collate_fn_with_tokenizer,
         num_workers=val_workers,
         pin_memory=True,
-        prefetch_factor=min(val_workers, 4) if val_workers > 0 else None,
+        prefetch_factor= val_prefetch_factor if val_workers > 0 else None,
         persistent_workers=val_workers > 0  # Only if using workers
     )
 
     print(f"\n📦 DataLoaders:")
-    print(f"  Train workers: {train_workers} (config: {TRAIN_CONFIG['train_num_workers']}, max: {max_workers})")
-    print(f"  Val workers: {val_workers} (config: {TRAIN_CONFIG['val_num_workers']}, max: {max_workers})")
+    print(f"  Train workers: {train_workers} (config: {TRAIN_CONFIG['train_num_workers']})")
+    print(f"  Val workers: {val_workers} (config: {TRAIN_CONFIG['val_num_workers']})")
 
     # Separate optimizers for encoder and decoder with different LRs
     # Optimizer 1: Encoder + Cross-attention (new, untrained components)
@@ -2088,11 +2519,27 @@ def main():
         betas=TRAIN_CONFIG['adam_betas']
     )
 
-    # Optimizer 2: All decoder trainable params (LoRA + embeddings + lm_head + norms)
+    # Optimizer 2: All decoder trainable params (LoRA adapters + norm layers)
     # Exclude cross_attn params (already in encoder optimizer)
+    # Note: embed_tokens & lm_head are kept frozen (not in modules_to_save)
     cross_attn_param_ids = set(id(p) for p in cross_attn_params)
-    decoder_params = [p for n, p in model.decoder.named_parameters()
-                      if p.requires_grad and id(p) not in cross_attn_param_ids]
+    decoder_params_with_names = [(n, p) for n, p in model.decoder.named_parameters()
+                                  if p.requires_grad and id(p) not in cross_attn_param_ids]
+    decoder_params = [p for n, p in decoder_params_with_names]
+
+    # Debug: Check if embed_tokens or lm_head snuck in
+    decoder_param_names = [n for n, p in decoder_params_with_names]
+    has_embed = any('embed_tokens' in n for n in decoder_param_names)
+    has_lm_head = any('lm_head' in n for n in decoder_param_names)
+
+    if has_embed or has_lm_head:
+        print(f"\n⚠️  WARNING: embed_tokens or lm_head found in decoder optimizer!")
+        print(f"  embed_tokens: {has_embed}, lm_head: {has_lm_head}")
+        print(f"  This should NOT happen with lora_modules_to_save=[]")
+        print(f"  Affected params:")
+        for n in decoder_param_names:
+            if 'embed_tokens' in n or 'lm_head' in n:
+                print(f"    - {n}")
 
     optimizer_decoder = AdamW(
         decoder_params,
@@ -2101,18 +2548,61 @@ def main():
         betas=TRAIN_CONFIG['adam_betas']
     )
 
-    print(f"\n📊 Optimizers created:")
-    print(f"  Encoder + Cross-attn: {len(encoder_all_params):4d} params | LR: {TRAIN_CONFIG['encoder_lr']:.2e}")
-    print(f"  Decoder (LoRA+other): {len(decoder_params):4d} params | LR: {TRAIN_CONFIG['decoder_lr']:.2e}")
-    print(f"  Total trainable:      {len(encoder_all_params) + len(decoder_params):4d} params")
+    # ── Detailed Parameter Breakdown ──
+    print(f"\n📊 Optimizer Parameter Breakdown:")
+    print(f"\n{'=' * 80}")
+    print(f"ENCODER OPTIMIZER (LR: {TRAIN_CONFIG['encoder_lr']:.2e}):")
+    print(f"{'=' * 80}")
+
+    # Breakdown encoder params by component
+    keypoint_proj_params = len(list(model.keypoint_projection.parameters()))
+    transformer_enc_params = len(list(model.encoder.parameters()))
+    encoder_proj_params = len(list(model.encoder_projection.parameters()))
+
+    print(f"  Keypoint Projection:     {keypoint_proj_params:4d} params")
+    print(f"  Transformer Encoder:     {transformer_enc_params:4d} params")
+    print(f"  Encoder Projection:      {encoder_proj_params:4d} params")
+    print(f"  Cross-Attention Modules: {len(cross_attn_params):4d} params")
+    print(f"  {'─' * 76}")
+    print(f"  TOTAL:                   {len(encoder_all_params):4d} params")
+
+    print(f"\n{'=' * 80}")
+    print(f"DECODER OPTIMIZER (LR: {TRAIN_CONFIG['decoder_lr']:.2e}):")
+    print(f"{'=' * 80}")
+
+    # Breakdown decoder params by type
+    lora_a_count = sum(1 for n in decoder_param_names if 'lora_A' in n)
+    lora_b_count = sum(1 for n in decoder_param_names if 'lora_B' in n)
+    norm_count = sum(1 for n in decoder_param_names if 'norm' in n.lower())
+    embed_count = sum(1 for n in decoder_param_names if 'embed_tokens' in n)
+    lmhead_count = sum(1 for n in decoder_param_names if 'lm_head' in n)
+    other_count = len(decoder_param_names) - (lora_a_count + lora_b_count + norm_count + embed_count + lmhead_count)
+
+    print(f"  LoRA A matrices:   {lora_a_count:4d} params")
+    print(f"  LoRA B matrices:   {lora_b_count:4d} params")
+    print(f"  Norm layers:       {norm_count:4d} params")
+    if embed_count > 0:
+        print(f"  ⚠️  embed_tokens:    {embed_count:4d} params (SHOULD BE 0!)")
+    if lmhead_count > 0:
+        print(f"  ⚠️  lm_head:         {lmhead_count:4d} params (SHOULD BE 0!)")
+    if other_count > 0:
+        print(f"  Other:             {other_count:4d} params")
+    print(f"  {'─' * 76}")
+    print(f"  TOTAL:             {len(decoder_params):4d} params")
+
+    print(f"\n{'=' * 80}")
+    print(f"GRAND TOTAL:       {len(encoder_all_params) + len(decoder_params):4d} trainable params")
+    print(f"{'=' * 80}\n")
 
     # Separate schedulers for each optimizer
     steps_per_epoch = len(train_loader)
-    total_microbatch_steps = steps_per_epoch * TRAIN_CONFIG['num_epochs']
-    total_optimizer_steps = total_microbatch_steps // TRAIN_CONFIG['grad_accum_steps']
+    optimizer_steps_per_epoch = math.ceil(steps_per_epoch / TRAIN_CONFIG['grad_accum_steps'])
+    total_optimizer_steps = optimizer_steps_per_epoch * TRAIN_CONFIG['num_epochs']
     warmup_steps = TRAIN_CONFIG['warmup_steps']
+    # Calculate cosine decay steps (to end of training)
+    cosine_decay_steps = total_optimizer_steps - warmup_steps
 
-    # Scheduler 1: Encoder + Cross-attention (higher LR → higher min_lr)
+    # Scheduler 1: Encoder + Cross-attention (2-stage: warmup → cosine)
     warmup_encoder = LinearLR(
         optimizer_encoder,
         start_factor=1e-8,
@@ -2121,7 +2611,7 @@ def main():
     )
     cosine_encoder = CosineAnnealingLR(
         optimizer_encoder,
-        T_max=total_optimizer_steps - warmup_steps,
+        T_max=cosine_decay_steps,
         eta_min=TRAIN_CONFIG['encoder_min_lr'],
     )
     scheduler_encoder = SequentialLR(
@@ -2130,7 +2620,18 @@ def main():
         milestones=[warmup_steps],
     )
 
-    # Scheduler 2: LoRA adapters (lower LR → lower min_lr)
+    # Scheduler 2: Decoder/LoRA (2-stage: warmup → cosine)
+    # If freeze_decoder is enabled, the decoder scheduler runs on an independent clock:
+    # it is not stepped during the freeze phase, so its warmup → cosine decay covers
+    # only the remaining training window after the freeze ends.
+    if TRAIN_CONFIG.get('freeze_decoder', False):
+        _freeze_steps = TRAIN_CONFIG['decoder_freeze_steps']
+        # Effective decoder training steps = total steps minus the frozen steps
+        decoder_effective_steps = max(total_optimizer_steps - _freeze_steps, 1)
+        decoder_cosine_decay_steps = max(decoder_effective_steps - warmup_steps, 1)
+    else:
+        decoder_cosine_decay_steps = cosine_decay_steps
+
     warmup_decoder = LinearLR(
         optimizer_decoder,
         start_factor=1e-8,
@@ -2139,7 +2640,7 @@ def main():
     )
     cosine_decoder = CosineAnnealingLR(
         optimizer_decoder,
-        T_max=total_optimizer_steps - warmup_steps,
+        T_max=decoder_cosine_decay_steps,
         eta_min=TRAIN_CONFIG['decoder_min_lr'],
     )
     scheduler_decoder = SequentialLR(
@@ -2148,7 +2649,13 @@ def main():
         milestones=[warmup_steps],
     )
 
-    print(f"\n📈 LR Schedules (Warmup {warmup_steps} steps → Cosine decay):")
+    print(f"\n📈 LR Schedules (2-stage):")
+    print(f"  Warmup: {warmup_steps} steps")
+    print(f"  Encoder  cosine decay: {cosine_decay_steps} steps (full training window)")
+    if TRAIN_CONFIG.get('freeze_decoder', False):
+        print(f"  Decoder  cosine decay: {decoder_cosine_decay_steps} steps (post-freeze window, starts at step {TRAIN_CONFIG['decoder_freeze_steps']})")
+    else:
+        print(f"  Decoder  cosine decay: {decoder_cosine_decay_steps} steps (full training window)")
     print(f"  Encoder:  {TRAIN_CONFIG['encoder_lr']:.2e} → {TRAIN_CONFIG['encoder_min_lr']:.2e}")
     print(f"  Decoder:  {TRAIN_CONFIG['decoder_lr']:.2e} → {TRAIN_CONFIG['decoder_min_lr']:.2e}")
 
@@ -2157,9 +2664,9 @@ def main():
     # %%
 
     steps_per_epoch_micro = len(train_loader)
-    steps_per_epoch_optim = steps_per_epoch_micro // TRAIN_CONFIG['grad_accum_steps']
+    steps_per_epoch_optim = math.ceil(steps_per_epoch_micro / TRAIN_CONFIG['grad_accum_steps'])
     total_micro_steps = steps_per_epoch_micro * TRAIN_CONFIG['num_epochs']
-    total_optim_steps = total_micro_steps // TRAIN_CONFIG['grad_accum_steps']
+    total_optim_steps = steps_per_epoch_optim * TRAIN_CONFIG['num_epochs']
 
     print("=" * 60)
     print("STEP CALCULATIONS")
@@ -2167,7 +2674,7 @@ def main():
     print(f"  Micro-batch steps per epoch:   {steps_per_epoch_micro}")
     print(f"  Optimizer steps per epoch:     {steps_per_epoch_optim}")
     print(f"  Total micro-batch steps:       {total_micro_steps}  ({TRAIN_CONFIG['num_epochs']} epochs × {steps_per_epoch_micro} steps)")
-    print(f"  Total optimizer steps:         {total_optim_steps}  ({total_micro_steps} ÷ {TRAIN_CONFIG['grad_accum_steps']} accum)")
+    print(f"  Total optimizer steps:         {total_optim_steps}  ({steps_per_epoch_optim} per epoch × {TRAIN_CONFIG['num_epochs']})")
     print("=" * 60)
 
     # %%
@@ -2184,10 +2691,11 @@ def main():
     print(f"  Gradient accumulation:   {TRAIN_CONFIG['grad_accum_steps']} steps")
     print(f"  Effective batch size:    {effective_batch_size}")
     print(f"  Steps per epoch:         {steps_per_epoch} micro-batches")
-    print(f"  Optimizer steps/epoch:   {steps_per_epoch // TRAIN_CONFIG['grad_accum_steps']}")
+    print(f"  Optimizer steps/epoch:   {optimizer_steps_per_epoch}")
     print(f"  Total optimizer steps:   {total_optimizer_steps}")
     print(f"  Num epochs:              {TRAIN_CONFIG['num_epochs']}")
     print(f"  Warmup steps:            {warmup_steps}")
+    print(f"  LR decay epochs:         {TRAIN_CONFIG['num_epochs']} (all the way to end)")
     print(f"  Encoder LR:              {TRAIN_CONFIG['encoder_lr']:.2e} → {TRAIN_CONFIG['encoder_min_lr']:.2e}")
     print(f"  Decoder LR:              {TRAIN_CONFIG['decoder_lr']:.2e} → {TRAIN_CONFIG['decoder_min_lr']:.2e}")
     print(f"  Mixed precision:         bfloat16")
@@ -2222,32 +2730,106 @@ def main():
             'elapsed_sec',
         ],
     )
+    gen_samples_csv_logger = CSVLogger(
+        log_file=TRAIN_CONFIG['gen_samples_log_file'],
+        fieldnames=[
+            'timestamp', 'global_step', 'epoch',
+            'generated', 'reference',
+            'elapsed_sec',
+        ],
+    )
+
+    tensorboard_dir = TRAIN_CONFIG.get('tensorboard_dir', Path('..') / 'runs' / 'signbridge_training')
+    tb_writer = SummaryWriter(log_dir=str(tensorboard_dir))
 
     print(f"Checkpoints dir:  {TRAIN_CONFIG['checkpoint_dir'].resolve()}")
     print(f"Train log:        {TRAIN_CONFIG['train_log_file'].resolve()}")
     print(f"Val log:          {TRAIN_CONFIG['val_log_file'].resolve()}")
+    print(f"Gen samples log:  {TRAIN_CONFIG['gen_samples_log_file'].resolve()}")
+
+    start_epoch = 1
+    start_global_step = 0
+    best_val_loss_val = float('inf')
+
+    if TRAIN_CONFIG.get('resume_training', False):
+        if TRAIN_CONFIG.get('load_best_model', False):
+            ckpt_path = ckpt_manager.best_path
+        else:
+            ckpt_path = ckpt_manager.checkpoint_dir / f"checkpoint_step_{TRAIN_CONFIG.get('resume_checkpoint_step', 0)}.pt"
+        
+        if ckpt_path.exists():
+            print(f"\n🔄 Resuming training from {ckpt_path.name}...")
+            # weights_only=False needed to load optimizer and other generic python dicts
+            checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+            
+            # Load states
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer_encoder.load_state_dict(checkpoint['optimizer_encoder_state_dict'])
+            optimizer_decoder.load_state_dict(checkpoint['optimizer_decoder_state_dict'])
+            scheduler_encoder.load_state_dict(checkpoint['scheduler_encoder_state_dict'])
+            scheduler_decoder.load_state_dict(checkpoint['scheduler_decoder_state_dict'])
+            
+            # Load tracking vars
+            start_epoch = checkpoint['epoch']
+            start_global_step = checkpoint['global_step']
+            best_val_loss_val = checkpoint.get('best_val_loss', float('inf'))
+            start_evals_without_improvement = checkpoint.get('evals_without_improvement', 0)
+            start_elapsed_sec = checkpoint.get('elapsed_sec', 12029.3)
+            
+            # Load RNG if they exist
+            if 'rng_state' in checkpoint:
+                rng_state = checkpoint['rng_state']
+                if rng_state.device.type != 'cpu':
+                    rng_state = rng_state.cpu()
+                torch.set_rng_state(rng_state)
+            if 'cuda_rng_state_all' in checkpoint and torch.cuda.is_available():
+                cuda_rng_states = [s.cpu() if s.device.type != 'cpu' else s for s in checkpoint['cuda_rng_state_all']]
+                torch.cuda.set_rng_state_all(cuda_rng_states)
+            if 'numpy_rng_state' in checkpoint:
+                np.random.set_state(checkpoint['numpy_rng_state'])
+            if 'python_rng_state' in checkpoint:
+                random.setstate(checkpoint['python_rng_state'])
+            print(f"  ✅ Loaded state: Epoch {start_epoch}, Step {start_global_step}, Best Val Loss: {best_val_loss_val:.4f}, Elapsed: {start_elapsed_sec:.1f}s")
+        else:
+            print(f"\n⚠️  Resume requested but checkpoint not found: {ckpt_path}. Starting from scratch.")
+            start_evals_without_improvement = 0
+            start_elapsed_sec = 0.0
+
+    else:
+        start_evals_without_improvement = 0
+        start_elapsed_sec = 0.0
 
     # Launch training
-    best_val_loss = train(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        val_dataset=val_dataset,
-        tokenizer=tokenizer,
-        optimizer_encoder=optimizer_encoder,
-        optimizer_decoder=optimizer_decoder,
-        scheduler_encoder=scheduler_encoder,
-        scheduler_decoder=scheduler_decoder,
-        device=device,
-        train_config=TRAIN_CONFIG,
-        ckpt_manager=ckpt_manager,
-        train_csv_logger=train_csv_logger,
-        val_csv_logger=val_csv_logger,
-    )
+    try:
+        best_val_loss = train(
+            model=model,
+            train_loader=train_loader,
+            val_loader=val_loader,
+            val_dataset=val_dataset,
+            tokenizer=tokenizer,
+            optimizer_encoder=optimizer_encoder,
+            optimizer_decoder=optimizer_decoder,
+            scheduler_encoder=scheduler_encoder,
+            scheduler_decoder=scheduler_decoder,
+            device=device,
+            train_config=TRAIN_CONFIG,
+            ckpt_manager=ckpt_manager,
+            train_csv_logger=train_csv_logger,
+            val_csv_logger=val_csv_logger,
+            gen_samples_csv_logger=gen_samples_csv_logger,
+            tb_writer=tb_writer,
+            start_epoch=start_epoch,
+            start_global_step=start_global_step,
+            best_val_loss=best_val_loss_val,
+            start_evals_without_improvement=start_evals_without_improvement,
+            start_elapsed_sec=start_elapsed_sec,
+        )
+
+    finally:
+    # Close TensorBoard writer
+        tb_writer.close()
 
     print(f"\nBest validation loss: {best_val_loss:.4f}")
-
-
 
 if __name__ == '__main__':
     main()

@@ -4,8 +4,13 @@ __pycache__/
 *$py.class
 .vscode/
 
-data/keypoints/
-data/keypoints_preprocessed/
+data/how2sign_keypoints/
+data/how2sign_keypoints_preprocessed/
+data/openasl_keypoints/
+data/openasl_keypoints_preprocessed/
+full_dataset_keypoints/
+full_dataset_keypoints_preprocessed/
+
 .virtual_documents/
 
 # C extensions
