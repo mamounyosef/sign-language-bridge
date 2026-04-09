@@ -36,7 +36,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision.models import resnet50, ResNet50_Weights
 import torchvision.transforms.v2 as T_v2
 import torchvision.transforms.functional as TF
-import torchvision.io
+import torchvision.io as tvio
 
 # Video decoding
 try:
@@ -144,17 +144,37 @@ CONFIG = {
     'aug_temporal_jitter': True,
     'aug_temporal_jitter_range': 2,           # Max frames to shift (±2)
     'aug_temporal_jitter_prob': 0.5,
+
     'aug_color_jitter': True,
-    'aug_color_jitter_prob': 0.5,
+    'aug_color_jitter_prob': 0.8,             # High — fires on most clips
     'aug_color_jitter_brightness': 0.3,
     'aug_color_jitter_contrast': 0.3,
-    'aug_color_jitter_saturation': 0.2,
-    'aug_color_jitter_hue': 0.05,
+    'aug_color_jitter_saturation': 0.5,       # Strong — handles green spill
+    'aug_color_jitter_hue': 0.3,              # Strong — randomises green background to any colour
+
     'aug_random_grayscale': True,
-    'aug_random_grayscale_prob': 0.1,
+    'aug_random_grayscale_prob': 0.2,         # Forces shape/motion reliance over colour
+
     'aug_gaussian_blur': True,
     'aug_gaussian_blur_prob': 0.2,
     'aug_gaussian_blur_kernel': (5, 5),
+
+    'aug_solarize': True,                     # Inverts pixels above threshold — extreme colour variety
+    'aug_solarize_prob': 0.1,
+    'aug_solarize_threshold': 128,            # 0–255; pixels above this get inverted
+
+    'aug_equalize': True,                     # Histogram equalisation — bridges studio vs natural lighting
+    'aug_equalize_prob': 0.15,
+
+    'aug_random_erasing': True,               # Randomly blacks out small patches — occlusion robustness
+    'aug_random_erasing_prob': 0.2,
+    'aug_random_erasing_scale': (0.02, 0.1), # Fraction of frame area erased
+    'aug_random_erasing_ratio': (0.3, 3.3),  # Aspect ratio of erased region
+
+    # ── Debug: save augmented frames to disk ──
+    'aug_debug_save_images': True,
+    'aug_debug_save_interval': 5,           # Save one frame every N optimiser steps
+    'aug_debug_save_dir': Path('data/debugging_images'),
 }
 
 ## Training Configuration
@@ -166,14 +186,20 @@ TRAIN_CONFIG = {
     # ── Gradient Accumulation ──
     'grad_accum_steps': 16,                   # effective batch = 2 * 32 = 64
 
-    # ── DataLoader config ──
+    # ──── DataLoader config ────
     # Frames are now uint8 (~125MB/batch vs ~500MB float32)
     # 2 workers keeps CPU free for interactive use during long runs
     # (increase to 4 if GPU shows idle gaps and you don't need the PC)
-    'train_num_workers': 2,
+    'train_num_workers': 3,
     'train_prefetch_factor': 1,
-    'val_num_workers': 1,
+    'train_pin_memory': False,        # False: bottleneck is decode not transfer, saves ~240MB
+    'train_persistent_workers': True, # True: avoids costly worker respawn on Windows each epoch
+
+    'val_num_workers': 2,
     'val_prefetch_factor': 1,
+    'val_pin_memory': False,
+    'val_persistent_workers': False,
+
     'use_bucket_batching': True,
 
     # ── Learning Rates ──
@@ -184,8 +210,8 @@ TRAIN_CONFIG = {
     'cnn_lr': 1e-5,
     'cnn_min_lr': 1e-7, # 1% of initial LR
     # LoRA adapters (fine-tuning pretrained decoder)
-    'decoder_lr': 1e-4,
-    'decoder_min_lr': 1e-6, # 1% of initial LR
+    'decoder_lr': 5e-5,
+    'decoder_min_lr': 5e-7, # 1% of initial LR
 
     'warmup_steps': 250,                      # Warmup for new_weights optimizer
     'cnn_warmup_steps': 100,                  # Warmup for CNN optimizer (starts at cnn_freeze_steps)
@@ -202,14 +228,14 @@ TRAIN_CONFIG = {
     'decoder_freeze_steps': 0,             # Decoder unfreezes at step 1500
 
     # ── Logging ──
-    'log_every_steps': 5,
+    'log_every_steps': 2,
     'train_log_file': Path('..') / 'saved_metrics' / 'train_log.csv',
     'val_log_file': Path('..') / 'saved_metrics' / 'val_log.csv',
     'gen_samples_log_file': Path('..') / 'saved_metrics' / 'gen_samples_log.csv',
     'tensorboard_dir': Path('..') / 'saved_metrics' / 'tensorboard' / 'signbridge_training',
 
     # ── Checkpointing ──
-    'save_every_steps': 200,
+    'save_every_steps': 100,
     'keep_last_n_checkpoints': 3,
     'checkpoint_dir': Path('..') / 'checkpoints',
 
@@ -319,25 +345,6 @@ def load_video_frames(video_path, max_frames, target_size):
     return frames
 
 
-def load_frames_from_folder(folder_path, max_frames):
-    """
-    Load pre-extracted JPEG frames from a folder produced by 09_extract_frames.py.
-    Frames are already letterboxed to 256×256 — no resizing needed here.
-
-    Args:
-        folder_path: str or Path, folder containing 0000.jpg, 0001.jpg, ...
-        max_frames: int, maximum number of frames to load
-
-    Returns:
-        (T, 3, H, W) uint8 tensor (values 0-255)
-    """
-    folder = Path(folder_path)
-    frame_files = sorted(folder.glob("*.jpg"))[:max_frames]
-    if len(frame_files) == 0:
-        raise RuntimeError(f"No JPEG frames found in: {folder}")
-    frames = torch.stack([torchvision.io.read_image(str(f)) for f in frame_files], dim=0)
-    return frames  # (T, 3, H, W) uint8
-
 
 class SignLanguageDataset(Dataset):
     def __init__(self, manifest, tokenizer, max_frames=MAX_VIDEO_FRAMES, max_tokens=MAX_TEXT_TOKENS,
@@ -388,6 +395,27 @@ class SignLanguageDataset(Dataset):
                         T_v2.GaussianBlur(kernel_size=kernel)
                     ], p=self.aug_config.get('aug_gaussian_blur_prob', 0.2))
                 )
+            if self.aug_config.get('aug_solarize', False):
+                aug_transforms.append(
+                    T_v2.RandomApply([
+                        T_v2.RandomSolarize(threshold=self.aug_config.get('aug_solarize_threshold', 128))
+                    ], p=self.aug_config.get('aug_solarize_prob', 0.1))
+                )
+            if self.aug_config.get('aug_equalize', False):
+                aug_transforms.append(
+                    T_v2.RandomApply([
+                        T_v2.RandomEqualize()
+                    ], p=self.aug_config.get('aug_equalize_prob', 0.15))
+                )
+            if self.aug_config.get('aug_random_erasing', False):
+                aug_transforms.append(
+                    T_v2.RandomErasing(
+                        p=self.aug_config.get('aug_random_erasing_prob', 0.2),
+                        scale=self.aug_config.get('aug_random_erasing_scale', (0.02, 0.1)),
+                        ratio=self.aug_config.get('aug_random_erasing_ratio', (0.3, 3.3)),
+                        value=0,
+                    )
+                )
             self.aug_transform = T_v2.Compose(aug_transforms) if aug_transforms else None
         else:
             self.aug_transform = None
@@ -398,20 +426,16 @@ class SignLanguageDataset(Dataset):
     def __getitem__(self, idx):
         sample = self.manifest[idx]
 
-        # Load frames — auto-detect pre-extracted folder vs raw video file
+        # Load video frames with letterboxing
         try:
-            fp = sample['file_path']
-            if Path(fp).is_dir():
-                # Pre-extracted JPEGs (09_extract_frames.py) — already letterboxed
-                frames = load_frames_from_folder(fp, max_frames=self.max_frames)
-            else:
-                # Raw video file — decode + letterbox on the fly
-                frames = load_video_frames(fp, max_frames=self.max_frames,
-                                           target_size=self.target_size)
-            # (T, 3, H, W) uint8 (values 0-255)
+            frames = load_video_frames(
+                sample['file_path'],
+                max_frames=self.max_frames,
+                target_size=self.target_size,
+            )  # (T, 3, H, W) uint8 (values 0-255)
         except Exception as e:
             raise RuntimeError(
-                f"Failed to load frames for {sample['sentence_name']}: {e}\n"
+                f"Failed to load video for {sample['sentence_name']}: {e}\n"
                 f"Path: {sample['file_path']}"
             )
 
@@ -1788,6 +1812,15 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
 
                 global_step += 1
 
+                # ── Debug: save one augmented frame ──
+                if (train_config.get('aug_debug_save_images', False)
+                        and global_step % train_config.get('aug_debug_save_interval', 500) == 0):
+                    _dbg_dir = Path(train_config.get('aug_debug_save_dir', 'data/debugging_images'))
+                    _dbg_dir.mkdir(parents=True, exist_ok=True)
+                    # batch['frames'] is (B, T, 3, H, W) uint8 CPU — grab first sample, first frame
+                    _dbg_frame = batch['frames'][0, 0].cpu()   # (3, H, W) uint8
+                    tvio.write_jpeg(_dbg_frame, str(_dbg_dir / f"step_{global_step:07d}.jpg"), quality=90)
+
                 # ── Unfreeze CNN ──
                 if cnn_is_frozen and global_step >= cnn_freeze_steps:
                     cnn_is_frozen = False
@@ -2156,7 +2189,11 @@ def main():
     print(f"    Color jitter           : {'ON' if CONFIG['aug_color_jitter'] else 'OFF'}  (prob={CONFIG['aug_color_jitter_prob']}, b={CONFIG['aug_color_jitter_brightness']}, c={CONFIG['aug_color_jitter_contrast']}, s={CONFIG['aug_color_jitter_saturation']}, h={CONFIG['aug_color_jitter_hue']})")
     print(f"    Random grayscale       : {'ON' if CONFIG['aug_random_grayscale'] else 'OFF'}  (prob={CONFIG['aug_random_grayscale_prob']})")
     print(f"    Gaussian blur          : {'ON' if CONFIG['aug_gaussian_blur'] else 'OFF'}  (prob={CONFIG['aug_gaussian_blur_prob']}, kernel={CONFIG['aug_gaussian_blur_kernel']})")
+    print(f"    Solarize               : {'ON' if CONFIG['aug_solarize'] else 'OFF'}  (prob={CONFIG['aug_solarize_prob']}, threshold={CONFIG['aug_solarize_threshold']})")
+    print(f"    Equalize               : {'ON' if CONFIG['aug_equalize'] else 'OFF'}  (prob={CONFIG['aug_equalize_prob']})")
+    print(f"    Random erasing         : {'ON' if CONFIG['aug_random_erasing'] else 'OFF'}  (prob={CONFIG['aug_random_erasing_prob']}, scale={CONFIG['aug_random_erasing_scale']})")
     print(f"    Temporal jitter        : {'ON' if CONFIG['aug_temporal_jitter'] else 'OFF'}  (prob={CONFIG['aug_temporal_jitter_prob']}, ±{CONFIG['aug_temporal_jitter_range']} frames)")
+    print(f"    Debug image save       : {'ON' if CONFIG['aug_debug_save_images'] else 'OFF'}  (every {CONFIG['aug_debug_save_interval']} steps → {CONFIG['aug_debug_save_dir']})")
     print("\n" + _SEP + "\n")
 
     # ── Load Data Manifests ──
@@ -2239,10 +2276,14 @@ def main():
     # ── Create DataLoaders ──
     collate_fn_with_tokenizer = partial(collate_fn, pad_token_id=tokenizer.pad_token_id)
 
-    train_workers = TRAIN_CONFIG['train_num_workers']
-    val_workers = TRAIN_CONFIG['val_num_workers']
+    train_workers         = TRAIN_CONFIG['train_num_workers']
+    val_workers           = TRAIN_CONFIG['val_num_workers']
     train_prefetch_factor = TRAIN_CONFIG['train_prefetch_factor']
-    val_prefetch_factor = TRAIN_CONFIG['val_prefetch_factor']
+    val_prefetch_factor   = TRAIN_CONFIG['val_prefetch_factor']
+    train_pin_memory      = TRAIN_CONFIG.get('train_pin_memory', False)
+    val_pin_memory        = TRAIN_CONFIG.get('val_pin_memory', False)
+    train_persistent      = TRAIN_CONFIG.get('train_persistent_workers', True) and train_workers > 0
+    val_persistent        = TRAIN_CONFIG.get('val_persistent_workers', True) and val_workers > 0
 
     if TRAIN_CONFIG.get('use_bucket_batching', True):
         train_sampler = BucketBatchSampler(train_dataset, batch_size=TRAIN_CONFIG['batch_size'], shuffle=True)
@@ -2252,18 +2293,18 @@ def main():
             batch_sampler=train_sampler,
             collate_fn=collate_fn_with_tokenizer,
             num_workers=train_workers,
-            pin_memory=True,
+            pin_memory=train_pin_memory,
             prefetch_factor=train_prefetch_factor if train_workers > 0 else None,
-            persistent_workers=train_workers > 0,
+            persistent_workers=train_persistent,
         )
         val_loader = DataLoader(
             val_dataset,
             batch_sampler=val_sampler,
             collate_fn=collate_fn_with_tokenizer,
             num_workers=val_workers,
-            pin_memory=True,
+            pin_memory=val_pin_memory,
             prefetch_factor=val_prefetch_factor if val_workers > 0 else None,
-            persistent_workers=val_workers > 0,
+            persistent_workers=val_persistent,
         )
     else:
         train_loader = DataLoader(
@@ -2272,9 +2313,9 @@ def main():
             shuffle=True,
             collate_fn=collate_fn_with_tokenizer,
             num_workers=train_workers,
-            pin_memory=True,
+            pin_memory=train_pin_memory,
             prefetch_factor=train_prefetch_factor if train_workers > 0 else None,
-            persistent_workers=train_workers > 0,
+            persistent_workers=train_persistent,
         )
         val_loader = DataLoader(
             val_dataset,
@@ -2282,9 +2323,9 @@ def main():
             shuffle=False,
             collate_fn=collate_fn_with_tokenizer,
             num_workers=val_workers,
-            pin_memory=True,
+            pin_memory=val_pin_memory,
             prefetch_factor=val_prefetch_factor if val_workers > 0 else None,
-            persistent_workers=val_workers > 0,
+            persistent_workers=val_persistent,
         )
 
     print(f"\n⚙️  DataLoaders:")
