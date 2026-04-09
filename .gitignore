@@ -13,8 +13,10 @@ full_dataset_keypoints_preprocessed/
 
 .virtual_documents/
 
+*.mp4
 # C extensions
 *.so
+
 
 # Distribution / packaging
 .Python

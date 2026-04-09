@@ -1,0 +1,194 @@
+
+========================================================================
+  CONFIGURATION SUMMARY
+========================================================================
+
+  [ DATA ]
+    Train CSV              : ..\data\2_dataset_train.tsv
+    Val CSV                : ..\data\2_dataset_val.tsv
+
+  [ CNN BACKBONE  –  ResNet50 ]
+    Frame size             : 256 × 256  (letterbox, no crop)
+    Frozen layers          : conv1, bn1, layer1, layer2
+    Trainable layers       : layer3, layer4
+    Chunk size             : 8 frames per CUDA call
+    ResNet output dim      : 2048
+    Grad checkpointing     : True
+
+  [ CNN PROJECTION MLP ]
+    Architecture           : Linear(2048 → 768) → GELU → Dropout → LayerNorm
+    Dropout                : 0.15
+
+  [ TRANSFORMER ENCODER ]
+    d_model / heads        : 768 / 8
+    Layers                 : 6
+    Feedforward dim        : 3072
+    Dropout                : 0.15
+    Grad checkpointing     : True
+
+  [ CROSS-ATTENTION ]
+    Decoder layers         : [0, 2, 4, 7, 10, 13, 15]  (7/16)
+    Bottleneck dim / heads : 768 / 8
+    Weight sharing pairs   : none
+    Dropout                : 0.1
+
+  [ DECODER  –  Llama 3.2-1B  +  LoRA ]
+    Model                  : meta-llama/Llama-3.2-1B
+    Hidden size / layers   : 2048 / 16
+    LoRA rank / alpha      : 8 / 16  (DoRA + RsLoRA)
+    LoRA targets           : q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
+    LoRA dropout           : 0.1
+    Grad checkpointing     : True
+
+  [ SEQUENCE LENGTHS ]
+    Max video frames       : 160  (@ 20 FPS ≈ 8s)
+    Max text tokens        : 50  (excl. BOS/EOS)
+
+  [ TRAINING ]
+    Epochs                 : 25
+    Batch size             : 2  (effective: 64 with 32× accum)
+    Mixed precision        : bfloat16
+    Grad clip max_norm     : 0.6
+    Weight decay           : 0.05
+    Adam betas             : (0.9, 0.98)
+    8-bit AdamW            : True
+    SDPA attention         : True
+    Bucket batching        : True
+    DataLoader workers     : 2 train / 1 val
+
+  [ LEARNING RATES ]
+    New weights            : 9.00e-05 → 9.00e-07  (250 warmup steps, from step 0)
+    CNN  (layer3/layer4)   : 1.00e-05 → 1.00e-07  (100 warmup steps, from step 0)
+    Decoder (LoRA+norms)   : 1.00e-04 → 1.00e-06  (100 warmup steps, from step 0)
+
+  [ PHASED TRAINING CURRICULUM ]
+    Stage 1  steps 0 → 0        : MLP + Encoder + Cross-Attn only
+    Stage 2  steps 0 → 0    : + CNN (layer3/layer4)
+    Stage 3  steps 0 → end      : + Decoder (LoRA + norms)
+
+  [ EVALUATION & CHECKPOINTING ]
+    Eval every             : 250 steps  (warmup: 900 until step 2000)
+    Max eval batches       : 60
+    Max generation samples : 120
+    Beam size              : 4  |  Repetition penalty: 1.15
+    Save every             : 400 steps  |  Keep last: 3
+    Early stopping pat.    : 25 evals
+    Checkpoint dir         : C:\My Projects\sign-language-bridge\checkpoints
+
+  [ DATA AUGMENTATION (training only) ]
+    Horizontal flip        : DISABLED  (ASL handedness is semantically meaningful)
+    Color jitter           : ON  (prob=0.5, b=0.3, c=0.3, s=0.2, h=0.05)
+    Random grayscale       : ON  (prob=0.1)
+    Gaussian blur          : ON  (prob=0.2, kernel=(5, 5))
+    Temporal jitter        : ON  (prob=0.5, ±2 frames)
+
+========================================================================
+
+📂 Total training examples: 57347
+
+📋 Train manifest:
+  Total CSV rows: 57347
+  Found videos: 57347
+  Missing videos: 0
+  Success rate: 100.0%
+📋 Val manifest: 1399 samples
+🔤 Tokenizer loaded:
+  Vocab size: 128257
+  BOS: <|begin_of_text|> (id=128000)
+  EOS: <|end_of_text|> (id=128001)
+  PAD: <pad> (id=128256)
+📦 Train dataset: 57347 samples
+📦 Val dataset: 1399 samples
+Max video frames: 160
+Max text tokens: 50 (excluding BOS/EOS)
+
+⚙️  DataLoaders:
+  Train workers: 2
+  Val workers: 1
+
+🧠 Loaded: meta-llama/Llama-3.2-1B
+  📐 Resizing embeddings from 128256 to 128257
+  ✓ LoRA applied (r=8, alpha=16)
+  Norm layers trainable: 0.07M params
+trainable params: 6,080,512 || all params: 1,241,829,376 || trainable%: 0.4896
+
+🖼️  ResNet50 Frame Encoder:
+  Frozen: 1.44M | Trainable: 22.06M
+  Frozen layers: ['conv1', 'bn1', 'layer1', 'layer2']
+  Chunk size: 8 frames
+  Grad checkpointing: True
+
+🔗 CNN Projection MLP:
+  Architecture: Linear(2048→768) → GELU → Dropout → LayerNorm
+  Parameters: 1.58M
+
+⚡ Transformer Encoder:
+  d_model: 768, heads: 8, layers: 6
+  feedforward_dim: 3072
+  Parameters: 42.53M
+
+🔀 Cross-Attention:
+  Layers: [0, 2, 4, 7, 10, 13, 15] (7/16)
+  Unique modules: 7
+  Bottleneck dim: 768
+  Parameters: 46.873M
+  ✓ Patched Llama with standard causal attention + encoder-decoder support
+
+✅ Complete Model Created!
+  Total trainable: 119.12M params
+
+========================================================================
+  📊 DETAILED MODEL PARAMETER SUMMARY
+========================================================================
+
+  ResNet50 CNN Encoder
+    conv1 + bn1  (frozen)                      0.010 M   trainable:    0.000 M   [all frozen]
+    layer1       (frozen)                      0.216 M   trainable:    0.000 M   [all frozen]
+    layer2       (frozen)                      1.220 M   trainable:    0.000 M   [all frozen]
+    layer3       (trainable)                   7.098 M   trainable:    7.098 M   [all trainable]
+    layer4       (trainable)                  14.965 M   trainable:   14.965 M   [all trainable]
+  ──────────────────────────────────────────────────────────────────────
+    SUBTOTAL                                  23.508 M   trainable:   22.063 M   [93.9% trainable]
+
+  CNN Projection MLP  (Linear 2048→768 + GELU + Dropout + LayerNorm)
+    Linear + LayerNorm                         1.575 M   trainable:    1.575 M   [all trainable]
+  ──────────────────────────────────────────────────────────────────────
+    SUBTOTAL                                   1.575 M   trainable:    1.575 M   [all trainable]
+
+  Transformer Encoder  (6 layers, d_model=768, ff=3072)
+    layer 0                                    7.088 M   trainable:    7.088 M   [all trainable]
+    layer 1                                    7.088 M   trainable:    7.088 M   [all trainable]
+    layer 2                                    7.088 M   trainable:    7.088 M   [all trainable]
+    layer 3                                    7.088 M   trainable:    7.088 M   [all trainable]
+    layer 4                                    7.088 M   trainable:    7.088 M   [all trainable]
+    layer 5                                    7.088 M   trainable:    7.088 M   [all trainable]
+    positional encoding                        0.000 M   trainable:    0.000 M   [all trainable]
+  ──────────────────────────────────────────────────────────────────────
+    SUBTOTAL                                  42.527 M   trainable:   42.527 M   [all trainable]
+
+  Encoder Projection
+    LayerNorm + Linear                         0.002 M   trainable:    0.002 M   [all trainable]
+  ──────────────────────────────────────────────────────────────────────
+    SUBTOTAL                                   0.002 M   trainable:    0.002 M   [all trainable]
+
+  Cross-Attention  (7 decoder layers, 7 unique modules, bottleneck=768)
+    7 unique modules (all trainable)          46.873 M   trainable:   46.873 M   [all trainable]
+  ──────────────────────────────────────────────────────────────────────
+    SUBTOTAL                                  46.873 M   trainable:   46.873 M   [all trainable]
+
+  Decoder  (Llama 3.2-1B + LoRA r=8 — excl. cross-attn counted above)
+    Base weights        (frozen)            1235.749 M   trainable:    0.000 M   [all frozen]
+    LoRA adapters       (trainable)            6.013 M   trainable:    6.013 M   [all trainable]
+    Norm layers         (trainable)            0.068 M   trainable:    0.068 M   [all trainable]
+  ──────────────────────────────────────────────────────────────────────
+    SUBTOTAL                                1241.829 M   trainable:    6.081 M   [0.5% trainable]
+
+========================================================================
+  OVERALL MODEL
+────────────────────────────────────────────────────────────────────────
+    Total parameters                        1356.315 M   trainable: 1356.315 M   [all trainable]
+    Trainable parameters                     119.121 M   trainable:  119.121 M   [all trainable]
+    Frozen parameters                       1237.194 M   trainable:    0.000 M   [all frozen]
+  Trainable ratio: 8.78%
+========================================================================
+
