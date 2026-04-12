@@ -77,6 +77,9 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True
 torch.set_float32_matmul_precision('high')
+# Prefer Flash Attention SDP kernel — O(1) memory instead of O(n²) for attention.
+torch.backends.cuda.enable_flash_sdp(True)
+torch.backends.cuda.enable_mem_efficient_sdp(True)
 
 # %%
 # ─── Training Constants ───
@@ -100,12 +103,12 @@ CONFIG = {
     # ── CNN Backbone (ResNet50) ──
     'resnet_output_dim': 2048,                # ResNet50 output feature dimension
     'cnn_frame_size': 256,                    # Letterbox target size (both width and height)
-    'cnn_chunk_size': 16,                      # Frames processed through ResNet50 per CUDA call (tune based on VRAM)
+    'cnn_chunk_size': 4,                       # Frames processed through ResNet50 per CUDA call (tune based on VRAM)
     'cnn_freeze_layers': ['conv1', 'bn1', 'layer1', 'layer2'],  # Frozen early layers
 
     # ── CNN Projection MLP ──
     'cnn_projection_dim': 768,                # Output dim → encoder input (== encoder_d_model)
-    'cnn_projection_dropout': 0.15,
+    'cnn_projection_dropout': 0.1,
 
     # ── Sequence Lengths ──
     'max_video_frames': 160,                  # At 20 FPS = 8s (max clip ~8s)
@@ -121,14 +124,14 @@ CONFIG = {
     'encoder_num_heads': 8,
     'encoder_num_layers': 6,
     'encoder_feedforward_dim': 3072,          # 4 * 768
-    'encoder_dropout': 0.15,
-    'encoder_max_len': 5000,
+    'encoder_dropout': 0.1,
+    'encoder_max_len': 5000, 
 
     # ── Cross-Attention ──
     'bottleneck_dim': 768,
     'cross_attn_num_heads': 8,
     'cross_attn_dropout': 0.1,
-    'cross_attn_layers': [0, 2, 4, 7, 10, 13, 15],  # 7 out of 16
+    'cross_attn_layers': [0, 1, 3, 7, 11, 13, 15],       # 7 out of 16
     'weight_sharing_pairs': [],
 
     # ── LoRA ──
@@ -146,56 +149,65 @@ CONFIG = {
     'aug_temporal_jitter_prob': 0.5,
 
     'aug_color_jitter': True,
-    'aug_color_jitter_prob': 0.8,             # High — fires on most clips
-    'aug_color_jitter_brightness': 0.3,
-    'aug_color_jitter_contrast': 0.3,
-    'aug_color_jitter_saturation': 0.5,       # Strong — handles green spill
-    'aug_color_jitter_hue': 0.3,              # Strong — randomises green background to any colour
+    'aug_color_jitter_prob': 0.5,             # Fires on half of clips
+    'aug_color_jitter_brightness': 0.25,
+    'aug_color_jitter_contrast': 0.25,
+    'aug_color_jitter_saturation': 0.2,        # Moderate swing
+    'aug_color_jitter_hue': 0.12,              # ±43° — covers green-screen variation without being extreme
 
     'aug_random_grayscale': True,
-    'aug_random_grayscale_prob': 0.2,         # Forces shape/motion reliance over colour
+    'aug_random_grayscale_prob': 0.10,         # Forces shape/motion reliance over colour
 
     'aug_gaussian_blur': True,
-    'aug_gaussian_blur_prob': 0.2,
-    'aug_gaussian_blur_kernel': (5, 5),
+    'aug_gaussian_blur_prob': 0.1,
+    'aug_gaussian_blur_kernel': (3, 3),
 
     'aug_solarize': True,                     # Inverts pixels above threshold — extreme colour variety
-    'aug_solarize_prob': 0.1,
-    'aug_solarize_threshold': 128,            # 0–255; pixels above this get inverted
+    'aug_solarize_prob': 0.07,
+    'aug_solarize_threshold': 190,            # 0–255; pixels above this get inverted
 
     'aug_equalize': True,                     # Histogram equalisation — bridges studio vs natural lighting
-    'aug_equalize_prob': 0.15,
+    'aug_equalize_prob': 0.12,
 
-    'aug_random_erasing': True,               # Randomly blacks out small patches — occlusion robustness
+    'aug_random_erasing': False,               # Randomly blacks out small patches — occlusion robustness
     'aug_random_erasing_prob': 0.2,
     'aug_random_erasing_scale': (0.02, 0.1), # Fraction of frame area erased
     'aug_random_erasing_ratio': (0.3, 3.3),  # Aspect ratio of erased region
 
+    'aug_affine': True,                       # Small rotation + translation + scale — camera angle variation
+    'aug_affine_prob': 0.3,
+    'aug_affine_degrees': 8,                  # ±8° rotation
+    'aug_affine_translate': 0.05,             # ±5% of frame width/height
+    'aug_affine_scale_min': 0.95,             # 95%–105% zoom
+    'aug_affine_scale_max': 1.05,
+
+    'aug_speed_perturb': True,                # Simulate faster/slower signing by resampling frames
+    'aug_speed_perturb_prob': 0.4,
+    'aug_speed_perturb_min': 0.9,             # 0.9× = 10% slower (frames stretched)
+    'aug_speed_perturb_max': 1.1,             # 1.1× = 10% faster (frames compressed, tail padded)
+
     # ── Debug: save augmented frames to disk ──
     'aug_debug_save_images': True,
-    'aug_debug_save_interval': 5,           # Save one frame every N optimiser steps
-    'aug_debug_save_dir': Path('data/debugging_images'),
-}
+    'aug_debug_save_interval': 20,          # Save one frame every N optimiser steps
+    'aug_debug_save_dir': Path('../data/debugging_images'),
 
-## Training Configuration
-TRAIN_CONFIG = {
     # ── Core Training ──
     'num_epochs': 25,
-    'batch_size': 4,
+    'batch_size': 2,
 
     # ── Gradient Accumulation ──
-    'grad_accum_steps': 16,                   # effective batch = 2 * 32 = 64
+    'grad_accum_steps': 32,                   # effective batch = 2 * 32 = 64
 
     # ──── DataLoader config ────
     # Frames are now uint8 (~125MB/batch vs ~500MB float32)
     # 2 workers keeps CPU free for interactive use during long runs
     # (increase to 4 if GPU shows idle gaps and you don't need the PC)
-    'train_num_workers': 3,
-    'train_prefetch_factor': 1,
+    'train_num_workers': 2,
+    'train_prefetch_factor': 2,
     'train_pin_memory': False,        # False: bottleneck is decode not transfer, saves ~240MB
     'train_persistent_workers': True, # True: avoids costly worker respawn on Windows each epoch
 
-    'val_num_workers': 2,
+    'val_num_workers': 1,
     'val_prefetch_factor': 1,
     'val_pin_memory': False,
     'val_persistent_workers': False,
@@ -204,49 +216,49 @@ TRAIN_CONFIG = {
 
     # ── Learning Rates ──
     # New random weights (MLP + Encoder + Cross-attention)
-    'encoder_lr': 9e-5,
-    'encoder_min_lr': 9e-7, # 1% of initial LR
+    'encoder_lr': 1e-5,
+    'encoder_min_lr': 1e-8, # 0.1% of initial value
     # CNN backbone (ResNet50 layer3 + layer4)
-    'cnn_lr': 1e-5,
-    'cnn_min_lr': 1e-7, # 1% of initial LR
+    'cnn_lr': 6e-6,
+    'cnn_min_lr': 6e-9, # 0.1% of initial value
     # LoRA adapters (fine-tuning pretrained decoder)
-    'decoder_lr': 5e-5,
-    'decoder_min_lr': 5e-7, # 1% of initial LR
+    'decoder_lr': 8e-6,
+    'decoder_min_lr': 8e-9, # 0.1% of initial value
 
     'warmup_steps': 250,                      # Warmup for new_weights optimizer
     'cnn_warmup_steps': 100,                  # Warmup for CNN optimizer (starts at cnn_freeze_steps)
     'decoder_warmup_steps': 100,              # Warmup for decoder optimizer (starts at decoder_freeze_steps)
     'weight_decay': 0.05,
     'adam_betas': (0.9, 0.98),
-    'max_grad_norm': 0.6,
+    'max_grad_norm': 1.0,
 
     # ── Phased Training Curriculum ──
     # Stage 1 (0 → cnn_freeze_steps): only MLP + Encoder + Cross-attn train
     # Stage 2 (cnn_freeze_steps → decoder_freeze_steps): + CNN layer3/layer4
     # Stage 3 (decoder_freeze_steps → end): + Decoder (LoRA + norms)
-    'cnn_freeze_steps': 0,                 # CNN unfreezes at step 1000
-    'decoder_freeze_steps': 0,             # Decoder unfreezes at step 1500
+    'cnn_freeze_steps': 600,                 # CNN unfreezes at this step
+    'decoder_freeze_steps': 800,             # Decoder unfreezes at this step
 
     # ── Logging ──
-    'log_every_steps': 2,
+    'log_every_steps': 1,
     'train_log_file': Path('..') / 'saved_metrics' / 'train_log.csv',
     'val_log_file': Path('..') / 'saved_metrics' / 'val_log.csv',
     'gen_samples_log_file': Path('..') / 'saved_metrics' / 'gen_samples_log.csv',
     'tensorboard_dir': Path('..') / 'saved_metrics' / 'tensorboard' / 'signbridge_training',
 
     # ── Checkpointing ──
-    'save_every_steps': 100,
-    'keep_last_n_checkpoints': 3,
+    'save_every_steps': 30,
+    'keep_last_n_checkpoints': 4,
     'checkpoint_dir': Path('..') / 'checkpoints',
 
     # ── Evaluation ──
-    'eval_every_steps': 220,
-    'eval_every_steps_warmup': 900,
-    'eval_warmup_threshold': 2000,
+    'eval_every_steps': 200,
+    'eval_every_steps_warmup': 700,
+    'eval_warmup_threshold': 1000,
     'max_eval_batches': 60,
-    'max_generate_samples': 120,
+    'max_generate_samples': 140,
     'num_print_samples': 4,
-    'val_gen_batch_size': 8,                  # Reduced from 16 (frames use more VRAM per sample)
+    'val_gen_batch_size': 2,                  # Low — validation generation is the most VRAM-intensive path
     'val_beam_size': 4,
     'val_repetition_penalty': 1.15,
     'val_use_kv_cache': True,
@@ -258,16 +270,52 @@ TRAIN_CONFIG = {
     # ── Performance & Memory Optimizations ──
     'use_sdpa': True,
     'use_8bit_adam': True,
+
     'use_gradient_checkpointing_encoder': True,
     'use_gradient_checkpointing_cnn': True,   # Checkpoints layer3/layer4 blocks
     'use_gradient_checkpointing_decoder': True,   # Saves 300-500MB VRAM in Stage 3, ~20-30% slower
 
-    # ── Resuming ──
-    'resume_training': False,
-    'load_best_model': True,
-    'resume_checkpoint_step': 0,
-}
+    'use_torch_compile': False,               # torch.compile — ~20-40% faster, adds ~1-2 min on first batch
+    'torch_compile_mode': 'default',          # 'default' (recommended) or 'max-autotune' (longer compile, faster runtime)
 
+    # ── Resuming ──
+    'resume_training': True,
+    'load_best_model': False,
+    'resume_checkpoint_step': 990,
+
+    # ── Mid-Training LR Override ──────────────────────────────────────────────
+    # SPECIAL USE ONLY: Use this block to manually correct learning rates when
+    # resuming from a checkpoint mid-training (e.g. if LRs are too high and
+    # causing noisy loss, or you want to fine-tune from a specific checkpoint
+    # with lower LRs). This is a one-time intervention — set 'enabled' to False
+    # after the resumed run starts successfully, so future resumes don't re-apply
+    # the override unintentionally.
+    #
+    # How it works:
+    #   - For schedulers already running (e.g. new_weights, CNN if past unfreeze):
+    #     resets the CosineAnnealingLR to start from 'lr' and decay to 'eta_min'
+    #     over a fresh T_max cycle — no warmup, straight into cosine decay.
+    #   - For schedulers not yet started (e.g. decoder if still frozen):
+    #     patches the warmup target and cosine base so that when the scheduler
+    #     eventually starts at its unfreeze step, it warms up to 'lr' and then
+    #     decays to 'eta_min' — warmup proceeds normally from that point.
+    # ─────────────────────────────────────────────────────────────────────────
+    'lr_override': {
+        'enabled': False,             # ← Set True to apply, False after resuming
+        'new_weights': {
+            'lr':     1e-5,           # New peak/starting LR for new_weights cosine
+            'eta_min': 1e-8,          # New minimum LR floor for new_weights cosine
+        },
+        'cnn': {
+            'lr':     6e-6,           # New peak/starting LR for CNN cosine
+            'eta_min': 6e-9          # New minimum LR floor for CNN cosine
+        },
+        'decoder': {
+            'lr':     8e-6,           # New peak LR for decoder warmup + cosine
+            'eta_min': 8e-9,          # New minimum LR floor for decoder cosine
+        },
+    },
+}
 # Max sequence lengths (safety caps to avoid OOM)
 MAX_VIDEO_FRAMES = CONFIG['max_video_frames']
 MAX_TEXT_TOKENS = CONFIG['max_text_tokens']
@@ -352,19 +400,46 @@ class SignLanguageDataset(Dataset):
         """
         Args:
             manifest: List of dicts with keys: sentence_name, text, duration, file_path
-            tokenizer: Pretrained tokenizer (Llama 3.2)
+            tokenizer: Pretrained tokenizer (Llama 3.2) — used ONLY during __init__ for
+                       pre-tokenization. Not stored on self, so it is NOT copied to DataLoader
+                       worker processes, saving tokenizer_size × num_workers RAM.
             max_frames: Max video frames (truncate if longer)
             max_tokens: Max text tokens excluding BOS/EOS (truncate if longer)
             train: Whether this is training data (enables augmentation)
             augment_config: Dict with augmentation parameters (uses CONFIG if None)
         """
-        self.manifest = manifest
-        self.tokenizer = tokenizer
         self.max_frames = max_frames
-        self.max_tokens = max_tokens
         self.train = train
         self.aug_config = augment_config if augment_config is not None else CONFIG
         self.target_size = CONFIG['cnn_frame_size']
+
+        # ── Pre-tokenize all texts ──
+        # Done once here in the main process. Workers receive plain int lists instead of
+        # the full tokenizer object, saving tokenizer_size × num_workers in CPU RAM.
+        self.bos_token_id = tokenizer.bos_token_id
+        self.eos_token_id = tokenizer.eos_token_id
+        self.token_ids = []
+        for sample in manifest:
+            ids = tokenizer.encode(sample['text'], add_special_tokens=False)
+            if len(ids) > max_tokens:
+                ids = ids[:max_tokens]
+            ids = [self.bos_token_id] + ids + [self.eos_token_id]
+            self.token_ids.append(ids)
+        # tokenizer is intentionally NOT stored on self.
+
+        # ── Strip manifest to only fields needed at runtime ──
+        # 'text' is now pre-tokenized above and no longer needed in workers.
+        # 'duration' must be kept for BucketBatchSampler (reads dataset.manifest).
+        # 'sentence_name' kept for error messages and return dict.
+        # 'file_path' kept for video loading.
+        self.manifest = [
+            {
+                'file_path':     s['file_path'],
+                'sentence_name': s['sentence_name'],
+                'duration':      s.get('duration', 0),
+            }
+            for s in manifest
+        ]
 
         # Note: ImageNet normalization is NOT done here.
         # Frames stay as uint8 (0-255) in the DataLoader to save CPU RAM (~4x reduction).
@@ -416,6 +491,25 @@ class SignLanguageDataset(Dataset):
                         value=0,
                     )
                 )
+            if self.aug_config.get('aug_affine', False):
+                # Applied to (T, C, H, W): torchvision v2 applies the SAME random affine
+                # parameters to all frames — correct for video (no inter-frame jitter).
+                aug_transforms.append(
+                    T_v2.RandomApply([
+                        T_v2.RandomAffine(
+                            degrees=self.aug_config.get('aug_affine_degrees', 8),
+                            translate=(
+                                self.aug_config.get('aug_affine_translate', 0.05),
+                                self.aug_config.get('aug_affine_translate', 0.05),
+                            ),
+                            scale=(
+                                self.aug_config.get('aug_affine_scale_min', 0.95),
+                                self.aug_config.get('aug_affine_scale_max', 1.05),
+                            ),
+                            fill=0,  # black pixels for any region exposed by rotation/translation
+                        )
+                    ], p=self.aug_config.get('aug_affine_prob', 0.3))
+                )
             self.aug_transform = T_v2.Compose(aug_transforms) if aug_transforms else None
         else:
             self.aug_transform = None
@@ -445,6 +539,27 @@ class SignLanguageDataset(Dataset):
 
         # ── Data Augmentation (training only) ──
         if self.train:
+            # Speed perturbation: resample frames to simulate faster/slower signing.
+            # s > 1 (e.g. 1.2): 20% faster — subsample frames, pad tail with last frame.
+            # s < 1 (e.g. 0.8): 20% slower — upsample frames (nearest-neighbour), truncate.
+            # torch.linspace + long() = no float arithmetic on the frames themselves, very cheap.
+            if self.aug_config.get('aug_speed_perturb', False) and random.random() < self.aug_config.get('aug_speed_perturb_prob', 0.4):
+                T = frames.shape[0]
+                s = random.uniform(
+                    self.aug_config.get('aug_speed_perturb_min', 0.8),
+                    self.aug_config.get('aug_speed_perturb_max', 1.2),
+                )
+                new_len = max(1, int(round(T / s)))
+                indices = torch.linspace(0, T - 1, new_len).long()
+                frames = frames[indices]           # (new_len, C, H, W)
+                if new_len < T:
+                    # Speed up: fewer frames — pad tail by repeating last frame
+                    pad = frames[-1:].expand(T - new_len, -1, -1, -1)
+                    frames = torch.cat([frames, pad], dim=0)
+                else:
+                    # Slow down: more frames — truncate back to T
+                    frames = frames[:T]
+
             # Temporal jitter: shift sequence by ±max_shift frames
             if self.aug_config.get('aug_temporal_jitter', False) and random.random() < self.aug_config.get('aug_temporal_jitter_prob', 0.5):
                 max_shift = self.aug_config.get('aug_temporal_jitter_range', 2)
@@ -468,17 +583,9 @@ class SignLanguageDataset(Dataset):
         # No normalization here — frames remain uint8 (0-255).
         # float conversion + ImageNet normalization happen on GPU in ResNetFrameEncoder.forward().
 
-        # Tokenize text
-        text = sample['text']
-        token_ids = self.tokenizer.encode(text, add_special_tokens=False)
-
-        # Truncate tokens if too long (reserve 2 for BOS/EOS)
-        if len(token_ids) > self.max_tokens:
-            token_ids = token_ids[:self.max_tokens]
-
-        # Add BOS at start, EOS at end
-        token_ids = [self.tokenizer.bos_token_id] + token_ids + [self.tokenizer.eos_token_id]
-        token_ids = torch.tensor(token_ids, dtype=torch.long)
+        # Token ids were pre-tokenized (with BOS/EOS and truncation) during __init__.
+        # No tokenizer call needed here — safe and fast in worker processes.
+        token_ids = torch.tensor(self.token_ids[idx], dtype=torch.long)
 
         return {
             'frames': frames,              # (T, 3, H, W) uint8  — normalized to float on GPU
@@ -653,12 +760,15 @@ class ResNetFrameEncoder(nn.Module):
 
     def _forward_features(self, x):
         """Forward through all conv layers (for a chunk of frames)."""
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
+        # Frozen layers: no_grad prevents building a gradient graph through their activations,
+        # saving activation memory proportional to these 4 blocks.
+        with torch.no_grad():
+            x = self.conv1(x)
+            x = self.bn1(x)
+            x = self.relu(x)
+            x = self.maxpool(x)
+            x = self.layer1(x)
+            x = self.layer2(x)
 
         # Gradient checkpointing on trainable layers
         if self.training and self.use_gradient_checkpointing:
@@ -675,11 +785,14 @@ class ResNetFrameEncoder(nn.Module):
         return x
 
     def _preprocess_chunk(self, x_uint8):
-        """Convert a uint8 chunk to normalized bfloat16 on GPU.
-        Done per-chunk to avoid materializing ALL B*T frames as float32 at once."""
-        x = x_uint8.float() / 255.0
-        x = (x - self.norm_mean.float()) / self.norm_std.float()
-        return x.to(dtype=self.conv1.weight.dtype)
+        """Convert a uint8 chunk to normalized bfloat16 on GPU, in channels-last layout.
+        Done per-chunk to avoid materializing ALL B*T frames as float32 at once.
+        Goes directly to bf16 (skipping fp32 intermediate) — halves peak memory per chunk."""
+        target_dtype = self.conv1.weight.dtype  # bf16
+        x = x_uint8.to(target_dtype) / 255.0
+        x = (x - self.norm_mean.to(target_dtype)) / self.norm_std.to(target_dtype)
+        # Channels-last: NHWC layout is ~10-20% faster for ResNet convolutions on NVIDIA GPUs
+        return x.contiguous(memory_format=torch.channels_last)
 
     def forward(self, frames):
         """
@@ -693,12 +806,13 @@ class ResNetFrameEncoder(nn.Module):
 
         # Keep uint8 until chunking — only convert to float per-chunk to limit peak VRAM.
         # With B=2, T=160, chunk_size=8: peak is 8×3×256×256×4 ≈ 6MB instead of ~251MB.
-        flat = frames.reshape(B * T, C, H, W)  # stays uint8
+        flat = frames.reshape(B * T, C, H, W)  # stays uint8, view of frames
         chunks = flat.split(self.chunk_size, dim=0)
-        feats = torch.cat(
-            [self._forward_features(self._preprocess_chunk(chunk)) for chunk in chunks],
-            dim=0,
-        )  # (B*T, 2048)
+        feats = []
+        for chunk in chunks:
+            feats.append(self._forward_features(self._preprocess_chunk(chunk)))
+        del flat, chunks  # free uint8 (B*T, C, H, W) view + chunk list
+        feats = torch.cat(feats, dim=0)  # (B*T, 2048)
 
         feats = feats.reshape(B, T, -1)  # (B, T, 2048)
         return feats
@@ -895,7 +1009,7 @@ class LlamaDecoderLayerWithOptionalCrossAttention(nn.Module):
         residual = hidden_states
         hidden_states = self.input_layernorm(hidden_states)
 
-        hidden_states, self_attn_weights = self.self_attn(
+        hidden_states, self_attn_weights, *_ = self.self_attn(
             hidden_states=hidden_states,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -1074,6 +1188,9 @@ class SignLanguageTranslationModel(nn.Module):
         self.decoder = decoder
         self.tokenizer = tokenizer
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=tokenizer.pad_token_id, label_smoothing=0.1)
+        # Cache dtypes — avoids iterating parameter generators on every forward call
+        self._proj_dtype = next(cnn_projection.parameters()).dtype
+        self._dec_dtype = next(decoder.parameters()).dtype
 
     def forward(self, frames, frame_padding_mask, token_ids, text_attention_mask, return_loss=True):
         """
@@ -1085,20 +1202,26 @@ class SignLanguageTranslationModel(nn.Module):
         """
         # CNN feature extraction
         cnn_features = self.cnn_encoder(frames)  # (B, T, 2048)
+        del frames  # free uint8 GPU tensor (B×T×3×256×256 ≈ 25MB) — CNN already consumed it
 
         # Project to encoder dimension
-        encoder_input = self.cnn_projection(cnn_features.to(next(self.cnn_projection.parameters()).dtype))  # (B, T, 768)
+        encoder_input = self.cnn_projection(cnn_features.to(self._proj_dtype))  # (B, T, 768)
+        del cnn_features  # free (B, T, 2048) bf16 — no longer needed
 
         # Encoder
         encoder_output = self.encoder(encoder_input, src_key_padding_mask=frame_padding_mask)
+        del encoder_input  # free (B, T, 768) bf16 — encoder output replaces it
         encoder_hidden_states = self.encoder_projection(encoder_output)
+        del encoder_output  # free (B, T, 768) bf16
 
         # Decoder (teacher forcing)
         decoder_input_ids = token_ids[:, :-1].contiguous()
         labels = token_ids[:, 1:].contiguous()
+        del token_ids  # free (B, L) — sliced into decoder_input_ids and labels
         decoder_attention_mask = text_attention_mask[:, :-1]
+        del text_attention_mask  # free (B, L) — sliced into decoder_attention_mask
 
-        encoder_hidden_states = encoder_hidden_states.to(next(self.decoder.parameters()).dtype)
+        encoder_hidden_states = encoder_hidden_states.to(self._dec_dtype)
 
         outputs = self.decoder(
             input_ids=decoder_input_ids,
@@ -1108,22 +1231,31 @@ class SignLanguageTranslationModel(nn.Module):
             use_cache=False,
             return_dict=True,
         )
+        del decoder_input_ids, decoder_attention_mask  # free after decoder consumed them
+        del encoder_hidden_states, frame_padding_mask  # free encoder outputs passed to decoder
 
         logits = outputs.logits
+        del outputs  # free everything except logits (e.g. hidden states if returned)
 
         if return_loss:
             loss = self.loss_fn(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
+            del labels
             return {'loss': loss, 'logits': logits}
 
+        del labels
         return {'logits': logits}
 
     def _encode_frames(self, frames, frame_padding_mask):
         """Shared encoder path for both training and generation."""
         cnn_features = self.cnn_encoder(frames)
-        encoder_input = self.cnn_projection(cnn_features.to(next(self.cnn_projection.parameters()).dtype))
+        del frames  # free uint8 GPU tensor — CNN already consumed it
+        encoder_input = self.cnn_projection(cnn_features.to(self._proj_dtype))
+        del cnn_features  # free (B, T, 2048) bf16
         encoder_output = self.encoder(encoder_input, src_key_padding_mask=frame_padding_mask)
+        del encoder_input  # free (B, T, 768) bf16
         encoder_hidden_states = self.encoder_projection(encoder_output)
-        return encoder_hidden_states.to(next(self.decoder.parameters()).dtype), frame_padding_mask
+        del encoder_output  # free (B, T, 768) bf16
+        return encoder_hidden_states.to(self._dec_dtype), frame_padding_mask
 
     def _apply_repetition_penalty(self, logits, generated_ids, penalty):
         if penalty == 1.0:
@@ -1404,8 +1536,18 @@ class CheckpointManager:
         self.checkpoint_dir = Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
         self.keep_last_n = keep_last_n
-        self.periodic_checkpoints = []
         self.best_path = self.checkpoint_dir / 'best_model.pt'
+
+        # Reconstruct the sliding window from existing checkpoints on disk
+        # so that resuming a run correctly evicts old checkpoints.
+        existing = sorted(
+            self.checkpoint_dir.glob('checkpoint_step_*.pt'),
+            key=lambda p: int(p.stem.split('_')[-1]),
+        )
+        self.periodic_checkpoints = existing
+        if existing:
+            print(f"  📋 CheckpointManager: found {len(existing)} existing periodic checkpoint(s) on disk "
+                  f"(keep_last_n={keep_last_n}).")
 
     def _atomic_save(self, state_dict, path):
         temp_fd, temp_path = tempfile.mkstemp(dir=self.checkpoint_dir, suffix='.pt.tmp')
@@ -1445,7 +1587,8 @@ class CheckpointManager:
     def _build_state_dict(self, model,
                           optimizer_new_weights, optimizer_cnn, optimizer_decoder,
                           scheduler_new_weights, scheduler_cnn, scheduler_decoder,
-                          epoch, global_step, best_val_loss, evals_without_improvement, elapsed_sec):
+                          epoch, global_step, steps_done_in_epoch,
+                          best_val_loss, evals_without_improvement, elapsed_sec):
         state = {
             'model_state_dict': model.state_dict(),
             'optimizer_new_weights_state_dict': optimizer_new_weights.state_dict(),
@@ -1456,6 +1599,7 @@ class CheckpointManager:
             'scheduler_decoder_state_dict': scheduler_decoder.state_dict(),
             'epoch': epoch,
             'global_step': global_step,
+            'steps_done_in_epoch': steps_done_in_epoch,
             'best_val_loss': best_val_loss,
             'evals_without_improvement': evals_without_improvement,
             'elapsed_sec': elapsed_sec,
@@ -1526,7 +1670,7 @@ def get_cuda_mem():
 #  VALIDATION
 # ═══════════════════════════════════════════════════════════════
 
-@torch.no_grad()
+@torch.inference_mode()
 def validate(model, val_loader, val_dataset, tokenizer, device,
              max_eval_batches, max_generate_samples, num_print_samples, val_gen_batch_size,
              val_beam_size=1, val_repetition_penalty=1.0, val_use_kv_cache=True):
@@ -1555,12 +1699,14 @@ def validate(model, val_loader, val_dataset, tokenizer, device,
         total_loss += output['loss'].item()
         num_batches += 1
 
-        logits = output['logits']
-        preds = logits.argmax(dim=-1)
+        preds = output['logits'].argmax(dim=-1)
+        del output  # free logits + loss tensors
         labels = batch['token_ids'][:, 1:].to(device, non_blocking=True)
+        del batch  # free CPU tensors (uint8 frames)
         mask = labels != tokenizer.pad_token_id
         total_correct += ((preds == labels) & mask).sum().item()
         total_tokens += mask.sum().item()
+        del preds, labels, mask  # free GPU tensors before next batch
 
         loss_pbar.update(1)
     loss_pbar.close()
@@ -1611,8 +1757,11 @@ def validate(model, val_loader, val_dataset, tokenizer, device,
                 beam_size=val_beam_size,
                 use_kv_cache=val_use_kv_cache,
             )
+        del padded_frames, frame_padding_mask  # free CPU uint8 frames + mask
+        del frames_list, batch_samples  # free per-sample frame lists
 
         batch_hypotheses = gen_output['generated_text']
+        del gen_output  # free generated_ids GPU tensor
         if isinstance(batch_hypotheses, str):
             batch_hypotheses = [batch_hypotheses]
 
@@ -1659,7 +1808,8 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
           optimizer_new_weights, optimizer_cnn, optimizer_decoder,
           scheduler_new_weights, scheduler_cnn, scheduler_decoder,
           device, train_config, ckpt_manager, train_csv_logger, val_csv_logger, gen_samples_csv_logger, tb_writer,
-          start_epoch=1, start_global_step=0, best_val_loss=float('inf'), start_evals_without_improvement=0, start_elapsed_sec=0.0):
+          start_epoch=1, start_global_step=0, start_steps_done_in_epoch=None,
+          best_val_loss=float('inf'), start_evals_without_improvement=0, start_elapsed_sec=0.0):
     """Full training loop with 3-stage phased curriculum."""
 
     # Unpack config
@@ -1696,7 +1846,11 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
     step_grad_norms = []
     log_step_start = time.time()
 
+    # Reclaim unreachable Python objects and fragmented CUDA memory from
+    # model construction, checkpoint loading, and dataset creation.
+    gc.collect()
     if torch.cuda.is_available():
+        torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
 
     model.train()
@@ -1708,7 +1862,12 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
 
     optimizer_steps_per_epoch = math.ceil(len(train_loader) / grad_accum_steps)
 
-    steps_done_in_epoch = start_global_step % optimizer_steps_per_epoch
+    # Use saved value when available (new checkpoints); fall back to modulo for old checkpoints.
+    # The saved value is exact; the modulo breaks if batch_size or grad_accum_steps changed.
+    if start_steps_done_in_epoch is not None:
+        steps_done_in_epoch = start_steps_done_in_epoch
+    else:
+        steps_done_in_epoch = start_global_step % optimizer_steps_per_epoch
     if steps_done_in_epoch == 0 and start_global_step > 0:
         start_epoch += 1
         print(f"  ⏭️ Checkpoint was at exact end of Epoch {start_epoch - 1}. Advancing to Epoch {start_epoch}.")
@@ -1717,6 +1876,14 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
     # Collect parameter references for each group
     cnn_params_for_freeze = [p for group in optimizer_cnn.param_groups for p in group['params']]
     decoder_params_for_freeze = [p for group in optimizer_decoder.param_groups for p in group['params']]
+
+    # Pre-collect all trainable params for clip_grad_norm_ — avoids iterating
+    # the full model (including ~1B frozen params) every optimizer step.
+    _all_trainable_params = (
+        [p for group in optimizer_new_weights.param_groups for p in group['params']]
+        + cnn_params_for_freeze
+        + decoder_params_for_freeze
+    )
 
     # Determine initial freeze state (handles resume correctly)
     cnn_is_frozen = (start_global_step < cnn_freeze_steps)
@@ -1748,22 +1915,45 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
         epoch_loss = 0.0
         epoch_microbatches = 0
 
-        optimizer_new_weights.zero_grad()
-        optimizer_cnn.zero_grad()
-        optimizer_decoder.zero_grad()
+        optimizer_new_weights.zero_grad(set_to_none=True)
+        optimizer_cnn.zero_grad(set_to_none=True)
+        optimizer_decoder.zero_grad(set_to_none=True)
 
-        # How many micro-batches to skip if resuming mid-epoch
+        # Mid-epoch resume: skip already-processed micro-batches without loading data.
+        # Strategy: materialize all batch *index* lists from the sampler (instant — just
+        # integers, no video decoding), slice from the resume position, then create a
+        # lightweight temporary DataLoader with only the remaining index lists.
+        # Data loading only happens when workers call dataset[i], which only occurs for
+        # the remaining batches — skipped batches are never decoded.
         micro_steps_already_processed = 0
         if epoch == start_epoch and start_global_step > 0 and steps_done_in_epoch > 0:
             micro_steps_already_processed = steps_done_in_epoch * grad_accum_steps
-            if micro_steps_already_processed > 0:
-                print(f"  ⏭️ Resuming mid-epoch. Fast-forwarding {micro_steps_already_processed} micro-batches...")
 
-        for micro_step, batch in enumerate(train_loader):
-            if epoch == start_epoch and micro_step < micro_steps_already_processed:
-                continue
+        if micro_steps_already_processed > 0:
+            # list(batch_sampler) calls __iter__ which shuffles and yields index lists.
+            # This is instant — no data loaded, just integer arithmetic.
+            all_epoch_batches = list(train_loader.batch_sampler)
+            remaining_batches = all_epoch_batches[micro_steps_already_processed:]
+            print(f"  ⏭️ Resuming mid-epoch: skipping {micro_steps_already_processed}/"
+                  f"{len(all_epoch_batches)} micro-batches, {len(remaining_batches)} remaining.")
+            _nw = train_config['train_num_workers']
+            epoch_loader = DataLoader(
+                train_loader.dataset,
+                batch_sampler=remaining_batches,
+                collate_fn=train_loader.collate_fn,
+                num_workers=_nw,
+                pin_memory=train_config.get('train_pin_memory', False),
+                prefetch_factor=train_config['train_prefetch_factor'] if _nw > 0 else None,
+                persistent_workers=False,
+            )
+        else:
+            epoch_loader = train_loader
+
+        for micro_step, batch in enumerate(epoch_loader, start=micro_steps_already_processed):
 
             # ── Forward pass with mixed precision ──
+            # Grab first frame for debug image before transferring to GPU
+            _dbg_first_frame = batch['frames'][0, 0] if train_config.get('aug_debug_save_images', False) else None
             with torch.amp.autocast('cuda', dtype=torch.bfloat16):
                 output = model(
                     frames=batch['frames'].to(device, non_blocking=True),
@@ -1772,6 +1962,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                     text_attention_mask=batch['text_attention_mask'].to(device, non_blocking=True),
                     return_loss=True,
                 )
+            del batch  # free CPU tensors (uint8 frames ~25-50MB) — already copied to GPU
 
             is_accum_step = (micro_step + 1) % grad_accum_steps == 0
             is_last_step = (micro_step + 1) == len(train_loader)
@@ -1781,15 +1972,19 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
             else:
                 actual_accum_steps = grad_accum_steps
 
-            loss = output['loss'] / actual_accum_steps
+            raw_loss = output['loss']
+            raw_loss_val = raw_loss.item()  # scalar copy before freeing tensors
+            del output  # free logits (B × L × vocab bf16) before backward
+            loss = raw_loss / actual_accum_steps
             loss.backward()
+            del raw_loss, loss
 
-            epoch_loss += output['loss'].item()
+            epoch_loss += raw_loss_val
             epoch_microbatches += 1
 
             if is_accum_step or is_last_step:
                 grad_norm = torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), max_norm=max_grad_norm
+                    _all_trainable_params, max_norm=max_grad_norm
                 ).item()
 
                 # Always step new_weights optimizer (active from step 0)
@@ -1806,27 +2001,25 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                     optimizer_decoder.step()
                     scheduler_decoder.step()
 
-                optimizer_new_weights.zero_grad()
-                optimizer_cnn.zero_grad()
-                optimizer_decoder.zero_grad()
+                optimizer_new_weights.zero_grad(set_to_none=True)
+                optimizer_cnn.zero_grad(set_to_none=True)
+                optimizer_decoder.zero_grad(set_to_none=True)
 
                 global_step += 1
 
                 # ── Debug: save one augmented frame ──
-                if (train_config.get('aug_debug_save_images', False)
+                if (_dbg_first_frame is not None
                         and global_step % train_config.get('aug_debug_save_interval', 500) == 0):
                     _dbg_dir = Path(train_config.get('aug_debug_save_dir', 'data/debugging_images'))
                     _dbg_dir.mkdir(parents=True, exist_ok=True)
-                    # batch['frames'] is (B, T, 3, H, W) uint8 CPU — grab first sample, first frame
-                    _dbg_frame = batch['frames'][0, 0].cpu()   # (3, H, W) uint8
-                    tvio.write_jpeg(_dbg_frame, str(_dbg_dir / f"step_{global_step:07d}.jpg"), quality=90)
+                    tvio.write_jpeg(_dbg_first_frame.cpu(), str(_dbg_dir / f"step_{global_step:07d}.jpg"), quality=90)
 
                 # ── Unfreeze CNN ──
                 if cnn_is_frozen and global_step >= cnn_freeze_steps:
                     cnn_is_frozen = False
                     for p in cnn_params_for_freeze:
                         p.requires_grad = True
-                    optimizer_cnn.zero_grad()
+                    optimizer_cnn.zero_grad(set_to_none=True)
                     print(f"\n{'=' * 60}")
                     print(f"  🔓 CNN UNFROZEN at step {global_step} — CNN fine-tuning begins")
                     print(f"  CNN LR schedule starting its warmup from this point.")
@@ -1837,13 +2030,13 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                     decoder_is_frozen = False
                     for p in decoder_params_for_freeze:
                         p.requires_grad = True
-                    optimizer_decoder.zero_grad()
+                    optimizer_decoder.zero_grad(set_to_none=True)
                     print(f"\n{'=' * 60}")
                     print(f"  🔓 Decoder UNFROZEN at step {global_step} — full training begins now")
                     print(f"  Decoder LR schedule starting its warmup from this point.")
                     print(f"{'=' * 60}\n")
 
-                step_losses.append(output['loss'].item())
+                step_losses.append(raw_loss_val)
                 step_grad_norms.append(grad_norm)
 
                 # ── Logging ──
@@ -1900,6 +2093,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                         'cuda_peak_gb': f"{cuda_peak:.2f}",
                         'steps_per_sec': f"{speed:.2f}",
                         'elapsed_sec': f"{elapsed:.1f}",
+                        'eta_sec': f"{eta_seconds:.1f}",
                     })
 
                     tb_writer.add_scalar('Loss/Train', avg_loss, global_step)
@@ -1935,6 +2129,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
 
                     cuda_mem, cuda_peak = get_cuda_mem()
                     elapsed = time.time() - training_start
+                    eta_seconds = (elapsed / global_step) * (total_optimizer_steps - global_step)
 
                     try:
                         val_loss_str = f"{val_metrics['val_loss']:.4f}"
@@ -1970,6 +2165,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                         'cuda_mem_gb': f"{cuda_mem:.2f}",
                         'cuda_peak_gb': f"{cuda_peak:.2f}",
                         'elapsed_sec': f"{elapsed:.1f}",
+                        'eta_sec': f"{eta_seconds:.1f}",
                     })
 
                     tb_writer.add_scalar('Loss/Validation', val_metrics['val_loss'], global_step)
@@ -1989,6 +2185,7 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                             'generated': hyp_text,
                             'reference': ref_text,
                             'elapsed_sec': f"{elapsed:.1f}",
+                            'eta_sec': f"{eta_seconds:.1f}",
                         })
 
                     val_loss = val_metrics['val_loss']
@@ -1999,10 +2196,12 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                             model,
                             optimizer_new_weights, optimizer_cnn, optimizer_decoder,
                             scheduler_new_weights, scheduler_cnn, scheduler_decoder,
-                            epoch, global_step, best_val_loss, evals_without_improvement, time.time() - training_start
+                            epoch, global_step, global_step % optimizer_steps_per_epoch,
+                            best_val_loss, evals_without_improvement, time.time() - training_start
                         )
                         ckpt_manager.save_best(state)
                         del state
+                        gc.collect()  # reclaim state_dict copy from RAM immediately
                         torch.cuda.empty_cache()
                         print(f"\n  ⭐ New best val loss: {best_val_loss:.4f}")
                     else:
@@ -2037,10 +2236,12 @@ def train(model, train_loader, val_loader, val_dataset, tokenizer,
                         model,
                         optimizer_new_weights, optimizer_cnn, optimizer_decoder,
                         scheduler_new_weights, scheduler_cnn, scheduler_decoder,
-                        epoch, global_step, best_val_loss, evals_without_improvement, time.time() - training_start
+                        epoch, global_step, global_step % optimizer_steps_per_epoch,
+                        best_val_loss, evals_without_improvement, time.time() - training_start
                     )
                     ckpt_manager.save_periodic(state, global_step)
                     del state
+                    gc.collect()  # reclaim state_dict copy from RAM immediately
                     torch.cuda.empty_cache()
 
         # ── Epoch summary ──
@@ -2082,7 +2283,7 @@ def main():
 
     # ── Open timestamped log file (tee: terminal + file) ──
     _run_dt = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    _log_dir = Path("saved_metrics/train_config")
+    _log_dir = Path("../saved_metrics/train_config")
     _log_dir.mkdir(parents=True, exist_ok=True)
     _log_path = _log_dir / f"training_config_{_run_dt}.txt"
 
@@ -2107,7 +2308,7 @@ def main():
     # ── Print Configuration Summary ──
     _W = 72
     _SEP = "=" * _W
-    effective_batch = TRAIN_CONFIG['batch_size'] * TRAIN_CONFIG['grad_accum_steps']
+    effective_batch = CONFIG['batch_size'] * CONFIG['grad_accum_steps']
     print("\n" + _SEP)
     print("  CONFIGURATION SUMMARY")
     print(_SEP)
@@ -2122,7 +2323,7 @@ def main():
     print(f"    Trainable layers       : layer3, layer4")
     print(f"    Chunk size             : {CONFIG['cnn_chunk_size']} frames per CUDA call")
     print(f"    ResNet output dim      : {CONFIG['resnet_output_dim']}")
-    print(f"    Grad checkpointing     : {TRAIN_CONFIG.get('use_gradient_checkpointing_cnn', True)}")
+    print(f"    Grad checkpointing     : {CONFIG.get('use_gradient_checkpointing_cnn', True)}")
 
     print("\n  [ CNN PROJECTION MLP ]")
     print(f"    Architecture           : Linear({CONFIG['resnet_output_dim']} → {CONFIG['cnn_projection_dim']}) → GELU → Dropout → LayerNorm")
@@ -2133,7 +2334,7 @@ def main():
     print(f"    Layers                 : {CONFIG['encoder_num_layers']}")
     print(f"    Feedforward dim        : {CONFIG['encoder_feedforward_dim']}")
     print(f"    Dropout                : {CONFIG['encoder_dropout']}")
-    print(f"    Grad checkpointing     : {TRAIN_CONFIG.get('use_gradient_checkpointing_encoder', False)}")
+    print(f"    Grad checkpointing     : {CONFIG.get('use_gradient_checkpointing_encoder', False)}")
 
     print("\n  [ CROSS-ATTENTION ]")
     print(f"    Decoder layers         : {CONFIG['cross_attn_layers']}  ({len(CONFIG['cross_attn_layers'])}/{ CONFIG['decoder_num_layers']})")
@@ -2147,42 +2348,42 @@ def main():
     print(f"    LoRA rank / alpha      : {CONFIG['lora_r']} / {CONFIG['lora_alpha']}  (DoRA + RsLoRA)")
     print(f"    LoRA targets           : {', '.join(CONFIG['lora_target_modules'])}")
     print(f"    LoRA dropout           : {CONFIG['lora_dropout']}")
-    print(f"    Grad checkpointing     : {TRAIN_CONFIG.get('use_gradient_checkpointing_decoder', False)}")
+    print(f"    Grad checkpointing     : {CONFIG.get('use_gradient_checkpointing_decoder', False)}")
 
     print("\n  [ SEQUENCE LENGTHS ]")
     print(f"    Max video frames       : {CONFIG['max_video_frames']}  (@ 20 FPS ≈ {CONFIG['max_video_frames']/20:.0f}s)")
     print(f"    Max text tokens        : {CONFIG['max_text_tokens']}  (excl. BOS/EOS)")
 
     print("\n  [ TRAINING ]")
-    print(f"    Epochs                 : {TRAIN_CONFIG['num_epochs']}")
-    print(f"    Batch size             : {TRAIN_CONFIG['batch_size']}  (effective: {effective_batch} with {TRAIN_CONFIG['grad_accum_steps']}× accum)")
+    print(f"    Epochs                 : {CONFIG['num_epochs']}")
+    print(f"    Batch size             : {CONFIG['batch_size']}  (effective: {effective_batch} with {CONFIG['grad_accum_steps']}× accum)")
     print(f"    Mixed precision        : bfloat16")
-    print(f"    Grad clip max_norm     : {TRAIN_CONFIG['max_grad_norm']}")
-    print(f"    Weight decay           : {TRAIN_CONFIG['weight_decay']}")
-    print(f"    Adam betas             : {TRAIN_CONFIG['adam_betas']}")
-    print(f"    8-bit AdamW            : {TRAIN_CONFIG.get('use_8bit_adam', False)}")
-    print(f"    SDPA attention         : {TRAIN_CONFIG.get('use_sdpa', True)}")
-    print(f"    Bucket batching        : {TRAIN_CONFIG.get('use_bucket_batching', True)}")
-    print(f"    DataLoader workers     : {TRAIN_CONFIG['train_num_workers']} train / {TRAIN_CONFIG['val_num_workers']} val")
+    print(f"    Grad clip max_norm     : {CONFIG['max_grad_norm']}")
+    print(f"    Weight decay           : {CONFIG['weight_decay']}")
+    print(f"    Adam betas             : {CONFIG['adam_betas']}")
+    print(f"    8-bit AdamW            : {CONFIG.get('use_8bit_adam', False)}")
+    print(f"    SDPA attention         : {CONFIG.get('use_sdpa', True)}")
+    print(f"    Bucket batching        : {CONFIG.get('use_bucket_batching', True)}")
+    print(f"    DataLoader workers     : {CONFIG['train_num_workers']} train / {CONFIG['val_num_workers']} val")
 
     print("\n  [ LEARNING RATES ]")
-    print(f"    New weights            : {TRAIN_CONFIG['encoder_lr']:.2e} → {TRAIN_CONFIG['encoder_min_lr']:.2e}  ({TRAIN_CONFIG['warmup_steps']} warmup steps, from step 0)")
-    print(f"    CNN  (layer3/layer4)   : {TRAIN_CONFIG['cnn_lr']:.2e} → {TRAIN_CONFIG['cnn_min_lr']:.2e}  ({TRAIN_CONFIG.get('cnn_warmup_steps',100)} warmup steps, from step {TRAIN_CONFIG['cnn_freeze_steps']})")
-    print(f"    Decoder (LoRA+norms)   : {TRAIN_CONFIG['decoder_lr']:.2e} → {TRAIN_CONFIG['decoder_min_lr']:.2e}  ({TRAIN_CONFIG.get('decoder_warmup_steps',100)} warmup steps, from step {TRAIN_CONFIG['decoder_freeze_steps']})")
+    print(f"    New weights            : {CONFIG['encoder_lr']:.2e} → {CONFIG['encoder_min_lr']:.2e}  ({CONFIG['warmup_steps']} warmup steps, from step 0)")
+    print(f"    CNN  (layer3/layer4)   : {CONFIG['cnn_lr']:.2e} → {CONFIG['cnn_min_lr']:.2e}  ({CONFIG.get('cnn_warmup_steps',100)} warmup steps, from step {CONFIG['cnn_freeze_steps']})")
+    print(f"    Decoder (LoRA+norms)   : {CONFIG['decoder_lr']:.2e} → {CONFIG['decoder_min_lr']:.2e}  ({CONFIG.get('decoder_warmup_steps',100)} warmup steps, from step {CONFIG['decoder_freeze_steps']})")
 
     print("\n  [ PHASED TRAINING CURRICULUM ]")
-    print(f"    Stage 1  steps 0 → {TRAIN_CONFIG['cnn_freeze_steps']}        : MLP + Encoder + Cross-Attn only")
-    print(f"    Stage 2  steps {TRAIN_CONFIG['cnn_freeze_steps']} → {TRAIN_CONFIG['decoder_freeze_steps']}    : + CNN (layer3/layer4)")
-    print(f"    Stage 3  steps {TRAIN_CONFIG['decoder_freeze_steps']} → end      : + Decoder (LoRA + norms)")
+    print(f"    Stage 1  steps 0 → {CONFIG['cnn_freeze_steps']}        : MLP + Encoder + Cross-Attn only")
+    print(f"    Stage 2  steps {CONFIG['cnn_freeze_steps']} → {CONFIG['decoder_freeze_steps']}    : + CNN (layer3/layer4)")
+    print(f"    Stage 3  steps {CONFIG['decoder_freeze_steps']} → end      : + Decoder (LoRA + norms)")
 
     print("\n  [ EVALUATION & CHECKPOINTING ]")
-    print(f"    Eval every             : {TRAIN_CONFIG['eval_every_steps']} steps  (warmup: {TRAIN_CONFIG['eval_every_steps_warmup']} until step {TRAIN_CONFIG['eval_warmup_threshold']})")
-    print(f"    Max eval batches       : {TRAIN_CONFIG['max_eval_batches']}")
-    print(f"    Max generation samples : {TRAIN_CONFIG['max_generate_samples']}")
-    print(f"    Beam size              : {TRAIN_CONFIG['val_beam_size']}  |  Repetition penalty: {TRAIN_CONFIG['val_repetition_penalty']}")
-    print(f"    Save every             : {TRAIN_CONFIG['save_every_steps']} steps  |  Keep last: {TRAIN_CONFIG['keep_last_n_checkpoints']}")
-    print(f"    Early stopping pat.    : {TRAIN_CONFIG['early_stopping_patience']} evals")
-    print(f"    Checkpoint dir         : {TRAIN_CONFIG['checkpoint_dir'].resolve()}")
+    print(f"    Eval every             : {CONFIG['eval_every_steps']} steps  (warmup: {CONFIG['eval_every_steps_warmup']} until step {CONFIG['eval_warmup_threshold']})")
+    print(f"    Max eval batches       : {CONFIG['max_eval_batches']}")
+    print(f"    Max generation samples : {CONFIG['max_generate_samples']}")
+    print(f"    Beam size              : {CONFIG['val_beam_size']}  |  Repetition penalty: {CONFIG['val_repetition_penalty']}")
+    print(f"    Save every             : {CONFIG['save_every_steps']} steps  |  Keep last: {CONFIG['keep_last_n_checkpoints']}")
+    print(f"    Early stopping pat.    : {CONFIG['early_stopping_patience']} evals")
+    print(f"    Checkpoint dir         : {CONFIG['checkpoint_dir'].resolve()}")
 
     print("\n  [ DATA AUGMENTATION (training only) ]")
     print(f"    Horizontal flip        : DISABLED  (ASL handedness is semantically meaningful)")
@@ -2194,6 +2395,8 @@ def main():
     print(f"    Random erasing         : {'ON' if CONFIG['aug_random_erasing'] else 'OFF'}  (prob={CONFIG['aug_random_erasing_prob']}, scale={CONFIG['aug_random_erasing_scale']})")
     print(f"    Temporal jitter        : {'ON' if CONFIG['aug_temporal_jitter'] else 'OFF'}  (prob={CONFIG['aug_temporal_jitter_prob']}, ±{CONFIG['aug_temporal_jitter_range']} frames)")
     print(f"    Debug image save       : {'ON' if CONFIG['aug_debug_save_images'] else 'OFF'}  (every {CONFIG['aug_debug_save_interval']} steps → {CONFIG['aug_debug_save_dir']})")
+    print(f"\n  [ PERFORMANCE ]")
+    print(f"    torch.compile          : {'ON' if CONFIG.get('use_torch_compile') else 'OFF'}  (mode='{CONFIG.get('torch_compile_mode', 'reduce-overhead')}')")
     print("\n" + _SEP + "\n")
 
     # ── Load Data Manifests ──
@@ -2267,7 +2470,9 @@ def main():
 
     # ── Create Datasets ──
     train_dataset = SignLanguageDataset(manifest, tokenizer, train=True, augment_config=CONFIG)
+    del manifest
     val_dataset = SignLanguageDataset(val_manifest, tokenizer, train=False)
+    del val_manifest
     print(f'📦 Train dataset: {len(train_dataset)} samples')
     print(f'📦 Val dataset: {len(val_dataset)} samples')
     print(f'Max video frames: {MAX_VIDEO_FRAMES}')
@@ -2276,18 +2481,18 @@ def main():
     # ── Create DataLoaders ──
     collate_fn_with_tokenizer = partial(collate_fn, pad_token_id=tokenizer.pad_token_id)
 
-    train_workers         = TRAIN_CONFIG['train_num_workers']
-    val_workers           = TRAIN_CONFIG['val_num_workers']
-    train_prefetch_factor = TRAIN_CONFIG['train_prefetch_factor']
-    val_prefetch_factor   = TRAIN_CONFIG['val_prefetch_factor']
-    train_pin_memory      = TRAIN_CONFIG.get('train_pin_memory', False)
-    val_pin_memory        = TRAIN_CONFIG.get('val_pin_memory', False)
-    train_persistent      = TRAIN_CONFIG.get('train_persistent_workers', True) and train_workers > 0
-    val_persistent        = TRAIN_CONFIG.get('val_persistent_workers', True) and val_workers > 0
+    train_workers         = CONFIG['train_num_workers']
+    val_workers           = CONFIG['val_num_workers']
+    train_prefetch_factor = CONFIG['train_prefetch_factor']
+    val_prefetch_factor   = CONFIG['val_prefetch_factor']
+    train_pin_memory      = CONFIG.get('train_pin_memory', False)
+    val_pin_memory        = CONFIG.get('val_pin_memory', False)
+    train_persistent      = CONFIG.get('train_persistent_workers', True) and train_workers > 0
+    val_persistent        = CONFIG.get('val_persistent_workers', True) and val_workers > 0
 
-    if TRAIN_CONFIG.get('use_bucket_batching', True):
-        train_sampler = BucketBatchSampler(train_dataset, batch_size=TRAIN_CONFIG['batch_size'], shuffle=True)
-        val_sampler = BucketBatchSampler(val_dataset, batch_size=TRAIN_CONFIG['batch_size'], shuffle=False)
+    if CONFIG.get('use_bucket_batching', True):
+        train_sampler = BucketBatchSampler(train_dataset, batch_size=CONFIG['batch_size'], shuffle=True)
+        val_sampler = BucketBatchSampler(val_dataset, batch_size=CONFIG['batch_size'], shuffle=False)
         train_loader = DataLoader(
             train_dataset,
             batch_sampler=train_sampler,
@@ -2309,7 +2514,7 @@ def main():
     else:
         train_loader = DataLoader(
             train_dataset,
-            batch_size=TRAIN_CONFIG['batch_size'],
+            batch_size=CONFIG['batch_size'],
             shuffle=True,
             collate_fn=collate_fn_with_tokenizer,
             num_workers=train_workers,
@@ -2319,7 +2524,7 @@ def main():
         )
         val_loader = DataLoader(
             val_dataset,
-            batch_size=TRAIN_CONFIG['batch_size'],
+            batch_size=CONFIG['batch_size'],
             shuffle=False,
             collate_fn=collate_fn_with_tokenizer,
             num_workers=val_workers,
@@ -2334,7 +2539,7 @@ def main():
 
     # ── Load Pretrained Decoder ──
     model_name = CONFIG['decoder_model_name']
-    _attn_impl = "sdpa" if TRAIN_CONFIG.get('use_sdpa', True) else "eager"
+    _attn_impl = "sdpa" if CONFIG.get('use_sdpa', True) else "eager"
     decoder = AutoModelForCausalLM.from_pretrained(model_name, dtype=torch.bfloat16, device_map=device, attn_implementation=_attn_impl)
 
     gc.collect()  # reclaim intermediate objects created during model loading
@@ -2371,7 +2576,7 @@ def main():
     # ── Create CNN Encoder ──
     cnn_encoder = ResNetFrameEncoder(
         freeze_layers=CONFIG['cnn_freeze_layers'],
-        use_gradient_checkpointing=TRAIN_CONFIG.get('use_gradient_checkpointing_cnn', True),
+        use_gradient_checkpointing=CONFIG.get('use_gradient_checkpointing_cnn', True),
         chunk_size=CONFIG['cnn_chunk_size'],
     ).to(torch.bfloat16)
 
@@ -2381,7 +2586,7 @@ def main():
     print(f"  Frozen: {cnn_frozen / 1e6:.2f}M | Trainable: {cnn_trainable / 1e6:.2f}M")
     print(f"  Frozen layers: {CONFIG['cnn_freeze_layers']}")
     print(f"  Chunk size: {CONFIG['cnn_chunk_size']} frames")
-    print(f"  Grad checkpointing: {TRAIN_CONFIG.get('use_gradient_checkpointing_cnn', True)}")
+    print(f"  Grad checkpointing: {CONFIG.get('use_gradient_checkpointing_cnn', True)}")
 
     # ── Create CNN Projection ──
     cnn_projection = CNNProjection(
@@ -2403,7 +2608,7 @@ def main():
         feedforward_dim=CONFIG['encoder_feedforward_dim'],
         dropout=CONFIG['encoder_dropout']
     ).to(torch.bfloat16)
-    encoder.use_gradient_checkpointing = TRAIN_CONFIG.get('use_gradient_checkpointing_encoder', False)
+    encoder.use_gradient_checkpointing = CONFIG.get('use_gradient_checkpointing_encoder', False)
 
     encoder_params = sum(p.numel() for p in encoder.parameters())
     print(f"\n⚡ Transformer Encoder:")
@@ -2475,7 +2680,7 @@ def main():
             cross_attn_module=cross_attn_module
         )
 
-    _dec_ckpt = TRAIN_CONFIG.get('use_gradient_checkpointing_decoder', False)
+    _dec_ckpt = CONFIG.get('use_gradient_checkpointing_decoder', False)
     patch_llama_model_forward(decoder, use_gradient_checkpointing=_dec_ckpt)
 
     # ── Create Complete Model ──
@@ -2487,6 +2692,15 @@ def main():
         decoder=decoder,
         tokenizer=tokenizer,
     ).to(device)
+    # Channels-last for the CNN backbone: weights stored in NHWC order so CUDA
+    # convolution kernels run ~10-20% faster. Only the CNN submodule is converted —
+    # the encoder and decoder use Linear layers which are layout-agnostic.
+    model.cnn_encoder.to(memory_format=torch.channels_last)
+
+    if CONFIG.get('use_torch_compile', False):
+        print(f"⚙️  Compiling model with torch.compile (mode='{CONFIG['torch_compile_mode']}') ...")
+        print(f"   (First batch will take ~1-2 min for compilation — subsequent steps run faster)")
+        model = torch.compile(model, mode=CONFIG['torch_compile_mode'], fullgraph=False)
 
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"\n✅ Complete Model Created!")
@@ -2660,7 +2874,7 @@ def main():
     decoder_params = [p for n, p in decoder_params_with_names]
 
     # Select optimizer class
-    if TRAIN_CONFIG.get('use_8bit_adam', False):
+    if CONFIG.get('use_8bit_adam', False):
         if _BNB_AVAILABLE:
             _OptimizerClass = bnb.optim.AdamW8bit
             print("  ✓ Using 8-bit AdamW (bitsandbytes)")
@@ -2672,155 +2886,157 @@ def main():
 
     optimizer_new_weights = _OptimizerClass(
         new_weights_all_params,
-        lr=TRAIN_CONFIG['encoder_lr'],
-        weight_decay=TRAIN_CONFIG['weight_decay'],
-        betas=TRAIN_CONFIG['adam_betas']
+        lr=CONFIG['encoder_lr'],
+        weight_decay=CONFIG['weight_decay'],
+        betas=CONFIG['adam_betas']
     )
 
     optimizer_cnn = _OptimizerClass(
         cnn_trainable_params,
-        lr=TRAIN_CONFIG['cnn_lr'],
-        weight_decay=TRAIN_CONFIG['weight_decay'],
-        betas=TRAIN_CONFIG['adam_betas']
+        lr=CONFIG['cnn_lr'],
+        weight_decay=CONFIG['weight_decay'],
+        betas=CONFIG['adam_betas']
     )
 
     optimizer_decoder = _OptimizerClass(
         decoder_params,
-        lr=TRAIN_CONFIG['decoder_lr'],
-        weight_decay=TRAIN_CONFIG['weight_decay'],
-        betas=TRAIN_CONFIG['adam_betas']
+        lr=CONFIG['decoder_lr'],
+        weight_decay=CONFIG['weight_decay'],
+        betas=CONFIG['adam_betas']
     )
 
     print(f"\n⚙️  3 Optimizers created:")
-    print(f"  New weights: {sum(p.numel() for p in new_weights_all_params) / 1e6:.2f}M params (LR={TRAIN_CONFIG['encoder_lr']:.2e})")
-    print(f"  CNN:         {sum(p.numel() for p in cnn_trainable_params) / 1e6:.2f}M params (LR={TRAIN_CONFIG['cnn_lr']:.2e})")
-    print(f"  Decoder:     {sum(p.numel() for p in decoder_params) / 1e6:.2f}M params (LR={TRAIN_CONFIG['decoder_lr']:.2e})")
+    print(f"  New weights: {sum(p.numel() for p in new_weights_all_params) / 1e6:.2f}M params (LR={CONFIG['encoder_lr']:.2e})")
+    print(f"  CNN:         {sum(p.numel() for p in cnn_trainable_params) / 1e6:.2f}M params (LR={CONFIG['cnn_lr']:.2e})")
+    print(f"  Decoder:     {sum(p.numel() for p in decoder_params) / 1e6:.2f}M params (LR={CONFIG['decoder_lr']:.2e})")
 
     # ── Create 3 LR Schedulers ──
     steps_per_epoch = len(train_loader)
-    optimizer_steps_per_epoch = math.ceil(steps_per_epoch / TRAIN_CONFIG['grad_accum_steps'])
-    total_optimizer_steps = optimizer_steps_per_epoch * TRAIN_CONFIG['num_epochs']
-    warmup_steps = TRAIN_CONFIG['warmup_steps']
+    optimizer_steps_per_epoch = math.ceil(steps_per_epoch / CONFIG['grad_accum_steps'])
+    total_optimizer_steps = optimizer_steps_per_epoch * CONFIG['num_epochs']
+    warmup_steps = CONFIG['warmup_steps']
 
     # Scheduler 1: New weights (active from step 0)
     cosine_decay_steps_new = max(total_optimizer_steps - warmup_steps, 1)
     warmup_new = LinearLR(optimizer_new_weights, start_factor=1e-8, end_factor=1.0, total_iters=warmup_steps)
-    cosine_new = CosineAnnealingLR(optimizer_new_weights, T_max=cosine_decay_steps_new, eta_min=TRAIN_CONFIG['encoder_min_lr'])
+    cosine_new = CosineAnnealingLR(optimizer_new_weights, T_max=cosine_decay_steps_new, eta_min=CONFIG['encoder_min_lr'])
     scheduler_new_weights = SequentialLR(optimizer_new_weights, schedulers=[warmup_new, cosine_new], milestones=[warmup_steps])
 
     # Scheduler 2: CNN (activates at cnn_freeze_steps)
-    cnn_freeze_steps = TRAIN_CONFIG['cnn_freeze_steps']
-    cnn_warmup = TRAIN_CONFIG.get('cnn_warmup_steps', 100)
+    cnn_freeze_steps = CONFIG['cnn_freeze_steps']
+    cnn_warmup = CONFIG.get('cnn_warmup_steps', 100)
     cnn_effective_steps = max(total_optimizer_steps - cnn_freeze_steps, 1)
     cnn_cosine_decay_steps = max(cnn_effective_steps - cnn_warmup, 1)
     warmup_cnn = LinearLR(optimizer_cnn, start_factor=1e-8, end_factor=1.0, total_iters=cnn_warmup)
-    cosine_cnn = CosineAnnealingLR(optimizer_cnn, T_max=cnn_cosine_decay_steps, eta_min=TRAIN_CONFIG['cnn_min_lr'])
+    cosine_cnn = CosineAnnealingLR(optimizer_cnn, T_max=cnn_cosine_decay_steps, eta_min=CONFIG['cnn_min_lr'])
     scheduler_cnn = SequentialLR(optimizer_cnn, schedulers=[warmup_cnn, cosine_cnn], milestones=[cnn_warmup])
 
     # Scheduler 3: Decoder (activates at decoder_freeze_steps)
-    decoder_freeze_steps = TRAIN_CONFIG['decoder_freeze_steps']
-    decoder_warmup = TRAIN_CONFIG.get('decoder_warmup_steps', 100)
+    decoder_freeze_steps = CONFIG['decoder_freeze_steps']
+    decoder_warmup = CONFIG.get('decoder_warmup_steps', 100)
     decoder_effective_steps = max(total_optimizer_steps - decoder_freeze_steps, 1)
     decoder_cosine_decay_steps = max(decoder_effective_steps - decoder_warmup, 1)
     warmup_dec = LinearLR(optimizer_decoder, start_factor=1e-8, end_factor=1.0, total_iters=decoder_warmup)
-    cosine_dec = CosineAnnealingLR(optimizer_decoder, T_max=decoder_cosine_decay_steps, eta_min=TRAIN_CONFIG['decoder_min_lr'])
+    cosine_dec = CosineAnnealingLR(optimizer_decoder, T_max=decoder_cosine_decay_steps, eta_min=CONFIG['decoder_min_lr'])
     scheduler_decoder = SequentialLR(optimizer_decoder, schedulers=[warmup_dec, cosine_dec], milestones=[decoder_warmup])
 
     print(f"\n📈 LR Schedules (3-stage):")
-    print(f"  New weights: {warmup_steps} warmup → {cosine_decay_steps_new} cosine ({TRAIN_CONFIG['encoder_lr']:.2e} → {TRAIN_CONFIG['encoder_min_lr']:.2e})")
-    print(f"  CNN:         {cnn_warmup} warmup → {cnn_cosine_decay_steps} cosine, starts at step {cnn_freeze_steps} ({TRAIN_CONFIG['cnn_lr']:.2e} → {TRAIN_CONFIG['cnn_min_lr']:.2e})")
-    print(f"  Decoder:     {decoder_warmup} warmup → {decoder_cosine_decay_steps} cosine, starts at step {decoder_freeze_steps} ({TRAIN_CONFIG['decoder_lr']:.2e} → {TRAIN_CONFIG['decoder_min_lr']:.2e})")
+    print(f"  New weights: {warmup_steps} warmup → {cosine_decay_steps_new} cosine ({CONFIG['encoder_lr']:.2e} → {CONFIG['encoder_min_lr']:.2e})")
+    print(f"  CNN:         {cnn_warmup} warmup → {cnn_cosine_decay_steps} cosine, starts at step {cnn_freeze_steps} ({CONFIG['cnn_lr']:.2e} → {CONFIG['cnn_min_lr']:.2e})")
+    print(f"  Decoder:     {decoder_warmup} warmup → {decoder_cosine_decay_steps} cosine, starts at step {decoder_freeze_steps} ({CONFIG['decoder_lr']:.2e} → {CONFIG['decoder_min_lr']:.2e})")
 
     # ── Step calculations ──
     steps_per_epoch_micro = len(train_loader)
-    steps_per_epoch_optim = math.ceil(steps_per_epoch_micro / TRAIN_CONFIG['grad_accum_steps'])
-    total_optim_steps = steps_per_epoch_optim * TRAIN_CONFIG['num_epochs']
-    effective_batch_size = TRAIN_CONFIG['batch_size'] * TRAIN_CONFIG['grad_accum_steps']
+    steps_per_epoch_optim = math.ceil(steps_per_epoch_micro / CONFIG['grad_accum_steps'])
+    total_optim_steps = steps_per_epoch_optim * CONFIG['num_epochs']
+    effective_batch_size = CONFIG['batch_size'] * CONFIG['grad_accum_steps']
 
     print("\n" + "=" * 60)
     print("📋 TRAINING OVERVIEW")
     print("=" * 60)
     print(f"  Train samples:           {len(train_dataset)}")
     print(f"  Val samples:             {len(val_dataset)}")
-    print(f"  Batch size:              {TRAIN_CONFIG['batch_size']}")
-    print(f"  Gradient accumulation:   {TRAIN_CONFIG['grad_accum_steps']} steps")
+    print(f"  Batch size:              {CONFIG['batch_size']}")
+    print(f"  Gradient accumulation:   {CONFIG['grad_accum_steps']} steps")
     print(f"  Effective batch size:    {effective_batch_size}")
     print(f"  Micro-batch steps/epoch: {steps_per_epoch_micro}")
     print(f"  Optimizer steps/epoch:   {steps_per_epoch_optim}")
     print(f"  Total optimizer steps:   {total_optim_steps}")
-    print(f"  Num epochs:              {TRAIN_CONFIG['num_epochs']}")
+    print(f"  Num epochs:              {CONFIG['num_epochs']}")
     print(f"  CNN frame size:          {CONFIG['cnn_frame_size']}x{CONFIG['cnn_frame_size']}")
     print(f"  CNN chunk size:          {CONFIG['cnn_chunk_size']} frames")
     print(f"  Phased curriculum:       Stage 1 (0-{cnn_freeze_steps}) → Stage 2 ({cnn_freeze_steps}-{decoder_freeze_steps}) → Stage 3 ({decoder_freeze_steps}+)")
     print(f"  Mixed precision:         bfloat16")
-    print(f"  Grad clipping:           max_norm={TRAIN_CONFIG['max_grad_norm']}")
-    print(f"  Early stopping:          patience={TRAIN_CONFIG['early_stopping_patience']}")
+    print(f"  Grad clipping:           max_norm={CONFIG['max_grad_norm']}")
+    print(f"  Early stopping:          patience={CONFIG['early_stopping_patience']}")
     print("=" * 60)
 
     # ── Initialize Managers ──
     ckpt_manager = CheckpointManager(
-        checkpoint_dir=TRAIN_CONFIG['checkpoint_dir'],
-        keep_last_n=TRAIN_CONFIG['keep_last_n_checkpoints'],
+        checkpoint_dir=CONFIG['checkpoint_dir'],
+        keep_last_n=CONFIG['keep_last_n_checkpoints'],
     )
 
     train_csv_logger = CSVLogger(
-        log_file=TRAIN_CONFIG['train_log_file'],
+        log_file=CONFIG['train_log_file'],
         fieldnames=[
             'timestamp', 'global_step', 'epoch',
             'train_loss', 'train_ppl',
             'lr_new_weights', 'lr_cnn', 'lr_decoder',
             'grad_norm',
             'cuda_mem_gb', 'cuda_peak_gb',
-            'steps_per_sec', 'elapsed_sec',
+            'steps_per_sec', 'elapsed_sec', 'eta_sec',
         ],
     )
     val_csv_logger = CSVLogger(
-        log_file=TRAIN_CONFIG['val_log_file'],
+        log_file=CONFIG['val_log_file'],
         fieldnames=[
             'timestamp', 'global_step', 'epoch',
             'val_loss', 'val_ppl',
             'bleu1', 'bleu2', 'bleu4', 'rouge_l', 'token_acc',
             'cuda_mem_gb', 'cuda_peak_gb',
-            'elapsed_sec',
+            'elapsed_sec', 'eta_sec',
         ],
     )
     gen_samples_csv_logger = CSVLogger(
-        log_file=TRAIN_CONFIG['gen_samples_log_file'],
+        log_file=CONFIG['gen_samples_log_file'],
         fieldnames=[
             'timestamp', 'global_step', 'epoch',
             'generated', 'reference',
-            'elapsed_sec',
+            'elapsed_sec', 'eta_sec',
         ],
     )
 
-    tensorboard_dir = TRAIN_CONFIG.get('tensorboard_dir', Path('..') / 'runs' / 'signbridge_training')
+    tensorboard_dir = CONFIG.get('tensorboard_dir', Path('..') / 'runs' / 'signbridge_training')
     tb_writer = SummaryWriter(log_dir=str(tensorboard_dir))
 
-    print(f"\n📁 Checkpoints dir:  {TRAIN_CONFIG['checkpoint_dir'].resolve()}")
-    print(f"Train log:        {TRAIN_CONFIG['train_log_file'].resolve()}")
-    print(f"Val log:          {TRAIN_CONFIG['val_log_file'].resolve()}")
-    print(f"Gen samples log:  {TRAIN_CONFIG['gen_samples_log_file'].resolve()}")
+    print(f"\n📁 Checkpoints dir:  {CONFIG['checkpoint_dir'].resolve()}")
+    print(f"Train log:        {CONFIG['train_log_file'].resolve()}")
+    print(f"Val log:          {CONFIG['val_log_file'].resolve()}")
+    print(f"Gen samples log:  {CONFIG['gen_samples_log_file'].resolve()}")
 
     # ── Resume from checkpoint ──
     start_epoch = 1
     start_global_step = 0
+    start_steps_done_in_epoch = None
     best_val_loss_val = float('inf')
     start_evals_without_improvement = 0
     start_elapsed_sec = 0.0
 
-    if TRAIN_CONFIG.get('resume_training', False):
-        if TRAIN_CONFIG.get('load_best_model', False):
+    if CONFIG.get('resume_training', False):
+        if CONFIG.get('load_best_model', False):
             ckpt_path = ckpt_manager.best_path
         else:
-            ckpt_path = ckpt_manager.checkpoint_dir / f"checkpoint_step_{TRAIN_CONFIG.get('resume_checkpoint_step', 0)}.pt"
+            ckpt_path = ckpt_manager.checkpoint_dir / f"checkpoint_step_{CONFIG.get('resume_checkpoint_step', 0)}.pt"
 
         if ckpt_path.exists():
             print(f"\n🔄 Resuming training from {ckpt_path.name}...")
-            checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+            # Load to CPU first — avoids 2x model weights on GPU during load_state_dict
+            checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
 
             model.load_state_dict(checkpoint['model_state_dict'])
 
-            _use_8bit = TRAIN_CONFIG.get('use_8bit_adam', False) and _BNB_AVAILABLE
+            _use_8bit = CONFIG.get('use_8bit_adam', False) and _BNB_AVAILABLE
 
             _new_opt_state = checkpoint.get('optimizer_new_weights_state_dict',
                                              checkpoint.get('optimizer_encoder_state_dict'))
@@ -2851,8 +3067,97 @@ def main():
                 scheduler_cnn.load_state_dict(_cnn_sched_state)
             scheduler_decoder.load_state_dict(_dec_sched_state)
 
+            # ── Mid-Training LR Override ──────────────────────────────────────
+            # Applies only when CONFIG['lr_override']['enabled'] is True.
+            # Patches each scheduler's CosineAnnealingLR (and LinearLR warmup
+            # for still-frozen schedulers) so that LRs are corrected immediately
+            # upon resuming, without touching any other training state.
+            # Set 'enabled' back to False after the run resumes successfully.
+            _lr_override_cfg = CONFIG.get('lr_override', {})
+            if _lr_override_cfg.get('enabled', False):
+                _resume_step = CONFIG.get('resume_checkpoint_step', 0)
+                _cnn_freeze  = CONFIG.get('cnn_freeze_steps', 1000)
+                _dec_freeze  = CONFIG.get('decoder_freeze_steps', 1500)
+
+                def _apply_lr_override(seq_sched, optimizer, new_lr, new_eta_min, is_frozen, label):
+                    """
+                    Patch a SequentialLR(LinearLR warmup, CosineAnnealingLR cosine)
+                    to use new_lr and new_eta_min, correctly handling two cases:
+
+                    Case A — scheduler already running (not frozen):
+                        The SequentialLR has passed its milestone and is inside
+                        the CosineAnnealingLR sub-scheduler. We reset the cosine's
+                        base_lrs and last_epoch so it restarts from new_lr, then
+                        decays to new_eta_min over a fresh T_max cycle. No warmup.
+
+                    Case B — scheduler not yet started (still frozen):
+                        The SequentialLR hasn't stepped at all (last_epoch == 0).
+                        We patch both the LinearLR warmup target and the cosine
+                        base so that when training reaches the unfreeze step and
+                        begins calling scheduler.step(), the warmup ramps up to
+                        new_lr and the cosine then decays from new_lr to new_eta_min.
+                        Warmup proceeds normally from that point.
+                    """
+                    # Always set the optimizer param groups so the first logged LR
+                    # is correct (get_last_lr() reads from here before first step).
+                    for group in optimizer.param_groups:
+                        group['lr'] = new_lr if not is_frozen else group['lr']
+
+                    warmup_sched = seq_sched.schedulers[0]   # LinearLR
+                    cosine_sched = seq_sched.schedulers[-1]  # CosineAnnealingLR
+
+                    if not is_frozen:
+                        # Case A: scheduler is active — reset cosine from new_lr
+                        cosine_sched.base_lrs = [new_lr] * len(cosine_sched.base_lrs)
+                        cosine_sched.eta_min  = new_eta_min
+                        cosine_sched.last_epoch = 0
+                        # Also sync the SequentialLR's own _last_lr cache so that
+                        # get_last_lr() returns the correct value before the next step.
+                        seq_sched._last_lr = [new_lr] * len(seq_sched._last_lr)
+                        print(f"    [{label}] Active scheduler → cosine reset: "
+                              f"lr={new_lr:.3e}, eta_min={new_eta_min:.3e} (no warmup)")
+                    else:
+                        # Case B: scheduler hasn't started — patch warmup + cosine
+                        # LinearLR computes: base_lr * (start_factor + step/total*(end_factor-start_factor))
+                        # base_lrs holds the optimizer's initial LR; end_factor=1.0 means
+                        # it ramps up to exactly base_lr. So patching base_lrs changes the target.
+                        warmup_sched.base_lrs = [new_lr] * len(warmup_sched.base_lrs)
+                        cosine_sched.base_lrs = [new_lr] * len(cosine_sched.base_lrs)
+                        cosine_sched.eta_min  = new_eta_min
+                        # last_epoch stays 0 — warmup hasn't started yet, which is correct.
+                        print(f"    [{label}] Frozen scheduler → warmup target + cosine patched: "
+                              f"lr={new_lr:.3e}, eta_min={new_eta_min:.3e} (warmup will proceed normally at unfreeze)")
+
+                print(f"\n⚠️  Mid-Training LR Override active (resume step={_resume_step}):")
+                _apply_lr_override(
+                    scheduler_new_weights, optimizer_new_weights,
+                    new_lr    = _lr_override_cfg['new_weights']['lr'],
+                    new_eta_min = _lr_override_cfg['new_weights']['eta_min'],
+                    is_frozen = False,   # new_weights is never frozen
+                    label     = 'new_weights',
+                )
+                _apply_lr_override(
+                    scheduler_cnn, optimizer_cnn,
+                    new_lr    = _lr_override_cfg['cnn']['lr'],
+                    new_eta_min = _lr_override_cfg['cnn']['eta_min'],
+                    is_frozen = (_resume_step < _cnn_freeze),
+                    label     = 'cnn',
+                )
+                _apply_lr_override(
+                    scheduler_decoder, optimizer_decoder,
+                    new_lr    = _lr_override_cfg['decoder']['lr'],
+                    new_eta_min = _lr_override_cfg['decoder']['eta_min'],
+                    is_frozen = (_resume_step < _dec_freeze),
+                    label     = 'decoder',
+                )
+                print(f"  ✅ LR Override applied. Set CONFIG['lr_override']['enabled'] = False after resuming.\n")
+            # ─────────────────────────────────────────────────────────────────
+
             start_epoch = checkpoint['epoch']
             start_global_step = checkpoint['global_step']
+            # steps_done_in_epoch: saved in new checkpoints; old checkpoints don't have it
+            # so we fall back to None and let train() recompute it from the modulo formula.
+            start_steps_done_in_epoch = checkpoint.get('steps_done_in_epoch', None)
             best_val_loss_val = checkpoint.get('best_val_loss', float('inf'))
             start_evals_without_improvement = checkpoint.get('evals_without_improvement', 0)
             start_elapsed_sec = checkpoint.get('elapsed_sec', 0.0)
@@ -2890,7 +3195,7 @@ def main():
             scheduler_cnn=scheduler_cnn,
             scheduler_decoder=scheduler_decoder,
             device=device,
-            train_config=TRAIN_CONFIG,
+            train_config=CONFIG,
             ckpt_manager=ckpt_manager,
             train_csv_logger=train_csv_logger,
             val_csv_logger=val_csv_logger,
@@ -2898,6 +3203,7 @@ def main():
             tb_writer=tb_writer,
             start_epoch=start_epoch,
             start_global_step=start_global_step,
+            start_steps_done_in_epoch=start_steps_done_in_epoch,
             best_val_loss=best_val_loss_val,
             start_evals_without_improvement=start_evals_without_improvement,
             start_elapsed_sec=start_elapsed_sec,

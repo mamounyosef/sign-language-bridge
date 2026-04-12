@@ -4,6 +4,10 @@ __pycache__/
 *$py.class
 .vscode/
 
+checkpoints/
+debugging_images/
+tensorboard/
+
 data/how2sign_keypoints/
 data/how2sign_keypoints_preprocessed/
 data/openasl_keypoints/

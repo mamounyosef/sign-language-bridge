@@ -1,0 +1,747 @@
+### MODEL CONFIG ###
+Qwen3VLConfig {
+  "architectures": [
+    "Qwen3VLForConditionalGeneration"
+  ],
+  "image_token_id": 151655,
+  "model_type": "qwen3_vl",
+  "text_config": {
+    "attention_bias": false,
+    "attention_dropout": 0.0,
+    "bos_token_id": 151643,
+    "dtype": "bfloat16",
+    "eos_token_id": 151645,
+    "head_dim": 128,
+    "hidden_act": "silu",
+    "hidden_size": 2048,
+    "initializer_range": 0.02,
+    "intermediate_size": 6144,
+    "max_position_embeddings": 262144,
+    "model_type": "qwen3_vl_text",
+    "num_attention_heads": 16,
+    "num_hidden_layers": 28,
+    "num_key_value_heads": 8,
+    "rms_norm_eps": 1e-06,
+    "rope_scaling": {
+      "mrope_interleaved": true,
+      "mrope_section": [
+        24,
+        20,
+        20
+      ],
+      "rope_type": "default"
+    },
+    "rope_theta": 5000000,
+    "tie_word_embeddings": true,
+    "use_cache": true,
+    "vocab_size": 151936
+  },
+  "tie_word_embeddings": true,
+  "transformers_version": "4.57.3",
+  "video_token_id": 151656,
+  "vision_config": {
+    "deepstack_visual_indexes": [
+      5,
+      11,
+      17
+    ],
+    "depth": 24,
+    "hidden_act": "gelu_pytorch_tanh",
+    "hidden_size": 1024,
+    "in_channels": 3,
+    "initializer_range": 0.02,
+    "intermediate_size": 4096,
+    "model_type": "qwen3_vl",
+    "num_heads": 16,
+    "num_position_embeddings": 2304,
+    "out_hidden_size": 2048,
+    "patch_size": 16,
+    "spatial_merge_size": 2,
+    "temporal_patch_size": 2
+  },
+  "vision_end_token_id": 151653,
+  "vision_start_token_id": 151652
+}
+
+
+================================================================================
+Loading processor...
+Tokenizer class: Qwen2TokenizerFast
+Vocab size: 151643
+Model max length: 262144
+Special tokens: {'eos_token': '<|im_end|>', 'pad_token': '<|endoftext|>', 'additional_special_tokens': ['<|im_start|>', '<|im_end|>', '<|object_ref_start|>', '<|object_ref_end|>', '<|box_start|>', '<|box_end|>', '<|quad_start|>', '<|quad_end|>', '<|vision_start|>', '<|vision_end|>', '<|vision_pad|>', '<|image_pad|>', '<|video_pad|>']}
+
+Image processor class: Qwen2VLImageProcessorFast
+Image processor config: {'_processor_class': 'Qwen3VLProcessor', 'size': {'longest_edge': 16777216, 'shortest_edge': 65536}, 'min_pixels': None, 'max_pixels': None, 'patch_size': 16, 'temporal_patch_size': 2, 'merge_size': 2, 'image_mean': [0.5, 0.5, 0.5], 'image_std': [0.5, 0.5, 0.5], 'image_processor_type': 'Qwen2VLImageProcessorFast', 'crop_size': None, 'pad_size': None, 'do_resize': True, 'default_to_square': True, 'resample': <Resampling.BICUBIC: 3>, 'do_center_crop': None, 'do_rescale': True, 'rescale_factor': 0.00392156862745098, 'do_normalize': True, 'do_pad': None, 'do_convert_rgb': True, 'return_tensors': None, 'data_format': <ChannelDimension.FIRST: 'channels_first'>, 'input_data_format': None, 'device': None, 'disable_grouping': None}
+
+================================================================================
+Loading model on CPU (this may take a minute)...
+================================================================================
+`torch_dtype` is deprecated! Use `dtype` instead!
+
+### FULL MODEL ARCHITECTURE ###
+Qwen3VLForConditionalGeneration(
+  (model): Qwen3VLModel(
+    (visual): Qwen3VLVisionModel(
+      (patch_embed): Qwen3VLVisionPatchEmbed(
+        (proj): Conv3d(3, 1024, kernel_size=(2, 16, 16), stride=(2, 16, 16))
+      )
+      (pos_embed): Embedding(2304, 1024)
+      (rotary_pos_emb): Qwen3VLVisionRotaryEmbedding()
+      (blocks): ModuleList(
+        (0-23): 24 x Qwen3VLVisionBlock(
+          (norm1): LayerNorm((1024,), eps=1e-06, elementwise_affine=True)
+          (norm2): LayerNorm((1024,), eps=1e-06, elementwise_affine=True)
+          (attn): Qwen3VLVisionAttention(
+            (qkv): Linear(in_features=1024, out_features=3072, bias=True)
+            (proj): Linear(in_features=1024, out_features=1024, bias=True)
+          )
+          (mlp): Qwen3VLVisionMLP(
+            (linear_fc1): Linear(in_features=1024, out_features=4096, bias=True)
+            (linear_fc2): Linear(in_features=4096, out_features=1024, bias=True)
+            (act_fn): GELUTanh()
+          )
+        )
+      )
+      (merger): Qwen3VLVisionPatchMerger(
+        (norm): LayerNorm((1024,), eps=1e-06, elementwise_affine=True)
+        (linear_fc1): Linear(in_features=4096, out_features=4096, bias=True)
+        (act_fn): GELU(approximate='none')
+        (linear_fc2): Linear(in_features=4096, out_features=2048, bias=True)
+      )
+      (deepstack_merger_list): ModuleList(
+        (0-2): 3 x Qwen3VLVisionPatchMerger(
+          (norm): LayerNorm((4096,), eps=1e-06, elementwise_affine=True)
+          (linear_fc1): Linear(in_features=4096, out_features=4096, bias=True)
+          (act_fn): GELU(approximate='none')
+          (linear_fc2): Linear(in_features=4096, out_features=2048, bias=True)
+        )
+      )
+    )
+    (language_model): Qwen3VLTextModel(
+      (embed_tokens): Embedding(151936, 2048)
+      (layers): ModuleList(
+        (0-27): 28 x Qwen3VLTextDecoderLayer(
+          (self_attn): Qwen3VLTextAttention(
+            (q_proj): Linear(in_features=2048, out_features=2048, bias=False)
+            (k_proj): Linear(in_features=2048, out_features=1024, bias=False)
+            (v_proj): Linear(in_features=2048, out_features=1024, bias=False)
+            (o_proj): Linear(in_features=2048, out_features=2048, bias=False)
+            (q_norm): Qwen3VLTextRMSNorm((128,), eps=1e-06)
+            (k_norm): Qwen3VLTextRMSNorm((128,), eps=1e-06)
+          )
+          (mlp): Qwen3VLTextMLP(
+            (gate_proj): Linear(in_features=2048, out_features=6144, bias=False)
+            (up_proj): Linear(in_features=2048, out_features=6144, bias=False)
+            (down_proj): Linear(in_features=6144, out_features=2048, bias=False)
+            (act_fn): SiLUActivation()
+          )
+          (input_layernorm): Qwen3VLTextRMSNorm((2048,), eps=1e-06)
+          (post_attention_layernorm): Qwen3VLTextRMSNorm((2048,), eps=1e-06)
+        )
+      )
+      (norm): Qwen3VLTextRMSNorm((2048,), eps=1e-06)
+      (rotary_emb): Qwen3VLTextRotaryEmbedding()
+    )
+  )
+  (lm_head): Linear(in_features=2048, out_features=151936, bias=False)
+)
+
+================================================================================
+### PARAMETER BREAKDOWN BY MODULE ###
+================================================================================
+
+Total parameters: 2.13B (2,127,532,032)
+Trainable parameters: 2.13B (2,127,532,032)
+
+Top-level modules:
+Module                                                       Total       Trainable
+--------------------------------------------------------------------------------
+model                                                        2.13B           2.13B
+lm_head                                                    311.16M         311.16M
+
+================================================================================
+### DETAILED PARAMETER BREAKDOWN (2 levels deep) ###
+================================================================================
+
+--- model (2.13B) ---
+  visual                                             406.96M params
+    patch_embed                                        1.57M params
+    pos_embed                                          2.36M params
+    blocks                                           302.31M params
+    merger                                            25.17M params
+    deepstack_merger_list                             75.54M params
+  language_model                                       1.72B params
+    embed_tokens                                     311.16M params
+    layers                                             1.41B params
+    norm                                               2.05K params
+
+--- lm_head (311.16M) ---
+
+================================================================================
+### ALL LINEAR LAYERS (potential LoRA targets) ###
+================================================================================
+Layer Name                                                                                 Shape 
+-----------------------------------------------------------------------------------------------  
+model.visual.blocks.0.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.0.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.0.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.0.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.1.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.1.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.1.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.1.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.2.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.2.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.2.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.2.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.3.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.3.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.3.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.3.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.4.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.4.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.4.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.4.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.5.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.5.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.5.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.5.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.6.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.6.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.6.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.6.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.7.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.7.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.7.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.7.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.8.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.8.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.8.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.8.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.9.attn.qkv                                                      (3072, 1024) 
+model.visual.blocks.9.attn.proj                                                     (1024, 1024) 
+model.visual.blocks.9.mlp.linear_fc1                                                (4096, 1024) 
+model.visual.blocks.9.mlp.linear_fc2                                                (1024, 4096) 
+model.visual.blocks.10.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.10.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.10.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.10.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.11.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.11.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.11.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.11.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.12.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.12.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.12.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.12.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.13.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.13.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.13.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.13.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.14.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.14.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.14.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.14.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.15.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.15.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.15.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.15.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.16.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.16.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.16.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.16.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.17.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.17.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.17.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.17.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.18.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.18.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.18.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.18.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.19.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.19.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.19.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.19.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.20.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.20.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.20.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.20.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.21.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.21.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.21.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.21.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.22.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.22.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.22.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.22.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.blocks.23.attn.qkv                                                     (3072, 1024) 
+model.visual.blocks.23.attn.proj                                                    (1024, 1024) 
+model.visual.blocks.23.mlp.linear_fc1                                               (4096, 1024) 
+model.visual.blocks.23.mlp.linear_fc2                                               (1024, 4096) 
+model.visual.merger.linear_fc1                                                      (4096, 4096) 
+model.visual.merger.linear_fc2                                                      (2048, 4096) 
+model.visual.deepstack_merger_list.0.linear_fc1                                     (4096, 4096) 
+model.visual.deepstack_merger_list.0.linear_fc2                                     (2048, 4096) 
+model.visual.deepstack_merger_list.1.linear_fc1                                     (4096, 4096) 
+model.visual.deepstack_merger_list.1.linear_fc2                                     (2048, 4096) 
+model.visual.deepstack_merger_list.2.linear_fc1                                     (4096, 4096) 
+model.visual.deepstack_merger_list.2.linear_fc2                                     (2048, 4096) 
+model.language_model.layers.0.self_attn.q_proj                                      (2048, 2048) 
+model.language_model.layers.0.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.0.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.0.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.0.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.0.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.0.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.1.self_attn.q_proj                                      (2048, 2048) 
+model.language_model.layers.1.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.1.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.1.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.1.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.1.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.1.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.2.self_attn.q_proj                                      (2048, 2048) 
+model.language_model.layers.2.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.2.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.2.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.2.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.2.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.2.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.3.self_attn.q_proj                                      (2048, 2048) 
+model.language_model.layers.3.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.3.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.3.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.3.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.3.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.3.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.4.self_attn.q_proj                                      (2048, 2048) 
+model.language_model.layers.4.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.4.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.4.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.4.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.4.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.4.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.5.self_attn.q_proj                                      (2048, 2048) 
+model.language_model.layers.5.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.5.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.5.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.5.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.5.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.5.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.6.self_attn.q_proj                                      (2048, 2048) 
+model.language_model.layers.6.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.6.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.6.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.6.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.6.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.6.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.7.self_attn.q_proj                                      (2048, 2048)
+model.language_model.layers.7.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.7.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.7.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.7.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.7.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.7.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.8.self_attn.q_proj                                      (2048, 2048) 
+model.language_model.layers.8.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.8.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.8.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.8.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.8.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.8.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.9.self_attn.q_proj                                      (2048, 2048) 
+model.language_model.layers.9.self_attn.k_proj                                      (1024, 2048) 
+model.language_model.layers.9.self_attn.v_proj                                      (1024, 2048) 
+model.language_model.layers.9.self_attn.o_proj                                      (2048, 2048) 
+model.language_model.layers.9.mlp.gate_proj                                         (6144, 2048) 
+model.language_model.layers.9.mlp.up_proj                                           (6144, 2048) 
+model.language_model.layers.9.mlp.down_proj                                         (2048, 6144) 
+model.language_model.layers.10.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.10.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.10.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.10.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.10.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.10.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.10.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.11.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.11.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.11.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.11.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.11.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.11.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.11.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.12.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.12.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.12.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.12.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.12.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.12.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.12.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.13.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.13.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.13.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.13.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.13.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.13.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.13.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.14.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.14.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.14.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.14.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.14.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.14.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.14.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.15.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.15.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.15.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.15.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.15.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.15.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.15.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.16.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.16.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.16.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.16.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.16.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.16.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.16.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.17.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.17.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.17.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.17.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.17.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.17.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.17.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.18.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.18.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.18.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.18.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.18.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.18.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.18.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.19.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.19.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.19.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.19.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.19.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.19.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.19.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.20.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.20.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.20.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.20.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.20.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.20.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.20.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.21.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.21.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.21.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.21.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.21.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.21.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.21.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.22.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.22.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.22.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.22.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.22.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.22.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.22.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.23.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.23.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.23.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.23.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.23.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.23.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.23.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.24.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.24.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.24.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.24.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.24.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.24.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.24.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.25.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.25.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.25.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.25.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.25.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.25.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.25.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.26.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.26.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.26.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.26.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.26.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.26.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.26.mlp.down_proj                                        (2048, 6144) 
+model.language_model.layers.27.self_attn.q_proj                                     (2048, 2048) 
+model.language_model.layers.27.self_attn.k_proj                                     (1024, 2048) 
+model.language_model.layers.27.self_attn.v_proj                                     (1024, 2048) 
+model.language_model.layers.27.self_attn.o_proj                                     (2048, 2048) 
+model.language_model.layers.27.mlp.gate_proj                                        (6144, 2048) 
+model.language_model.layers.27.mlp.up_proj                                          (6144, 2048) 
+model.language_model.layers.27.mlp.down_proj                                        (2048, 6144) 
+lm_head                                                                           (151936, 2048) 
+
+================================================================================
+### ALL NORM LAYERS ###
+================================================================================
+model.visual.blocks.0.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.0.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.1.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.1.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.2.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.2.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.3.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.3.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.4.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.4.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.5.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.5.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.6.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.6.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.7.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.7.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.8.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.8.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.9.norm1                                            LayerNorm                 
+2.05K
+model.visual.blocks.9.norm2                                            LayerNorm                 
+2.05K
+model.visual.blocks.10.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.10.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.11.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.11.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.12.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.12.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.13.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.13.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.14.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.14.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.15.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.15.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.16.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.16.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.17.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.17.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.18.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.18.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.19.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.19.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.20.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.20.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.21.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.21.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.22.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.22.norm2                                           LayerNorm                 
+2.05K
+model.visual.blocks.23.norm1                                           LayerNorm                 
+2.05K
+model.visual.blocks.23.norm2                                           LayerNorm                 
+2.05K
+model.visual.merger.norm                                               LayerNorm                 
+2.05K
+model.visual.deepstack_merger_list.0.norm                              LayerNorm                 
+8.19K
+model.visual.deepstack_merger_list.1.norm                              LayerNorm                 
+8.19K
+model.visual.deepstack_merger_list.2.norm                              LayerNorm                 
+8.19K
+model.language_model.layers.0.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.0.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.0.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.0.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.1.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.1.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.1.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.1.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.2.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.2.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.2.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.2.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.3.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.3.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.3.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.3.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.4.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.4.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.4.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.4.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.5.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.5.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.5.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.5.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.6.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.6.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.6.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.6.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.7.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.7.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.7.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.7.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.8.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.8.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.8.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.8.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.9.self_attn.q_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.9.self_attn.k_norm                         Qwen3VLTextRMSNorm          128
+model.language_model.layers.9.input_layernorm                          Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.9.post_attention_layernorm                 Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.10.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.10.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.10.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.10.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.11.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.11.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.11.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.11.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.12.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.12.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.12.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.12.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.13.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.13.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.13.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.13.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.14.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.14.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.14.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.14.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.15.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.15.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.15.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.15.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.16.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.16.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.16.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.16.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.17.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.17.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.17.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.17.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.18.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.18.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.18.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.18.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.19.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.19.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.19.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.19.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.20.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.20.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.20.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.20.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.21.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.21.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.21.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.21.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.22.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.22.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.22.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.22.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.23.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.23.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.23.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.23.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.24.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.24.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.24.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.24.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.25.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.25.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.25.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.25.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.26.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.26.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.26.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.26.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.27.self_attn.q_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.27.self_attn.k_norm                        Qwen3VLTextRMSNorm          128
+model.language_model.layers.27.input_layernorm                         Qwen3VLTextRMSNorm        2.05K
+model.language_model.layers.27.post_attention_layernorm                Qwen3VLTextRMSNorm        2.05K
+model.language_model.norm                                              Qwen3VLTextRMSNorm        2.05K
+
+================================================================================
+### VISION ENCODER DETAILS ###
+================================================================================
+Vision component found at: model.visual
+Vision parameters: 406.96M (406,957,056)
+Vision config: Qwen3VLVisionConfig {
+  "deepstack_visual_indexes": [
+    5,
+    11,
+    17
+  ],
+  "depth": 24,
+  "dtype": "float32",
+  "hidden_act": "gelu_pytorch_tanh",
+  "hidden_size": 1024,
+  "in_channels": 3,
+  "initializer_range": 0.02,
+  "intermediate_size": 4096,
+  "model_type": "qwen3_vl",
+  "num_heads": 16,
+  "num_position_embeddings": 2304,
+  "out_hidden_size": 2048,
+  "patch_size": 16,
+  "spatial_merge_size": 2,
+  "temporal_patch_size": 2,
+  "transformers_version": "4.57.3"
+}
+
+
+================================================================================
+### EMBEDDING & OUTPUT HEAD ###
+================================================================================
+model.visual.pos_embed                                       Embedding(2304, 1024)
+model.language_model.embed_tokens                            Embedding(151936, 2048)
+lm_head                                                      Linear(2048, 151936)
+
+================================================================================
+INSPECTION COMPLETE
+================================================================================

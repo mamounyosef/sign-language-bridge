@@ -1,1 +1,3 @@
-timestamp,global_step,epoch,val_loss,val_ppl,bleu1,bleu2,bleu4,rouge_l,token_acc,cuda_mem_gb,cuda_peak_gb,elapsed_sec
+timestamp,global_step,epoch,val_loss,val_ppl,bleu1,bleu2,bleu4,rouge_l,token_acc,cuda_mem_gb,cuda_peak_gb,elapsed_sec,eta_sec
+2026-04-11 11:35:44,700,1,4.437637,84.5749,4.8810,0.3893,0.0676,4.1231,41.6667,2.99,5.35,34624.6,1074598.8
+2026-04-11 18:16:25,1000,2,4.328417,75.8241,5.0216,0.4185,0.0746,5.2780,42.3148,3.00,5.51,54330.4,1164029.2

@@ -28,6 +28,7 @@ automatically, so you can safely re-run after a crash.
 import os
 import time
 import multiprocessing
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
@@ -45,41 +46,24 @@ SPLITS = {
 }
 
 MAX_FRAMES   = 160       # cap at 160 frames (8 s @ 20 fps)
-TARGET_SIZE  = 256       # letterbox target (px)
 JPEG_QUALITY = 95        # JPEG quality (95 = near-lossless, ~8 KB/frame)
-USE_GPU      = True      # GPU-accelerated decode + letterbox (decord.gpu(0))
+USE_GPU      = True      # GPU-accelerated decode (decord.gpu(0))
                          # Set False to use CPU only
-# Workers: GPU mode → 2 (CUDA context per process, contention above 2)
-#          CPU mode → 4 (no GPU contention, more parallelism)
-NUM_WORKERS  = 2 if USE_GPU else 4
+# Frames are saved at original video resolution — no resize/letterbox here.
+# Letterbox to cnn_frame_size happens in the training script at load time,
+# so you can freely change the target size without re-extracting.
+NUM_WORKERS  = 4         # parallel clip workers (GPU decode is fast, bottleneck is writes)
+WRITE_THREADS = 8        # threads per worker for parallel JPEG writes (GIL-free via libjpeg)
 # ──────────────────────────────────────────────────────────────────────────────
-
-
-def _letterbox_frames_batch(frames, target_size):
-    """
-    Letterbox a (T, C, H, W) uint8 tensor to target_size × target_size.
-    One vectorized torchvision call — no Python loop over frames.
-    """
-    import torchvision.transforms.functional as TF
-    T, C, H, W = frames.shape
-    scale = min(target_size / H, target_size / W)
-    new_h, new_w = int(H * scale), int(W * scale)
-    resized = TF.resize(frames, [new_h, new_w],
-                        interpolation=TF.InterpolationMode.BILINEAR,
-                        antialias=True)
-    pad_top    = (target_size - new_h) // 2
-    pad_bottom = target_size - new_h - pad_top
-    pad_left   = (target_size - new_w) // 2
-    pad_right  = target_size - new_w - pad_left
-    return TF.pad(resized, [pad_left, pad_top, pad_right, pad_bottom], fill=0)
 
 
 def _extract_clip(args):
     """
     Worker function — runs in a spawned process.
+    Saves frames at original video resolution — no resize/letterbox.
     Returns (vid, status_str, num_frames_saved).
     """
-    vid, src_path, out_dir_str, max_frames, target_size, jpeg_quality, use_gpu = args
+    vid, src_path, out_dir_str, max_frames, jpeg_quality, use_gpu, write_threads = args
     out_dir = Path(out_dir_str)
 
     # ── Resume: skip if folder already has JPEG files ──
@@ -118,23 +102,20 @@ def _extract_clip(args):
         if frames.shape[0] == 0:
             return vid, "error: 0 frames decoded", 0
 
-        # ── Letterbox on GPU (if available) or CPU ──
-        if gpu_available and frames.device.type != "cuda":
-            frames = frames.cuda()
-        frames = _letterbox_frames_batch(frames, target_size)  # (T, 3, 256, 256)
-
         # ── Move to CPU for JPEG saving (write_jpeg requires CPU tensor) ──
         if frames.device.type != "cpu":
             frames = frames.cpu()
 
-        # ── Save each frame as JPEG ──
+        # ── Save frames as JPEG — threaded (libjpeg releases GIL, parallelism is real) ──
         out_dir.mkdir(parents=True, exist_ok=True)
-        for i in range(frames.shape[0]):
-            torchvision.io.write_jpeg(
-                frames[i],
-                str(out_dir / f"{i:04d}.jpg"),
-                quality=jpeg_quality,
-            )
+        frame_list = list(frames)   # pre-split tensor into T individual (C,H,W) tensors
+        paths      = [str(out_dir / f"{i:04d}.jpg") for i in range(len(frame_list))]
+
+        def _write_one(args):
+            torchvision.io.write_jpeg(args[0], args[1], quality=jpeg_quality)
+
+        with ThreadPoolExecutor(max_workers=write_threads) as ex:
+            list(ex.map(_write_one, zip(frame_list, paths)))
 
         return vid, "ok", frames.shape[0]
 
@@ -142,7 +123,7 @@ def _extract_clip(args):
         return vid, f"error: {exc}", 0
 
 
-def _build_jobs(splits_dict, output_root, max_frames, target_size, jpeg_quality, use_gpu):
+def _build_jobs(splits_dict, output_root, max_frames, jpeg_quality, use_gpu, write_threads):
     """Build the flat list of job tuples for all splits."""
     jobs = []
     for split, tsv_path in splits_dict.items():
@@ -154,9 +135,9 @@ def _build_jobs(splits_dict, output_root, max_frames, target_size, jpeg_quality,
                 row["file_path"],
                 str(out_dir),
                 max_frames,
-                target_size,
                 jpeg_quality,
                 use_gpu,
+                write_threads,
             ))
     return jobs
 
@@ -202,7 +183,7 @@ def main():
     print("=" * 68)
     print(f"  Output root  : {OUTPUT_ROOT}")
     print(f"  Max frames   : {MAX_FRAMES}  (@ 20 FPS = {MAX_FRAMES // 20}s per clip)")
-    print(f"  Target size  : {TARGET_SIZE}×{TARGET_SIZE}  (letterbox, no crop)")
+    print(f"  Resolution   : original (letterbox applied at training time)")
     print(f"  JPEG quality : {JPEG_QUALITY}")
     print(f"  GPU mode     : {USE_GPU}")
     print(f"  Workers      : {NUM_WORKERS}")
@@ -213,29 +194,16 @@ def main():
 
     # ── Build job list ──
     print("📋 Building job list ...")
-    jobs = _build_jobs(SPLITS, OUTPUT_ROOT, MAX_FRAMES, TARGET_SIZE, JPEG_QUALITY, USE_GPU)
+    jobs = _build_jobs(SPLITS, OUTPUT_ROOT, MAX_FRAMES, JPEG_QUALITY, USE_GPU, WRITE_THREADS)
     total = len(jobs)
 
-    already_done = sum(
-        1 for _, _, out_dir_str, *_ in jobs
-        if Path(out_dir_str).exists()
-        and len(list(Path(out_dir_str).glob("*.jpg"))) > 0
-    )
-    remaining = total - already_done
-
     print(f"  Total clips  : {total:,}")
-    print(f"  Already done : {already_done:,}  (will be skipped)")
-    print(f"  To extract   : {remaining:,}")
+    print(f"  (already-done clips are detected and skipped on the fly)")
     print()
 
-    if remaining == 0:
-        print("✅ All clips already extracted. Writing TSV files ...")
-        _write_new_tsvs(SPLITS, OUTPUT_ROOT, DATA_DIR)
-        return
-
     # ── Extract ──
-    t_start = time.time()
-    n_ok      = already_done
+    t_start   = time.time()
+    n_ok      = 0
     n_skipped = 0
     n_error   = 0
     errors    = []
@@ -243,8 +211,8 @@ def main():
     with open(error_log, "a", encoding="utf-8") as err_f:
         with multiprocessing.Pool(processes=NUM_WORKERS) as pool:
             with tqdm(total=total, desc="Extracting", unit="clip",
-                      initial=already_done, dynamic_ncols=True) as pbar:
-                for vid, status, nf in pool.imap_unordered(_extract_clip, jobs):
+                      dynamic_ncols=True) as pbar:
+                for vid, status, _ in pool.imap_unordered(_extract_clip, jobs):
                     if status == "ok":
                         n_ok += 1
                     elif status == "skipped":
@@ -259,10 +227,11 @@ def main():
 
                     # Live ETA
                     elapsed  = time.time() - t_start
-                    done_now = n_ok + n_skipped + n_error - already_done
-                    if done_now > 0 and remaining > done_now:
-                        eta = (elapsed / done_now) * (remaining - done_now)
-                        pbar.set_postfix(ok=n_ok, err=n_error,
+                    done_now = n_ok + n_skipped + n_error
+                    remaining_now = total - done_now
+                    if done_now > 0 and remaining_now > 0:
+                        eta = (elapsed / done_now) * remaining_now
+                        pbar.set_postfix(ok=n_ok, skip=n_skipped, err=n_error,
                                          ETA=_format_time(eta))
 
     # ── Summary ──

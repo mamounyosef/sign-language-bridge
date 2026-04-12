@@ -1,0 +1,1 @@
+timestamp,global_step,epoch,val_loss,val_ppl,bleu1,bleu2,bleu4,rouge_l,wer,meteor,num_eval_batches,num_gen_samples

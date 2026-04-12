@@ -1,0 +1,99 @@
+
+========================================================================
+  QWEN3-VL TRAINING CONFIGURATION
+========================================================================
+
+  [ DATA ]
+    Train TSV              : ..\data\2_dataset_train.tsv
+    Val TSV                : ..\data\2_dataset_val.tsv
+
+  [ MODEL ]
+    Model                  : Qwen/Qwen3-VL-2B-Instruct
+    Attention impl         : flash_attention_2
+    Precision              : bfloat16
+    QLoRA (4-bit)          : False
+
+  [ VIDEO PROCESSING ]
+    FPS                    : 18
+    Min pixels             : 4096
+    Max pixels             : 50176
+    Total pixels budget    : 20971520
+
+  [ PROMPTS ]
+    System                 : You are a sign language translator.
+    User                   : Translate this American Sign Language video into English.
+
+  [ LoRA ]
+    Rank / Alpha           : 16 / 32
+    Target modules (LM)    : q_proj, k_proj, v_proj, o_proj
+    Include vision encoder : False
+    Dropout                : 0.05
+    DoRA / RSLoRA          : False / False
+
+  [ TRAINING ]
+    Epochs                 : 3
+    Batch size             : 2  (effective: 16 with 8x accum)
+    Mixed precision        : bfloat16
+    Grad clip max_norm     : 1.0
+    Weight decay           : 0.01
+    Adam betas             : (0.9, 0.98)
+    8-bit AdamW            : True
+    Gradient checkpointing : True
+    Bucket batching        : True
+    DataLoader workers     : 1 train / 0 val
+
+  [ LEARNING RATE ]
+    LR                     : 2.00e-05 -> 1.00e-06  (warmup: 100 steps)
+
+  [ EVALUATION & CHECKPOINTING ]
+    Eval every             : 220 steps  (warmup: 200 until step 1000)
+    Max eval batches       : 60
+    Max gen samples        : 100
+    Beam size              : 1  |  Rep penalty: 1.15
+    Save every             : 20 steps  |  Keep last: 3
+    Early stopping pat.    : 12 evals
+    Checkpoint dir         : C:\My Projects\sign-language-bridge\checkpoints\qwen3vl
+
+  [ RESUME ]
+    Resume training        : False
+
+========================================================================
+
+Loading training data...
+  Loaded 57347 samples (0 missing files)
+
+Loading validation data...
+  Loaded 1399 samples (0 missing files)
+
+Train dataset: 57347 samples
+Val dataset:   1399 samples
+
+Loading model: Qwen/Qwen3-VL-2B-Instruct...
+  Using Flash Attention 2
+  Model loaded in 9.9s | VRAM: 4.26 GB
+
+Applying LoRA...
+trainable params: 6,422,528 || all params: 2,133,954,560 || trainable%: 0.3010
+  Gradient checkpointing enabled
+  VRAM after LoRA: 4.28 GB
+
+Creating data loaders...
+  Using bucket batch sampling (28674 batches)
+  Train loader: 28674 micro-batches/epoch
+  Optimizer steps/epoch: 3585
+  Total optimizer steps: 10755
+
+Setting up optimizer...
+  Using Paged 8-bit AdamW (bitsandbytes) — optimizer states page to CPU under VRAM pressure
+  Warmup: 100 steps | Cosine: 10655 steps
+  LR: 2.00e-05 -> 1.00e-06
+
+Label masking verification (first training batch):
+  Ground truth: This is all the you know, take off on the idea of the acanthus leaf.
+  Decoded labels (non-masked): This is all the you know, take off on the idea of the acanthus leaf.
+
+  Total tokens: 2912 | Masked: 2891 | Unmasked: 21
+
+GPU: NVIDIA GeForce RTX 4060
+VRAM total: 8.59 GB
+  Trainable parameters for grad clipping: 6,422,528

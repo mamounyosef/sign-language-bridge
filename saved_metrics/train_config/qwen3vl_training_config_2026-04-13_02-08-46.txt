@@ -1,0 +1,165 @@
+
+========================================================================
+  QWEN3-VL TRAINING CONFIGURATION
+========================================================================
+
+  [ ENVIRONMENT ]
+    Date                   : 2026-04-13_02-08-46
+    Python                 : 3.12.0
+    PyTorch                : 2.10.0+cu128
+    Transformers           : 4.57.3
+    PEFT                   : 0.18.1
+    Bitsandbytes           : 0.48.2
+    SacreBLEU              : 2.6.0
+    CUDA                   : 12.8
+    cuDNN                  : 91002
+    GPU                    : NVIDIA GeForce RTX 4060
+    GPU VRAM               : 8.59 GB
+
+  [ DATA ]
+    Train TSV              : ..\data\2_dataset_train.tsv
+    Val TSV                : ..\data\2_dataset_val.tsv
+
+  [ MODEL ]
+    Model                  : Qwen/Qwen3-VL-2B-Instruct
+    Attention impl         : flash_attention_2
+    Precision              : bfloat16
+    QLoRA (4-bit)          : False
+
+  [ VIDEO PROCESSING ]
+    FPS                    : 18
+    Min pixels             : 4096
+    Max pixels             : 50176
+    Total pixels budget    : 20971520
+
+  [ PROMPTS ]
+    System                 : You are a sign language translator.
+    User                   : Translate this American Sign Language video into English.
+
+  [ LoRA ]
+    Rank / Alpha           : 16 / 32
+    Target modules (LM)    : q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
+    Include vision encoder : False
+    Dropout                : 0.05
+    DoRA / RSLoRA          : False / True
+
+  [ TRAINING ]
+    Epochs                 : 3
+    Batch size             : 1  (effective: 16 with 16x accum)
+    Mixed precision        : bfloat16
+    Grad clip max_norm     : 1.0
+    Weight decay           : 0.01
+    Adam betas             : (0.9, 0.98)
+    8-bit AdamW            : True
+    Gradient checkpointing : True
+    Bucket batching        : True
+    Label smoothing        : 0.1
+    DataLoader workers     : 2 train / 1 val
+
+  [ LEARNING RATE ]
+    LR                     : 2.00e-05 -> 1.00e-06  (warmup: 100 steps)
+
+  [ EVALUATION & CHECKPOINTING ]
+    Eval every             : 200 steps  (warmup: 200 until step 1000)
+    Max eval batches       : 60
+    Max gen samples        : 100
+    Beam size              : 1  |  Length penalty: 1.0  |  No-repeat ngram: 3  |  Rep penalty: 1.1
+    Save every             : 15 steps  |  Keep last: 3
+    Early stopping pat.    : 12 evals
+    Checkpoint dir         : C:\My Projects\sign-language-bridge\checkpoints\qwen3vl
+    Debug image save       : ON  (every 20 steps → ..\data\debugging_images)
+
+  [ RESUME ]
+    Resume training        : False
+
+  [ FULL CONFIG DUMP ]
+    data_train_tsv                : ..\data\2_dataset_train.tsv
+    data_val_tsv                  : ..\data\2_dataset_val.tsv
+    data_test_tsv                 : ..\data\2_dataset_test.tsv
+    tsv_sep                       : 	
+    model_name                    : Qwen/Qwen3-VL-2B-Instruct
+    attn_implementation           : flash_attention_2
+    dtype                         : bfloat16
+    use_qlora                     : False
+    bnb_4bit_compute_dtype        : bfloat16
+    bnb_4bit_quant_type           : nf4
+    bnb_4bit_use_double_quant     : True
+    video_fps                     : 18
+    video_min_pixels              : 4096
+    video_max_pixels              : 50176
+    video_total_pixels            : 20971520
+    system_prompt                 : You are a sign language translator.
+    user_prompt                   : Translate this American Sign Language video into English.
+    max_text_tokens               : 60
+    lora_r                        : 16
+    lora_alpha                    : 32
+    lora_target_modules           : ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj']
+    lora_include_vision           : False
+    lora_vision_targets           : ['qkv', 'proj', 'linear_fc1', 'linear_fc2']
+    lora_dropout                  : 0.05
+    lora_bias                     : none
+    lora_use_dora                 : False
+    lora_use_rslora               : True
+    num_epochs                    : 3
+    batch_size                    : 1
+    grad_accum_steps              : 16
+    train_num_workers             : 2
+    train_prefetch_factor         : 2
+    train_pin_memory              : True
+    train_persistent_workers      : True
+    val_num_workers               : 1
+    val_prefetch_factor           : 2
+    val_pin_memory                : False
+    val_persistent_workers        : False
+    learning_rate                 : 2e-05
+    min_lr                        : 1e-06
+    warmup_ratio                  : 0.03
+    warmup_steps                  : 100
+    weight_decay                  : 0.01
+    adam_betas                    : (0.9, 0.98)
+    max_grad_norm                 : 1.0
+    log_every_steps               : 1
+    train_log_file                : ..\saved_metrics\qwen3vl_train_log.csv
+    val_log_file                  : ..\saved_metrics\qwen3vl_val_log.csv
+    gen_samples_log_file          : ..\saved_metrics\qwen3vl_gen_samples_log.csv
+    tensorboard_dir               : ..\saved_metrics\tensorboard\qwen3vl_training
+    save_every_steps              : 15
+    keep_last_n_checkpoints       : 3
+    checkpoint_dir                : ..\checkpoints\qwen3vl
+    eval_every_steps              : 200
+    eval_every_steps_warmup       : 200
+    eval_warmup_threshold         : 1000
+    max_eval_batches              : 60
+    num_print_samples             : 5
+    val_gen_batch_size            : 1
+    max_generate_samples          : 100
+    val_beam_size                 : 1
+    val_length_penalty            : 1.0
+    val_no_repeat_ngram_size      : 3
+    val_repetition_penalty        : 1.1
+    val_max_new_tokens            : 60
+    early_stopping_patience       : 12
+    use_8bit_adam                 : True
+    use_gradient_checkpointing    : True
+    use_torch_compile             : False
+    torch_compile_mode            : default
+    resume_training               : False
+    load_best_model               : False
+    resume_checkpoint_step        : None
+    lr_override                   : {'enabled': False, 'lr': 2e-05, 'eta_min': 1e-06}
+    use_bucket_batching           : True
+    label_smoothing               : 0.1
+    seed                          : 42
+    wait_for_manual_start         : False
+    aug_debug_save_images         : True
+    aug_debug_save_interval       : 20
+    aug_debug_save_dir            : ..\data\debugging_images
+
+========================================================================
+
+📂 Loading training data...
+Loading 2_dataset_train:   0%|                                                               | 0/57347 [00:00<?, ?it/s]Loading 2_dataset_train:   3%|█▌                                               | 1832/57347 [00:00<00:03, 18168.19it/s]Loading 2_dataset_train:   7%|███▏                                             | 3784/57347 [00:00<00:02, 18928.14it/s]Loading 2_dataset_train:  10%|████▊                                            | 5677/57347 [00:00<00:02, 17530.72it/s]Loading 2_dataset_train:  13%|██████▌                                          | 7703/57347 [00:00<00:02, 18521.46it/s]Loading 2_dataset_train:  17%|████████▍                                        | 9884/57347 [00:00<00:02, 19614.49it/s]Loading 2_dataset_train:  21%|█████████▉                                      | 11857/57347 [00:00<00:02, 19610.13it/s]Loading 2_dataset_train:  24%|███████████▌                                    | 13825/57347 [00:00<00:02, 18759.55it/s]Loading 2_dataset_train:  27%|█████████████▏                                  | 15712/57347 [00:00<00:02, 18474.58it/s]Loading 2_dataset_train:  31%|██████████████▋                                 | 17567/57347 [00:00<00:02, 17790.37it/s]Loading 2_dataset_train:  34%|████████████████▏                               | 19354/57347 [00:01<00:02, 15187.46it/s]Loading 2_dataset_train:  37%|█████████████████▌                              | 20936/57347 [00:01<00:02, 14601.20it/s]Loading 2_dataset_train:  39%|██████████████████▊                             | 22439/57347 [00:01<00:02, 14673.50it/s]Loading 2_dataset_train:  42%|████████████████████▏                           | 24123/57347 [00:01<00:02, 15251.98it/s]Loading 2_dataset_train:  45%|█████████████████████▌                          | 25719/57347 [00:01<00:02, 15441.06it/s]Loading 2_dataset_train:  48%|██████████████████████▊                         | 27284/57347 [00:01<00:02, 14904.13it/s]Loading 2_dataset_train:  50%|████████████████████████▏                       | 28910/57347 [00:01<00:01, 15243.39it/s]Loading 2_dataset_train:  53%|█████████████████████████▌                      | 30517/57347 [00:01<00:01, 15440.88it/s]Loading 2_dataset_train:  56%|██████████████████████████▊                     | 32072/57347 [00:01<00:01, 13662.55it/s]Loading 2_dataset_train:  58%|████████████████████████████                    | 33481/57347 [00:02<00:01, 13231.36it/s]Loading 2_dataset_train:  61%|█████████████████████████████▏                  | 34833/57347 [00:02<00:01, 12751.74it/s]Loading 2_dataset_train:  64%|██████████████████████████████▍                 | 36429/57347 [00:02<00:01, 13588.37it/s]Loading 2_dataset_train:  67%|███████████████████████████████▉                | 38210/57347 [00:02<00:01, 14750.45it/s]Loading 2_dataset_train:  69%|█████████████████████████████████▏              | 39711/57347 [00:02<00:01, 14064.99it/s]Loading 2_dataset_train:  72%|██████████████████████████████████▍             | 41187/57347 [00:02<00:01, 14224.60it/s]Loading 2_dataset_train:  74%|███████████████████████████████████▋            | 42627/57347 [00:02<00:01, 14158.61it/s]Loading 2_dataset_train:  77%|█████████████████████████████████████           | 44209/57347 [00:02<00:00, 14600.55it/s]Loading 2_dataset_train:  80%|██████████████████████████████████████▏         | 45679/57347 [00:02<00:00, 14233.51it/s]Loading 2_dataset_train:  82%|███████████████████████████████████████▍        | 47111/57347 [00:03<00:00, 13859.68it/s]Loading 2_dataset_train:  86%|█████████████████████████████████████████       | 49034/57347 [00:03<00:00, 15386.71it/s]Loading 2_dataset_train:  89%|██████████████████████████████████████████▌     | 50886/57347 [00:03<00:00, 16264.63it/s]Loading 2_dataset_train:  92%|███████████████████████████████████████████▉    | 52561/57347 [00:03<00:00, 16367.54it/s]Loading 2_dataset_train:  95%|█████████████████████████████████████████████▋  | 54519/57347 [00:03<00:00, 17305.64it/s]Loading 2_dataset_train:  99%|███████████████████████████████████████████████▍| 56730/57347 [00:03<00:00, 18682.90it/s]Loading 2_dataset_train: 100%|████████████████████████████████████████████████| 57347/57347 [00:03<00:00, 15895.33it/s]
+  ✓ Loaded 57347 samples (0 missing files)
+
+📂 Loading validation data...
+Loading 2_dataset_val:   0%|                                                                  | 0/1399 [00:00<?, ?it/s]Loading 2_dataset_val: 100%|████████████████████████████████████████████████████| 1399/1399 [00:00<00:00, 18977.95it/s]
