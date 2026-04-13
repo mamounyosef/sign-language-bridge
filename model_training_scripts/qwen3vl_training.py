@@ -56,15 +56,8 @@ try:
 except Exception:
     pass
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")\
 
-# %%
-torch.manual_seed(42)
-torch.cuda.manual_seed_all(42)
-np.random.seed(42)
-random.seed(42)
-
-# %%
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 # Deterministic mode for reproducibility (slightly slower than benchmark=True,
@@ -141,8 +134,8 @@ CONFIG = {
 
     # ── DataLoader Config ──
     'train_num_workers': 2,                       # 1 worker overlaps video decoding (~1s) with GPU compute (~17s)
-    'train_prefetch_factor': 2,                   # Pre-load 2 batches ahead; safe with file_system sharing strategy
-    'train_pin_memory': True,                      # Pinned memory makes CPU→GPU DMA transfers asynchronous
+    'train_prefetch_factor': 1,                   # Pre-load 1 batch ahead; reduced to lower pinned-memory pressure
+    'train_pin_memory': False,                     # Disabled — pinned memory caused CUDA OOM in pin_memory thread
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
     'val_num_workers': 1,                          # 1 worker overlaps video decoding with GPU inference during validation
@@ -197,7 +190,7 @@ CONFIG = {
     # ── Resuming ──
     'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': 15,               # None = latest, or specific step number
+    'resume_checkpoint_step': 195,               # None = latest, or specific step number
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -232,6 +225,11 @@ CONFIG = {
     'aug_debug_save_interval': 20,          # Save one frame every N optimiser steps
     'aug_debug_save_dir': Path('..') / 'data' / 'debugging_images',
 }
+
+torch.manual_seed(CONFIG['seed'])
+torch.cuda.manual_seed_all(CONFIG['seed'])
+np.random.seed(CONFIG['seed'])
+random.seed(CONFIG['seed'])
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -320,7 +318,7 @@ class Qwen3VLCollator:
         self.processor = processor
         self.config = config
         self.is_training = is_training
-        self.debug_save_images = config.get('aug_debug_save_images', False)
+        self.debug_save_images = is_training and config.get('aug_debug_save_images', False)
 
         # Pre-tokenize the assistant header to find it in input_ids for label masking
         # Qwen3-VL uses: <|im_start|>assistant\n
@@ -522,7 +520,7 @@ def compute_meteor(references, hypotheses):
         return 0.0
     scores = []
     for ref, hyp in zip(references, hypotheses):
-        scores.append(_meteor([ref.strip()], hyp.strip()))
+        scores.append(_meteor([ref.strip().split()], hyp.strip().split()))
     return (sum(scores) / len(scores)) * 100
 
 
@@ -645,7 +643,12 @@ class CheckpointManager:
                 'best_val_loss': best_val_loss,
                 'evals_without_improvement': evals_without_improvement,
                 'elapsed_sec': elapsed_sec,
+                'rng_state': torch.get_rng_state(),
+                'numpy_rng_state': np.random.get_state(),
+                'python_rng_state': random.getstate(),
             }
+            if torch.cuda.is_available():
+                state['cuda_rng_state_all'] = torch.cuda.get_rng_state_all()
             torch.save(state, path / 'training_state.pt')
             print(f"  ⭐ Saved best model: {path.name}")
         except Exception as e:
@@ -715,6 +718,7 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
         # Extract metadata before moving to device
         _vids = batch.pop('_vids', [])
         _gts = batch.pop('_ground_truths', [])
+        batch.pop('_debug_frame', None)
 
         batch_gpu = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
@@ -923,6 +927,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     print("\n" + "=" * 60)
     print("🚀 TRAINING STARTED")
     print("=" * 60 + "\n")
+    if start_global_step > 0:
+        print(f"  ▶ Resuming training from step {start_global_step}\n")
 
     # Handle mid-epoch resume
     if start_steps_done_in_epoch is not None:
@@ -954,6 +960,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
             else:
                 print(f"  ⏭️  Resuming mid-epoch: skipping {micro_steps_already_processed} micro-batches (iterate-and-discard fallback)")
 
+        # Number of micro-batches the loader will actually yield this epoch
+        # (may be less than steps_per_epoch when resuming mid-epoch via set_skip).
+        _actual_steps_this_epoch = steps_per_epoch - micro_steps_already_processed
+
         for micro_step, batch in enumerate(train_loader):
 
             # Fallback skip for non-bucket samplers (old checkpoints or shuffle DataLoader)
@@ -967,7 +977,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
             _dbg_frame = batch.pop('_debug_frame', None)
 
             is_accum_step = (micro_step + 1) % grad_accum_steps == 0
-            is_last_step = (micro_step + 1) == steps_per_epoch
+            # Use the number of batches actually yielded this epoch so is_last_step
+            # is True on the final batch even when resuming mid-epoch via set_skip.
+            is_last_step = (micro_step + 1) == _actual_steps_this_epoch
 
             if is_last_step and not is_accum_step:
                 actual_accum_steps = (micro_step + 1) % grad_accum_steps
@@ -1484,7 +1496,7 @@ def main():
 
         if ckpt_path and ckpt_path.exists():
             print(f"\n🔄 Resuming from checkpoint: {ckpt_path.name}")
-            model = PeftModel.from_pretrained(model, ckpt_path / 'adapter')
+            model = PeftModel.from_pretrained(model, ckpt_path / 'adapter', is_trainable=True)
             training_state = torch.load(ckpt_path / 'training_state.pt', map_location='cpu', weights_only=False)
             start_epoch = training_state['epoch']
             start_global_step = training_state['global_step']
@@ -1629,16 +1641,19 @@ def main():
         except Exception as e:
             print(f"  ⚠️  Warning: Could not restore optimizer/scheduler state: {e}")
 
-        # Restore RNG states
-        try:
-            torch.set_rng_state(training_state['rng_state'])
-            np.random.set_state(training_state['numpy_rng_state'])
-            random.setstate(training_state['python_rng_state'])
-            if torch.cuda.is_available() and 'cuda_rng_state_all' in training_state:
-                torch.cuda.set_rng_state_all(training_state['cuda_rng_state_all'])
-            print("  ✅ RNG states restored")
-        except Exception as e:
-            print(f"  ⚠️  Warning: Could not restore RNG states: {e}")
+        # Restore RNG states (may be absent in older checkpoints — skip gracefully)
+        if 'rng_state' in training_state:
+            try:
+                torch.set_rng_state(training_state['rng_state'])
+                np.random.set_state(training_state['numpy_rng_state'])
+                random.setstate(training_state['python_rng_state'])
+                if torch.cuda.is_available() and 'cuda_rng_state_all' in training_state:
+                    torch.cuda.set_rng_state_all(training_state['cuda_rng_state_all'])
+                print("  ✅ RNG states restored")
+            except Exception as e:
+                print(f"  ⚠️  Warning: Could not restore RNG states: {e}")
+        else:
+            print("  ℹ️  RNG states not in checkpoint (older save) — continuing with current RNG state")
 
         del training_state
         gc.collect()
