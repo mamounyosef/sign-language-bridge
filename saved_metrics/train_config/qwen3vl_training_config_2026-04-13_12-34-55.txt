@@ -1,0 +1,236 @@
+
+========================================================================
+  QWEN3-VL TRAINING CONFIGURATION
+========================================================================
+
+  [ ENVIRONMENT ]
+    Date                   : 2026-04-13_12-34-55
+    Python                 : 3.12.0
+    PyTorch                : 2.10.0+cu128
+    Transformers           : 4.57.3
+    PEFT                   : 0.18.1
+    Bitsandbytes           : 0.48.2
+    SacreBLEU              : 2.6.0
+    CUDA                   : 12.8
+    cuDNN                  : 91002
+    GPU                    : NVIDIA GeForce RTX 4060
+    GPU VRAM               : 8.59 GB
+
+  [ DATA ]
+    Train TSV              : ..\data\2_dataset_train.tsv
+    Val TSV                : ..\data\2_dataset_val.tsv
+
+  [ MODEL ]
+    Model                  : Qwen/Qwen3-VL-2B-Instruct
+    Attention impl         : flash_attention_2
+    Precision              : bfloat16
+    QLoRA (4-bit)          : False
+
+  [ VIDEO PROCESSING ]
+    FPS                    : 18
+    Min pixels             : 4096
+    Max pixels             : 50176
+    Total pixels budget    : 20971520
+
+  [ PROMPTS ]
+    System                 : You are a sign language translator.
+    User                   : Translate this American Sign Language video into English.
+
+  [ LoRA ]
+    Rank / Alpha           : 16 / 32
+    Target modules (LM)    : q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
+    Include vision encoder : False
+    Dropout                : 0.05
+    DoRA / RSLoRA          : False / True
+
+  [ TRAINING ]
+    Epochs                 : 3
+    Batch size             : 1  (effective: 16 with 16x accum)
+    Mixed precision        : bfloat16
+    Grad clip max_norm     : 1.0
+    Weight decay           : 0.01
+    Adam betas             : (0.9, 0.98)
+    8-bit AdamW            : True
+    Gradient checkpointing : True
+    Bucket batching        : True
+    Label smoothing        : 0.1
+    DataLoader workers     : 2 train / 1 val
+
+  [ LEARNING RATE ]
+    LR                     : 2.00e-05 -> 1.00e-06  (warmup: 100 steps)
+
+  [ EVALUATION & CHECKPOINTING ]
+    Eval every             : 200 steps  (warmup: 200 until step 1000)
+    Max eval batches       : 60
+    Max gen samples        : 100
+    Beam size              : 1  |  Length penalty: 1.0  |  No-repeat ngram: 3  |  Rep penalty: 1.1
+    Save every             : 15 steps  |  Keep last: 3
+    Early stopping pat.    : 12 evals
+    Checkpoint dir         : C:\My Projects\sign-language-bridge\checkpoints\qwen3vl
+    Debug image save       : ON  (every 20 steps → ..\data\debugging_images)
+
+  [ RESUME ]
+    Resume training        : True
+    Resume step            : 195
+
+  [ FULL CONFIG DUMP ]
+    data_train_tsv                : ..\data\2_dataset_train.tsv
+    data_val_tsv                  : ..\data\2_dataset_val.tsv
+    data_test_tsv                 : ..\data\2_dataset_test.tsv
+    tsv_sep                       : 	
+    model_name                    : Qwen/Qwen3-VL-2B-Instruct
+    attn_implementation           : flash_attention_2
+    dtype                         : bfloat16
+    use_qlora                     : False
+    bnb_4bit_compute_dtype        : bfloat16
+    bnb_4bit_quant_type           : nf4
+    bnb_4bit_use_double_quant     : True
+    video_fps                     : 18
+    video_min_pixels              : 4096
+    video_max_pixels              : 50176
+    video_total_pixels            : 20971520
+    system_prompt                 : You are a sign language translator.
+    user_prompt                   : Translate this American Sign Language video into English.
+    max_text_tokens               : 60
+    lora_r                        : 16
+    lora_alpha                    : 32
+    lora_target_modules           : ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj']
+    lora_include_vision           : False
+    lora_vision_targets           : ['qkv', 'proj', 'linear_fc1', 'linear_fc2']
+    lora_dropout                  : 0.05
+    lora_bias                     : none
+    lora_use_dora                 : False
+    lora_use_rslora               : True
+    num_epochs                    : 3
+    batch_size                    : 1
+    grad_accum_steps              : 16
+    train_num_workers             : 2
+    train_prefetch_factor         : 1
+    train_pin_memory              : False
+    train_persistent_workers      : True
+    val_num_workers               : 1
+    val_prefetch_factor           : 2
+    val_pin_memory                : False
+    val_persistent_workers        : False
+    learning_rate                 : 2e-05
+    min_lr                        : 1e-06
+    warmup_ratio                  : 0.03
+    warmup_steps                  : 100
+    weight_decay                  : 0.01
+    adam_betas                    : (0.9, 0.98)
+    max_grad_norm                 : 1.0
+    log_every_steps               : 1
+    train_log_file                : ..\saved_metrics\qwen3vl_train_log.csv
+    val_log_file                  : ..\saved_metrics\qwen3vl_val_log.csv
+    gen_samples_log_file          : ..\saved_metrics\qwen3vl_gen_samples_log.csv
+    tensorboard_dir               : ..\saved_metrics\tensorboard\qwen3vl_training
+    save_every_steps              : 15
+    keep_last_n_checkpoints       : 3
+    checkpoint_dir                : ..\checkpoints\qwen3vl
+    eval_every_steps              : 200
+    eval_every_steps_warmup       : 200
+    eval_warmup_threshold         : 1000
+    max_eval_batches              : 60
+    num_print_samples             : 5
+    val_gen_batch_size            : 1
+    max_generate_samples          : 100
+    val_beam_size                 : 1
+    val_length_penalty            : 1.0
+    val_no_repeat_ngram_size      : 3
+    val_repetition_penalty        : 1.1
+    val_max_new_tokens            : 60
+    early_stopping_patience       : 12
+    use_8bit_adam                 : True
+    use_gradient_checkpointing    : True
+    use_torch_compile             : False
+    torch_compile_mode            : default
+    resume_training               : True
+    load_best_model               : False
+    resume_checkpoint_step        : 195
+    lr_override                   : {'enabled': False, 'lr': 2e-05, 'eta_min': 1e-06}
+    use_bucket_batching           : True
+    label_smoothing               : 0.1
+    seed                          : 42
+    wait_for_manual_start         : False
+    aug_debug_save_images         : True
+    aug_debug_save_interval       : 20
+    aug_debug_save_dir            : ..\data\debugging_images
+
+========================================================================
+
+📂 Loading training data...
+Loading 2_dataset_train:   0%|                                                               | 0/57347 [00:00<?, ?it/s]Loading 2_dataset_train:   4%|██                                               | 2379/57347 [00:00<00:02, 23778.51it/s]Loading 2_dataset_train:   8%|████                                             | 4757/57347 [00:00<00:02, 23216.35it/s]Loading 2_dataset_train:  12%|██████                                           | 7080/57347 [00:00<00:02, 22026.73it/s]Loading 2_dataset_train:  17%|████████▏                                        | 9627/57347 [00:00<00:02, 23320.65it/s]Loading 2_dataset_train:  21%|██████████                                      | 12022/57347 [00:00<00:01, 23536.77it/s]Loading 2_dataset_train:  25%|████████████                                    | 14382/57347 [00:00<00:01, 23006.92it/s]Loading 2_dataset_train:  30%|██████████████▏                                 | 16927/57347 [00:00<00:01, 23772.86it/s]Loading 2_dataset_train:  34%|████████████████▏                               | 19311/57347 [00:00<00:01, 21926.08it/s]Loading 2_dataset_train:  38%|██████████████████                              | 21532/57347 [00:00<00:01, 21205.46it/s]Loading 2_dataset_train:  41%|███████████████████▊                            | 23673/57347 [00:01<00:01, 20784.16it/s]Loading 2_dataset_train:  45%|█████████████████████▌                          | 25765/57347 [00:01<00:01, 20683.07it/s]Loading 2_dataset_train:  49%|███████████████████████▎                        | 27842/57347 [00:01<00:01, 19818.00it/s]Loading 2_dataset_train:  53%|█████████████████████████▎                      | 30173/57347 [00:01<00:01, 20782.77it/s]Loading 2_dataset_train:  57%|███████████████████████████▏                    | 32441/57347 [00:01<00:01, 21323.51it/s]Loading 2_dataset_train:  61%|█████████████████████████████                   | 34774/57347 [00:01<00:01, 21904.12it/s]Loading 2_dataset_train:  65%|███████████████████████████████                 | 37093/57347 [00:01<00:00, 22269.12it/s]Loading 2_dataset_train:  69%|████████████████████████████████▉               | 39329/57347 [00:01<00:00, 22130.00it/s]Loading 2_dataset_train:  73%|███████████████████████████████████             | 41869/57347 [00:01<00:00, 23058.51it/s]Loading 2_dataset_train:  77%|████████████████████████████████████▉           | 44199/57347 [00:01<00:00, 23093.92it/s]Loading 2_dataset_train:  82%|███████████████████████████████████████▏        | 46773/57347 [00:02<00:00, 23842.18it/s]Loading 2_dataset_train:  86%|█████████████████████████████████████████▍      | 49495/57347 [00:02<00:00, 24836.56it/s]Loading 2_dataset_train:  91%|███████████████████████████████████████████▋    | 52194/57347 [00:02<00:00, 25435.72it/s]Loading 2_dataset_train:  96%|█████████████████████████████████████████████▉  | 54916/57347 [00:02<00:00, 25926.76it/s]Loading 2_dataset_train: 100%|████████████████████████████████████████████████| 57347/57347 [00:02<00:00, 23139.74it/s]
+  ✓ Loaded 57347 samples (0 missing files)
+
+📂 Loading validation data...
+Loading 2_dataset_val:   0%|                                                                  | 0/1399 [00:00<?, ?it/s]Loading 2_dataset_val: 100%|████████████████████████████████████████████████████| 1399/1399 [00:00<00:00, 25404.07it/s]
+  ✓ Loaded 1399 samples (0 missing files)
+
+📦 Train dataset: 57347 samples
+📦 Val dataset:   1399 samples
+
+🧠 Loading model: Qwen/Qwen3-VL-2B-Instruct...
+  ✓ Using Flash Attention 2
+C:\Users\mamou\AppData\Roaming\Python\Python312\site-packages\transformers\modeling_utils.py:6105: UserWarning: expandable_segments not supported on this platform (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\c10/cuda/CUDAAllocatorConfig.h:39.)
+  _ = torch.empty(byte_count // factor, dtype=torch.float16, device=device, requires_grad=False)
+  Model loaded in 8.9s | VRAM: 4.26 GB
+
+Applying LoRA...
+
+🔄 Resuming from checkpoint: checkpoint_step_195
+  ✅ Resumed at step 195, epoch 1, best_val_loss: inf
+trainable params: 17,432,576 || all params: 2,144,964,608 || trainable%: 0.8127
+  Total parameters:     2,144,964,608
+  Trainable parameters: 17,432,576 (0.81%)
+  ✓ Gradient checkpointing enabled
+  VRAM after LoRA: 4.33 GB
+
+⚙️  Creating data loaders...
+  Using bucket batch sampling (57347 batches)
+  Train loader: 57347 micro-batches/epoch
+  Optimizer steps/epoch: 3585
+  Total optimizer steps: 10755
+
+⚙️  Setting up optimizer...
+  ✓ Using Paged 8-bit AdamW (bitsandbytes) — optimizer states page to CPU under VRAM pressure
+
+📈 LR Schedule:
+  Warmup: 100 steps | Cosine: 10655 steps
+  LR: 2.00e-05 -> 1.00e-06
+  ✅ Optimizer and scheduler state restored
+  ✅ RNG states restored
+  📋 CheckpointManager: found 3 existing checkpoint(s) (keep_last_n=3).
+
+🔍 Label masking verification (first training batch):
+qwen-vl-utils using decord to read video.
+  Ground truth: This is all the you know, take off on the idea of the acanthus leaf.
+  Decoded labels (non-masked): This is all the you know, take off on the idea of the acanthus leaf.
+
+  Total tokens: 2912 | Masked: 2891 | Unmasked: 21
+
+GPU: NVIDIA GeForce RTX 4060
+VRAM total: 8.59 GB
+  Trainable parameters for grad clipping: 17,432,576
+
+============================================================
+🚀 TRAINING STARTED
+============================================================
+
+  ▶ Resuming training from step 195
+
+  ⏭️  Resuming mid-epoch: skipping 2880 micro-batches (sampler-level, no video decoding)
+================================================================================================================================================================
+[Step    196/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.9996e-05 | Grad Norm: 6.039 | Speed: 0.009 steps/s | VRAM: 4.380/9.347 GB | Elapsed: 4h 31m 48s | ETA: 10d 4h 3m 0s
+================================================================================================================================================================
+[Step    197/10755] [Epoch  1/3] Train Loss: 4.4062 | Train PPL: 81.962 | LR: 1.9996e-05 | Grad Norm: 6.125 | Speed: 0.013 steps/s | VRAM: 4.380/9.650 GB | Elapsed: 4h 33m 6s | ETA: 10d 3h 56m 46s
+================================================================================================================================================================
+[Step    198/10755] [Epoch  1/3] Train Loss: 3.9375 | Train PPL: 51.290 | LR: 1.9996e-05 | Grad Norm: 6.467 | Speed: 0.017 steps/s | VRAM: 4.380/9.847 GB | Elapsed: 4h 34m 5s | ETA: 10d 3h 34m 2s
+================================================================================================================================================================
+[Step    199/10755] [Epoch  1/3] Train Loss: 3.8750 | Train PPL: 48.183 | LR: 1.9996e-05 | Grad Norm: 7.331 | Speed: 0.019 steps/s | VRAM: 4.380/9.847 GB | Elapsed: 4h 34m 57s | ETA: 10d 3h 5m 38s
+================================================================================================================================================================
+[Step    200/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 1.9996e-05 | Grad Norm: 7.486 | Speed: 0.016 steps/s | VRAM: 4.380/9.847 GB | Elapsed: 4h 35m 59s | ETA: 10d 2h 45m 53s
+
+────────────────────────────────────────────────────────────
+  📊 Validation @ Step 200 / Epoch 1
+────────────────────────────────────────────────────────────
+  Val loss:   0%|                                     | 0/60 [00:00<?, ?batch/s]  Val loss:   2%|▍                            | 1/60 [00:35<34:49, 35.41s/batch]  Val loss:   3%|▉                            | 2/60 [00:35<14:19, 14.83s/batch]  Val loss:   5%|█▍                           | 3/60 [00:37<08:26,  8.89s/batch]  Val loss:   7%|█▉                           | 4/60 [00:38<05:12,  5.58s/batch]  Val loss:   8%|██▍                          | 5/60 [00:39<03:34,  3.90s/batch]  Val loss:  10%|██▉                          | 6/60 [00:40<02:46,  3.09s/batch]  Val loss:  12%|███▍                         | 7/60 [00:41<02:08,  2.42s/batch]  Val loss:  13%|███▊                         | 8/60 [00:42<01:34,  1.81s/batch]  Val loss:  15%|████▎                        | 9/60 [00:42<01:16,  1.50s/batch]  Val loss:  17%|████▋                       | 10/60 [00:43<01:03,  1.28s/batch]  Val loss:  18%|█████▏                      | 11/60 [00:44<00:54,  1.10s/batch]  Val loss:  20%|█████▌                      | 12/60 [00:45<00:50,  1.05s/batch]  Val loss:  22%|██████                      | 13/60 [00:46<00:46,  1.02batch/s]  Val loss:  23%|██████▌                     | 14/60 [00:47<00:47,  1.04s/batch]  Val loss:  25%|███████                     | 15/60 [00:48<00:43,  1.02batch/s]  Val loss:  27%|███████▍                    | 16/60 [00:49<00:42,  1.02batch/s]  Val loss:  28%|███████▉                    | 17/60 [00:49<00:39,  1.09batch/s]  Val loss:  30%|████████▍                   | 18/60 [00:50<00:39,  1.05batch/s]  Val loss:  32%|████████▊                   | 19/60 [00:51<00:38,  1.05batch/s]  Val loss:  33%|█████████▎                  | 20/60 [00:52<00:34,  1.16batch/s]  Val loss:  35%|█████████▊                  | 21/60 [00:52<00:28,  1.38batch/s]  Val loss:  37%|██████████▎                 | 22/60 [00:55<00:45,  1.20s/batch]  Val loss:  38%|██████████▋                 | 23/60 [00:56<00:39,  1.08s/batch]  Val loss:  40%|███████████▏                | 24/60 [00:56<00:35,  1.01batch/s]  Val loss:  42%|███████████▋                | 25/60 [00:57<00:33,  1.04batch/s]  Val loss:  43%|████████████▏               | 26/60 [00:58<00:30,  1.12batch/s]  Val loss:  45%|████████████▌               | 27/60 [00:59<00:29,  1.11batch/s]  Val loss:  47%|█████████████               | 28/60 [01:00<00:30,  1.04batch/s]  Val loss:  48%|█████████████▌              | 29/60 [01:02<00:42,  1.38s/batch]  Val loss:  50%|██████████████              | 30/60 [01:03<00:33,  1.13s/batch]  Val loss:  52%|██████████████▍             | 31/60 [01:04<00:28,  1.00batch/s]  Val loss:  53%|██████████████▉             | 32/60 [01:05<00:29,  1.05s/batch]  Val loss:  55%|███████████████▍            | 33/60 [01:06<00:27,  1.03s/batch]  Val loss:  57%|███████████████▊            | 34/60 [01:09<00:42,  1.64s/batch]  Val loss:  58%|████████████████▎           | 35/60 [01:09<00:32,  1.31s/batch]  Val loss:  60%|████████████████▊           | 36/60 [01:11<00:30,  1.27s/batch]  Val loss:  62%|█████████████████▎          | 37/60 [01:11<00:25,  1.09s/batch]  Val loss:  63%|█████████████████▋          | 38/60 [01:12<00:19,  1.12batch/s]  Val loss:  65%|██████████████████▏         | 39/60 [01:13<00:20,  1.00batch/s]  Val loss:  67%|██████████████████▋         | 40/60 [01:15<00:25,  1.28s/batch]  Val loss:  68%|███████████████████▏        | 41/60 [01:16<00:22,  1.17s/batch]  Val loss:  70%|███████████████████▌        | 42/60 [01:16<00:16,  1.06batch/s]  Val loss:  72%|████████████████████        | 43/60 [01:17<00:13,  1.30batch/s]  Val loss:  73%|████████████████████▌       | 44/60 [01:17<00:12,  1.29batch/s]  Val loss:  75%|█████████████████████       | 45/60 [01:19<00:14,  1.03batch/s]  Val loss:  77%|█████████████████████▍      | 46/60 [01:19<00:12,  1.12batch/s]  Val loss:  78%|█████████████████████▉      | 47/60 [01:20<00:10,  1.28batch/s]  Val loss:  80%|██████████████████████▍     | 48/60 [01:20<00:07,  1.52batch/s]  Val loss:  82%|██████████████████████▊     | 49/60 [01:21<00:07,  1.51batch/s]  Val loss:  83%|███████████████████████▎    | 50/60 [01:22<00:07,  1.37batch/s]  Val loss:  85%|███████████████████████▊    | 51/60 [01:23<00:06,  1.32batch/s]  Val loss:  87%|████████████████████████▎   | 52/60 [01:24<00:06,  1.26batch/s]  Val loss:  88%|████████████████████████▋   | 53/60 [01:24<00:04,  1.45batch/s]  Val loss:  90%|█████████████████████████▏  | 54/60 [01:25<00:04,  1.25batch/s]  Val loss:  92%|█████████████████████████▋  | 55/60 [01:26<00:04,  1.14batch/s]  Val loss:  93%|██████████████████████████▏ | 56/60 [01:27<00:02,  1.37batch/s]  Val loss:  95%|██████████████████████████▌ | 57/60 [01:27<00:01,  1.60batch/s]  Val loss:  97%|███████████████████████████ | 58/60 [01:29<00:01,  1.04batch/s]  Val loss:  98%|███████████████████████████▌| 59/60 [01:30<00:01,  1.05s/batch]  Val loss: 100%|████████████████████████████| 60/60 [01:30<00:00,  1.15batch/s]                                                                                  Val gen :   0%|                                   | 0/100 [00:00<?, ?sample/s]  Val gen :   1%|▎                          | 1/100 [00:02<04:20,  2.63s/sample]  Val gen :   2%|▌                          | 2/100 [00:05<04:37,  2.84s/sample]  Val gen :   3%|▊                          | 3/100 [00:08<04:35,  2.84s/sample]  Val gen :   4%|█                          | 4/100 [00:09<03:12,  2.01s/sample]  Val gen :   5%|█▎                         | 5/100 [00:11<03:35,  2.27s/sample]  Val gen :   6%|█▌                         | 6/100 [00:14<03:56,  2.52s/sample]  Val gen :   7%|█▉                         | 7/100 [00:17<03:58,  2.57s/sample]  Val gen :   8%|██▏                        | 8/100 [00:18<03:12,  2.10s/sample]  Val gen :   9%|██▍                        | 9/100 [00:20<02:55,  1.93s/sample]  Val gen :  10%|██▌                       | 10/100 [00:21<02:33,  1.70s/sample]  Val gen :  11%|██▊                       | 11/100 [00:22<02:21,  1.59s/sample]  Val gen :  12%|███                       | 12/100 [00:26<03:22,  2.31s/sample]  Val gen :  13%|███▍                      | 13/100 [00:28<03:16,  2.26s/sample]  Val gen :  14%|███▋                      | 14/100 [00:32<03:46,  2.64s/sample]  Val gen :  15%|███▉                      | 15/100 [00:35<03:53,  2.75s/sample]  Val gen :  16%|████▏                     | 16/100 [00:36<03:06,  2.22s/sample]  Val gen :  17%|████▍                     | 17/100 [00:39<03:17,  2.39s/sample]  Val gen :  18%|████▋                     | 18/100 [00:41<03:17,  2.41s/sample]  Val gen :  19%|████▉                     | 19/100 [00:45<03:47,  2.81s/sample]  Val gen :  20%|█████▏                    | 20/100 [00:46<03:06,  2.33s/sample]  Val gen :  21%|█████▍                    | 21/100 [00:50<03:41,  2.81s/sample]  Val gen :  22%|█████▋                    | 22/100 [00:51<02:56,  2.26s/sample]  Val gen :  23%|█████▉                    | 23/100 [00:53<02:42,  2.11s/sample]  Val gen :  24%|██████▏                   | 24/100 [00:57<03:25,  2.70s/sample]  Val gen :  25%|██████▌                   | 25/100 [01:00<03:24,  2.73s/sample]  Val gen :  26%|██████▊                   | 26/100 [01:02<03:18,  2.69s/sample]  Val gen :  27%|███████                   | 27/100 [01:04<02:46,  2.28s/sample]  Val gen :  28%|███████▎                  | 28/100 [01:06<02:42,  2.26s/sample]  Val gen :  29%|███████▌                  | 29/100 [01:07<02:14,  1.89s/sample]  Val gen :  30%|███████▊                  | 30/100 [01:08<02:08,  1.84s/sample]  Val gen :  31%|████████                  | 31/100 [01:19<05:03,  4.40s/sample]  Val gen :  32%|████████▎                 | 32/100 [01:22<04:29,  3.97s/sample]  Val gen :  33%|████████▌                 | 33/100 [01:24<03:46,  3.38s/sample]  Val gen :  34%|████████▊                 | 34/100 [01:28<03:53,  3.54s/sample]  Val gen :  35%|█████████                 | 35/100 [01:29<03:12,  2.97s/sample]  Val gen :  36%|█████████▎                | 36/100 [01:31<02:40,  2.51s/sample]  Val gen :  37%|█████████▌                | 37/100 [01:35<03:00,  2.87s/sample]  Val gen :  38%|█████████▉                | 38/100 [01:37<02:57,  2.87s/sample]  Val gen :  39%|██████████▏               | 39/100 [01:39<02:29,  2.46s/sample]  Val gen :  40%|██████████▍               | 40/100 [01:40<02:08,  2.15s/sample]  Val gen :  41%|██████████▋               | 41/100 [01:42<01:53,  1.92s/sample]  Val gen :  42%|██████████▉               | 42/100 [01:47<02:42,  2.81s/sample]  Val gen :  43%|███████████▏              | 43/100 [01:50<02:54,  3.06s/sample]  Val gen :  44%|███████████▍              | 44/100 [01:51<02:13,  2.38s/sample]  Val gen :  45%|███████████▋              | 45/100 [01:54<02:18,  2.53s/sample]  Val gen :  46%|███████████▉              | 46/100 [01:57<02:18,  2.57s/sample]  Val gen :  47%|████████████▏             | 47/100 [01:59<02:19,  2.63s/sample]  Val gen :  48%|████████████▍             | 48/100 [02:00<01:52,  2.17s/sample]  Val gen :  49%|████████████▋             | 49/100 [02:02<01:45,  2.07s/sample]  Val gen :  50%|█████████████             | 50/100 [02:06<02:02,  2.46s/sample]  Val gen :  51%|█████████████▎            | 51/100 [02:07<01:49,  2.24s/sample]  Val gen :  52%|█████████████▌            | 52/100 [02:09<01:38,  2.05s/sample]  Val gen :  53%|█████████████▊            | 53/100 [02:11<01:30,  1.92s/sample]  Val gen :  54%|██████████████            | 54/100 [02:11<01:11,  1.56s/sample]  Val gen :  55%|██████████████▎           | 55/100 [02:13<01:10,  1.57s/sample]  Val gen :  56%|██████████████▌           | 56/100 [02:14<00:56,  1.28s/sample]  Val gen :  57%|██████████████▊           | 57/100 [02:15<00:55,  1.29s/sample]  Val gen :  58%|███████████████           | 58/100 [02:18<01:14,  1.77s/sample]  Val gen :  59%|███████████████▎          | 59/100 [02:19<01:10,  1.73s/sample]  Val gen :  60%|███████████████▌          | 60/100 [02:22<01:24,  2.12s/sample]  Val gen :  61%|███████████████▊          | 61/100 [02:23<01:06,  1.70s/sample]  Val gen :  62%|████████████████          | 62/100 [02:26<01:15,  1.99s/sample]  Val gen :  63%|████████████████▍         | 63/100 [02:27<01:04,  1.75s/sample]  Val gen :  64%|████████████████▋         | 64/100 [02:30<01:16,  2.12s/sample]  Val gen :  65%|████████████████▉         | 65/100 [02:31<01:05,  1.86s/sample]  Val gen :  66%|█████████████████▏        | 66/100 [02:32<00:57,  1.69s/sample]  Val gen :  67%|█████████████████▍        | 67/100 [02:34<00:52,  1.59s/sample]  Val gen :  68%|█████████████████▋        | 68/100 [02:37<01:02,  1.95s/sample]  Val gen :  69%|█████████████████▉        | 69/100 [02:37<00:48,  1.57s/sample]  Val gen :  70%|██████████████████▏       | 70/100 [02:39<00:51,  1.72s/sample]  Val gen :  71%|██████████████████▍       | 71/100 [02:40<00:39,  1.37s/sample]  Val gen :  72%|██████████████████▋       | 72/100 [02:42<00:41,  1.48s/sample]  Val gen :  73%|██████████████████▉       | 73/100 [02:46<01:01,  2.29s/sample]  Val gen :  74%|███████████████████▏      | 74/100 [02:49<01:04,  2.49s/sample]  Val gen :  75%|███████████████████▌      | 75/100 [02:51<00:59,  2.37s/sample]  Val gen :  76%|███████████████████▊      | 76/100 [02:54<01:02,  2.60s/sample]  Val gen :  77%|████████████████████      | 77/100 [02:55<00:45,  2.00s/sample]  Val gen :  78%|████████████████████▎     | 78/100 [02:56<00:42,  1.95s/sample]  Val gen :  79%|████████████████████▌     | 79/100 [03:00<00:53,  2.55s/sample]  Val gen :  80%|████████████████████▊     | 80/100 [03:02<00:46,  2.34s/sample]  Val gen :  81%|█████████████████████     | 81/100 [03:04<00:43,  2.26s/sample]  Val gen :  82%|█████████████████████▎    | 82/100 [03:07<00:40,  2.25s/sample]  Val gen :  83%|█████████████████████▌    | 83/100 [03:08<00:33,  1.95s/sample]  Val gen :  84%|█████████████████████▊    | 84/100 [03:09<00:27,  1.71s/sample]  Val gen :  85%|██████████████████████    | 85/100 [03:12<00:33,  2.25s/sample]  Val gen :  86%|██████████████████████▎   | 86/100 [03:14<00:30,  2.16s/sample]  Val gen :  87%|██████████████████████▌   | 87/100 [03:16<00:24,  1.91s/sample]  Val gen :  88%|██████████████████████▉   | 88/100 [03:20<00:32,  2.67s/sample]  Val gen :  89%|███████████████████████▏  | 89/100 [03:23<00:30,  2.77s/sample]  Val gen :  90%|███████████████████████▍  | 90/100 [03:28<00:34,  3.47s/sample]  Val gen :  91%|███████████████████████▋  | 91/100 [03:31<00:29,  3.23s/sample]  Val gen :  92%|███████████████████████▉  | 92/100 [03:33<00:22,  2.84s/sample]  Val gen :  93%|████████████████████████▏ | 93/100 [03:35<00:18,  2.63s/sample]  Val gen :  94%|████████████████████████▍ | 94/100 [03:38<00:16,  2.77s/sample]  Val gen :  95%|████████████████████████▋ | 95/100 [03:41<00:14,  2.82s/sample]  Val gen :  96%|████████████████████████▉ | 96/100 [03:42<00:09,  2.27s/sample]  Val gen :  97%|█████████████████████████▏| 97/100 [03:44<00:06,  2.03s/sample]  Val gen :  98%|█████████████████████████▍| 98/100 [03:47<00:04,  2.45s/sample]  Val gen :  99%|█████████████████████████▋| 99/100 [03:49<00:02,  2.36s/sample]  Val gen : 100%|█████████████████████████| 100/100 [03:51<00:00,  2.11s/sample]                                                                                

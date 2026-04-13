@@ -38,6 +38,8 @@ from torch.utils.tensorboard import SummaryWriter
 # Qwen3-VL video utilities
 from qwen_vl_utils import process_vision_info
 
+import torchvision.transforms.v2 as T_v2
+
 ## Additional Imports
 import time
 import csv
@@ -60,10 +62,13 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")\
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-# Deterministic mode for reproducibility (slightly slower than benchmark=True,
-# but required so results are bit-exact across runs — important for a paper).
-torch.backends.cudnn.benchmark = False
-torch.backends.cudnn.deterministic = True
+# benchmark=True lets cuDNN profile and select the fastest convolution algorithm for each
+# unique input shape (vision encoder patch embedding / pooling layers benefit most).
+# deterministic=False re-enables those faster non-deterministic kernels.
+# Note: bit-exact reproducibility is already broken by stochastic augmentation and LoRA
+# dropout; all RNG states are saved in checkpoints for within-run resume accuracy.
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.deterministic = False
 torch.set_float32_matmul_precision('high')
 torch.backends.cuda.matmul.allow_bf16_reduced_precision_reduction = True  # faster bf16 reductions
 torch.backends.cuda.enable_flash_sdp(True)
@@ -98,7 +103,7 @@ CONFIG = {
     # ── Video Processing ──
     'video_fps': 18,                              # Frames per second to sample (18 minimum for sign language)
     'video_min_pixels': 4 * 32 * 32,              # Min visual tokens per frame pair (~4 tokens)
-    'video_max_pixels': 49 * 32 * 32,             # Max visual tokens per frame pair (49 = 224x224 at patch_size=16, merge=2)
+    'video_max_pixels': 64 * 32 * 32,             # Max visual tokens per frame pair (64 = 256x256 at patch_size=16, merge=2)
     'video_total_pixels': 20480 * 32 * 32,        # Total pixel budget cap across all frames (None = no cap)
 
     # ── Chat Template / Prompts ──
@@ -133,8 +138,8 @@ CONFIG = {
     'grad_accum_steps': 16,                       # Effective batch = 1 x 16 = 16
 
     # ── DataLoader Config ──
-    'train_num_workers': 2,                       # 1 worker overlaps video decoding (~1s) with GPU compute (~17s)
-    'train_prefetch_factor': 1,                   # Pre-load 1 batch ahead; reduced to lower pinned-memory pressure
+    'train_num_workers': 3,                       # 3 workers decode videos in parallel, maximising CPU-GPU overlap
+    'train_prefetch_factor': 2,                   # Pre-load 2 batches ahead (safe now that pin_memory is permanently off)
     'train_pin_memory': False,                     # Disabled — pinned memory caused CUDA OOM in pin_memory thread
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
@@ -190,7 +195,7 @@ CONFIG = {
     # ── Resuming ──
     'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': 195,               # None = latest, or specific step number
+    'resume_checkpoint_step': 450,               # None = latest, or specific step number
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -220,9 +225,52 @@ CONFIG = {
     # ── Runtime ──
     'wait_for_manual_start': False,               # Interactive safety gate before training loop starts
 
-    # ── Debug: save intermediate frames to disk ──
+    # ── Data Augmentation (video frames, training only) ──
+    'aug_temporal_jitter': True,
+    'aug_temporal_jitter_range': 2,           # Max frames to shift (±2)
+    'aug_temporal_jitter_prob': 0.4,
+
+    'aug_color_jitter': True,
+    'aug_color_jitter_prob': 0.5,             # Fires on half of clips
+    'aug_color_jitter_brightness': 0.25,
+    'aug_color_jitter_contrast': 0.25,
+    'aug_color_jitter_saturation': 0.2,       # Moderate swing
+    'aug_color_jitter_hue': 0.12,             # ±43° — covers green-screen variation without being extreme
+
+    'aug_random_grayscale': True,
+    'aug_random_grayscale_prob': 0.10,        # Forces shape/motion reliance over colour
+
+    'aug_gaussian_blur': True,
+    'aug_gaussian_blur_prob': 0.1,
+    'aug_gaussian_blur_kernel': (3, 3),
+
+    'aug_solarize': True,                     # Inverts pixels above threshold — extreme colour variety
+    'aug_solarize_prob': 0.07,
+    'aug_solarize_threshold': 190,            # 0–255; pixels above this get inverted
+
+    'aug_equalize': True,                     # Histogram equalisation — bridges studio vs natural lighting
+    'aug_equalize_prob': 0.12,
+
+    'aug_random_erasing': False,              # Randomly blacks out small patches — occlusion robustness
+    'aug_random_erasing_prob': 0.2,
+    'aug_random_erasing_scale': (0.02, 0.1), # Fraction of frame area erased
+    'aug_random_erasing_ratio': (0.3, 3.3),  # Aspect ratio of erased region
+
+    'aug_affine': True,                       # Small rotation + translation + scale — camera angle variation
+    'aug_affine_prob': 0.3,
+    'aug_affine_degrees': 8,                  # ±8° rotation
+    'aug_affine_translate': 0.05,             # ±5% of frame width/height
+    'aug_affine_scale_min': 0.95,             # 95%–105% zoom
+    'aug_affine_scale_max': 1.05,
+
+    'aug_speed_perturb': True,                # Simulate faster/slower signing by resampling frames
+    'aug_speed_perturb_prob': 0.4,
+    'aug_speed_perturb_min': 0.9,             # 0.9× = 10% slower (frames stretched)
+    'aug_speed_perturb_max': 1.1,             # 1.1× = 10% faster (frames compressed, tail padded)
+
+    # ── Debug: save augmented frames to disk ──
     'aug_debug_save_images': True,
-    'aug_debug_save_interval': 20,          # Save one frame every N optimiser steps
+    'aug_debug_save_interval': 10,          # Save one frame every N optimiser steps
     'aug_debug_save_dir': Path('..') / 'data' / 'debugging_images',
 }
 
@@ -319,6 +367,75 @@ class Qwen3VLCollator:
         self.config = config
         self.is_training = is_training
         self.debug_save_images = is_training and config.get('aug_debug_save_images', False)
+
+        # ── Build spatial augmentation transform (applied per-clip, training only) ──
+        # torchvision v2 applies the SAME random parameters to every frame in a
+        # (T, C, H, W) tensor — correct for video (no inter-frame spatial jitter).
+        if is_training:
+            aug_transforms = []
+            if config.get('aug_color_jitter', False):
+                aug_transforms.append(
+                    T_v2.RandomApply([
+                        T_v2.ColorJitter(
+                            brightness=config.get('aug_color_jitter_brightness', 0.3),
+                            contrast=config.get('aug_color_jitter_contrast', 0.3),
+                            saturation=config.get('aug_color_jitter_saturation', 0.2),
+                            hue=config.get('aug_color_jitter_hue', 0.05),
+                        )
+                    ], p=config.get('aug_color_jitter_prob', 0.5))
+                )
+            if config.get('aug_random_grayscale', False):
+                aug_transforms.append(
+                    T_v2.RandomGrayscale(p=config.get('aug_random_grayscale_prob', 0.1))
+                )
+            if config.get('aug_gaussian_blur', False):
+                kernel = config.get('aug_gaussian_blur_kernel', (5, 5))
+                aug_transforms.append(
+                    T_v2.RandomApply([
+                        T_v2.GaussianBlur(kernel_size=kernel)
+                    ], p=config.get('aug_gaussian_blur_prob', 0.2))
+                )
+            if config.get('aug_solarize', False):
+                aug_transforms.append(
+                    T_v2.RandomApply([
+                        T_v2.RandomSolarize(threshold=config.get('aug_solarize_threshold', 128))
+                    ], p=config.get('aug_solarize_prob', 0.1))
+                )
+            if config.get('aug_equalize', False):
+                aug_transforms.append(
+                    T_v2.RandomApply([
+                        T_v2.RandomEqualize()
+                    ], p=config.get('aug_equalize_prob', 0.15))
+                )
+            if config.get('aug_affine', False):
+                aug_transforms.append(
+                    T_v2.RandomApply([
+                        T_v2.RandomAffine(
+                            degrees=config.get('aug_affine_degrees', 8),
+                            translate=(
+                                config.get('aug_affine_translate', 0.05),
+                                config.get('aug_affine_translate', 0.05),
+                            ),
+                            scale=(
+                                config.get('aug_affine_scale_min', 0.95),
+                                config.get('aug_affine_scale_max', 1.05),
+                            ),
+                            fill=0,
+                        )
+                    ], p=config.get('aug_affine_prob', 0.3))
+                )
+            if config.get('aug_random_erasing', False):
+                aug_transforms.append(
+                    T_v2.RandomErasing(
+                        p=config.get('aug_random_erasing_prob', 0.2),
+                        scale=config.get('aug_random_erasing_scale', (0.02, 0.1)),
+                        ratio=config.get('aug_random_erasing_ratio', (0.3, 3.3)),
+                        value=0,
+                    )
+                )
+            self.aug_transform = T_v2.Compose(aug_transforms) if aug_transforms else None
+        else:
+            self.aug_transform = None
 
         # Pre-tokenize the assistant header to find it in input_ids for label masking
         # Qwen3-VL uses: <|im_start|>assistant\n
@@ -440,12 +557,75 @@ class Qwen3VLCollator:
             if video_kwargs:
                 all_video_kwargs.update(video_kwargs)
 
-        # Capture the first raw frame for debug saving (before processor converts to float tensors).
-        # all_videos[0] is a numpy array of shape (T, H, W, C) uint8.
+        # ── Data Augmentation (training only) ──
+        # Applied AFTER process_vision_info (frames decoded & resized to the Qwen3-VL
+        # pixel budget) but BEFORE the processor (which applies mean/std normalization).
+        # Each clip is augmented independently with freshly sampled random parameters.
+        # process_vision_info returns (T, C, H, W) torch.Tensor; we ensure uint8 for
+        # torchvision v2 transforms, then keep uint8 for the processor (which normalizes
+        # internally regardless of the input dtype).
+        if self.is_training and all_videos:
+            augmented = []
+            for vid in all_videos:
+                # Ensure torch.Tensor uint8 [0, 255] for T_v2 compatibility.
+                if not isinstance(vid, torch.Tensor):
+                    vid = torch.as_tensor(np.asarray(vid))
+                if vid.dtype != torch.uint8:
+                    if vid.max() <= 1.0 + 1e-6:
+                        vid = (vid * 255.0).clamp(0, 255).to(torch.uint8)
+                    else:
+                        vid = vid.clamp(0, 255).to(torch.uint8)
+
+                T = vid.shape[0]
+
+                # Speed perturbation: resample frames to simulate faster/slower signing.
+                # s > 1 → faster (subsample, pad tail); s < 1 → slower (upsample, truncate).
+                if (self.config.get('aug_speed_perturb', False)
+                        and random.random() < self.config.get('aug_speed_perturb_prob', 0.4)):
+                    s = random.uniform(
+                        self.config.get('aug_speed_perturb_min', 0.9),
+                        self.config.get('aug_speed_perturb_max', 1.1),
+                    )
+                    new_len = max(1, int(round(T / s)))
+                    indices = torch.linspace(0, T - 1, new_len).long()
+                    vid = vid[indices]
+                    if new_len < T:
+                        # Faster clip: fewer frames — pad tail with last frame
+                        pad = vid[-1:].expand(T - new_len, -1, -1, -1)
+                        vid = torch.cat([vid, pad], dim=0)
+                    else:
+                        # Slower clip: more frames — truncate back to T
+                        vid = vid[:T]
+
+                # Temporal jitter: shift sequence by ±max_shift frames, padding with black.
+                if (self.config.get('aug_temporal_jitter', False)
+                        and random.random() < self.config.get('aug_temporal_jitter_prob', 0.5)):
+                    max_shift = self.config.get('aug_temporal_jitter_range', 2)
+                    shift = random.randint(-max_shift, max_shift)
+                    if shift != 0:
+                        if shift > 0:
+                            # Shift right: black prefix, drop last `shift` frames
+                            pad = torch.zeros(shift, *vid.shape[1:], dtype=torch.uint8)
+                            vid = torch.cat([pad, vid[:-shift]], dim=0)
+                        else:
+                            # Shift left: drop first `|shift|` frames, black suffix
+                            pad = torch.zeros(-shift, *vid.shape[1:], dtype=torch.uint8)
+                            vid = torch.cat([vid[-shift:], pad], dim=0)
+
+                # Spatial augmentations (color, blur, affine, erasing, …)
+                # T_v2 applies the SAME random parameters to all T frames — correct for video.
+                if self.aug_transform is not None:
+                    vid = self.aug_transform(vid)
+
+                augmented.append(vid)
+            all_videos = augmented
+
+        # Capture one frame for debug saving AFTER augmentation.
+        # Shape is (C, H, W) uint8 from the first frame of the first clip.
         _debug_frame = None
         if self.debug_save_images and all_videos:
             try:
-                _debug_frame = all_videos[0][0]  # first frame of first video: (H, W, C) uint8
+                _debug_frame = all_videos[0][0]  # (C, H, W) uint8
             except Exception:
                 pass
 
@@ -1004,20 +1184,26 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                 # Compute loss with label smoothing (model's built-in loss ignores it).
                 # Shift logits/labels for causal LM: predict token t+1 from position t.
+                # Early deletion strategy: free the full logits tensor BEFORE creating the
+                # shifted copy so both never occupy VRAM simultaneously. At T≈2000 tokens and
+                # vocab=151,936, this saves ~600 MB peak VRAM per step.
                 if label_smoothing > 0.0:
                     logits = outputs.logits
-                    shift_logits = logits[..., :-1, :].contiguous()
-                    shift_labels = labels[..., 1:].contiguous()
+                    del outputs                                      # free wrapper; logits still holds data
+                    shift_logits = logits[:, :-1, :].contiguous()
+                    del logits                                       # free full copy; shift is all we need
+                    shift_labels = labels[:, 1:].contiguous()
+                    del labels
                     raw_loss = torch.nn.functional.cross_entropy(
                         shift_logits.view(-1, shift_logits.size(-1)),
                         shift_labels.view(-1),
                         ignore_index=-100,
                         label_smoothing=label_smoothing,
                     )
-                    del logits, shift_logits, shift_labels
+                    del shift_logits, shift_labels
                 else:
                     raw_loss = outputs.loss
-                del labels
+                    del outputs, labels
 
                 loss = raw_loss / actual_accum_steps
                 loss.backward()                         # dispatch backward immediately (no .item() sync before this)
@@ -1033,7 +1219,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 else:
                     epoch_loss_sum = epoch_loss_sum + raw_loss_detached
 
-                del outputs, batch_gpu, forward_inputs, raw_loss, raw_loss_detached, loss
+                del batch_gpu, forward_inputs, raw_loss, raw_loss_detached, loss  # outputs already deleted above
 
                 valid_microbatches_in_window += 1
 
@@ -1084,24 +1270,33 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 step_grad_norms.append(grad_norm)
                 window_raw_loss_sum = None
 
-                # ── Debug: save one frame from the processed video ──
+                # ── Debug: save one augmented frame ──
+                # _dbg_frame is (C, H, W) uint8 captured after augmentation in the collator.
                 if (_dbg_frame is not None
                         and global_step % train_config.get('aug_debug_save_interval', 500) == 0):
-                    _dbg_dir = Path(train_config.get('aug_debug_save_dir', '../data/debugging_images'))
-                    _dbg_dir.mkdir(parents=True, exist_ok=True)
-                    _dbg_np = _dbg_frame.cpu().numpy() if hasattr(_dbg_frame, 'cpu') else np.asarray(_dbg_frame)
-                    # Squeeze out any batch/time dimensions added by the collate fn
-                    while _dbg_np.ndim > 3:
-                        _dbg_np = _dbg_np[0]
-                    # Only save if we have a plausible image shape (H, W) or (H, W, C)
-                    if _dbg_np.ndim in (2, 3) and _dbg_np.shape[-1] in (1, 3, 4):
+                    try:
+                        _dbg_dir = Path(train_config.get('aug_debug_save_dir', '../data/debugging_images'))
+                        _dbg_dir.mkdir(parents=True, exist_ok=True)
+                        _dbg_np = _dbg_frame.cpu().numpy() if hasattr(_dbg_frame, 'cpu') else np.asarray(_dbg_frame)
+                        # Squeeze out any stray leading dimensions
+                        while _dbg_np.ndim > 3:
+                            _dbg_np = _dbg_np[0]
+                        # Transpose (C, H, W) → (H, W, C) for PIL
+                        if _dbg_np.ndim == 3 and _dbg_np.shape[0] in (1, 3, 4):
+                            _dbg_np = np.transpose(_dbg_np, (1, 2, 0))
+                        # Ensure uint8 [0, 255]
                         if _dbg_np.dtype != np.uint8:
+                            if _dbg_np.max() <= 1.0 + 1e-6:
+                                _dbg_np = _dbg_np * 255.0
                             _dbg_np = np.clip(_dbg_np, 0, 255).astype(np.uint8)
+                        # Squeeze single-channel to (H, W) for grayscale PIL
                         if _dbg_np.ndim == 3 and _dbg_np.shape[-1] == 1:
                             _dbg_np = _dbg_np[:, :, 0]
                         Image.fromarray(_dbg_np).save(
                             str(_dbg_dir / f"step_{global_step:07d}.jpg"), quality=90
                         )
+                    except Exception:
+                        pass  # Never let a debug save crash training
 
                 # ── Logging ──
                 if global_step % log_every == 0:
@@ -1378,6 +1573,18 @@ def main():
     print(f"    Save every             : {CONFIG['save_every_steps']} steps  |  Keep last: {CONFIG['keep_last_n_checkpoints']}")
     print(f"    Early stopping pat.    : {CONFIG['early_stopping_patience']} evals")
     print(f"    Checkpoint dir         : {CONFIG['checkpoint_dir'].resolve()}")
+
+    print("\n  [ DATA AUGMENTATION (training only) ]")
+    print(f"    Horizontal flip        : DISABLED  (sign language handedness is semantically meaningful)")
+    print(f"    Color jitter           : {'ON' if CONFIG['aug_color_jitter'] else 'OFF'}  (prob={CONFIG['aug_color_jitter_prob']}, b={CONFIG['aug_color_jitter_brightness']}, c={CONFIG['aug_color_jitter_contrast']}, s={CONFIG['aug_color_jitter_saturation']}, h={CONFIG['aug_color_jitter_hue']})")
+    print(f"    Random grayscale       : {'ON' if CONFIG['aug_random_grayscale'] else 'OFF'}  (prob={CONFIG['aug_random_grayscale_prob']})")
+    print(f"    Gaussian blur          : {'ON' if CONFIG['aug_gaussian_blur'] else 'OFF'}  (prob={CONFIG['aug_gaussian_blur_prob']}, kernel={CONFIG['aug_gaussian_blur_kernel']})")
+    print(f"    Solarize               : {'ON' if CONFIG['aug_solarize'] else 'OFF'}  (prob={CONFIG['aug_solarize_prob']}, threshold={CONFIG['aug_solarize_threshold']})")
+    print(f"    Equalize               : {'ON' if CONFIG['aug_equalize'] else 'OFF'}  (prob={CONFIG['aug_equalize_prob']})")
+    print(f"    Random erasing         : {'ON' if CONFIG['aug_random_erasing'] else 'OFF'}  (prob={CONFIG['aug_random_erasing_prob']}, scale={CONFIG['aug_random_erasing_scale']})")
+    print(f"    Affine                 : {'ON' if CONFIG['aug_affine'] else 'OFF'}  (prob={CONFIG['aug_affine_prob']}, deg=±{CONFIG['aug_affine_degrees']}, translate={CONFIG['aug_affine_translate']}, scale={CONFIG['aug_affine_scale_min']}–{CONFIG['aug_affine_scale_max']})")
+    print(f"    Temporal jitter        : {'ON' if CONFIG['aug_temporal_jitter'] else 'OFF'}  (prob={CONFIG['aug_temporal_jitter_prob']}, ±{CONFIG['aug_temporal_jitter_range']} frames)")
+    print(f"    Speed perturbation     : {'ON' if CONFIG['aug_speed_perturb'] else 'OFF'}  (prob={CONFIG['aug_speed_perturb_prob']}, range={CONFIG['aug_speed_perturb_min']}×–{CONFIG['aug_speed_perturb_max']}×)")
     print(f"    Debug image save       : {'ON' if CONFIG['aug_debug_save_images'] else 'OFF'}  (every {CONFIG['aug_debug_save_interval']} steps → {CONFIG['aug_debug_save_dir']})")
 
     print("\n  [ RESUME ]")

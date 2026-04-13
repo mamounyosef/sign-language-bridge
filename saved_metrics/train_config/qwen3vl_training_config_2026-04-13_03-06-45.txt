@@ -1,0 +1,616 @@
+
+========================================================================
+  QWEN3-VL TRAINING CONFIGURATION
+========================================================================
+
+  [ ENVIRONMENT ]
+    Date                   : 2026-04-13_03-06-45
+    Python                 : 3.12.0
+    PyTorch                : 2.10.0+cu128
+    Transformers           : 4.57.3
+    PEFT                   : 0.18.1
+    Bitsandbytes           : 0.48.2
+    SacreBLEU              : 2.6.0
+    CUDA                   : 12.8
+    cuDNN                  : 91002
+    GPU                    : NVIDIA GeForce RTX 4060
+    GPU VRAM               : 8.59 GB
+
+  [ DATA ]
+    Train TSV              : ..\data\2_dataset_train.tsv
+    Val TSV                : ..\data\2_dataset_val.tsv
+
+  [ MODEL ]
+    Model                  : Qwen/Qwen3-VL-2B-Instruct
+    Attention impl         : flash_attention_2
+    Precision              : bfloat16
+    QLoRA (4-bit)          : False
+
+  [ VIDEO PROCESSING ]
+    FPS                    : 18
+    Min pixels             : 4096
+    Max pixels             : 50176
+    Total pixels budget    : 20971520
+
+  [ PROMPTS ]
+    System                 : You are a sign language translator.
+    User                   : Translate this American Sign Language video into English.
+
+  [ LoRA ]
+    Rank / Alpha           : 16 / 32
+    Target modules (LM)    : q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj
+    Include vision encoder : False
+    Dropout                : 0.05
+    DoRA / RSLoRA          : False / True
+
+  [ TRAINING ]
+    Epochs                 : 3
+    Batch size             : 1  (effective: 16 with 16x accum)
+    Mixed precision        : bfloat16
+    Grad clip max_norm     : 1.0
+    Weight decay           : 0.01
+    Adam betas             : (0.9, 0.98)
+    8-bit AdamW            : True
+    Gradient checkpointing : True
+    Bucket batching        : True
+    Label smoothing        : 0.1
+    DataLoader workers     : 2 train / 1 val
+
+  [ LEARNING RATE ]
+    LR                     : 2.00e-05 -> 1.00e-06  (warmup: 100 steps)
+
+  [ EVALUATION & CHECKPOINTING ]
+    Eval every             : 200 steps  (warmup: 200 until step 1000)
+    Max eval batches       : 60
+    Max gen samples        : 100
+    Beam size              : 1  |  Length penalty: 1.0  |  No-repeat ngram: 3  |  Rep penalty: 1.1
+    Save every             : 15 steps  |  Keep last: 3
+    Early stopping pat.    : 12 evals
+    Checkpoint dir         : C:\My Projects\sign-language-bridge\checkpoints\qwen3vl
+    Debug image save       : ON  (every 20 steps → ..\data\debugging_images)
+
+  [ RESUME ]
+    Resume training        : True
+    Resume step            : 15
+
+  [ FULL CONFIG DUMP ]
+    data_train_tsv                : ..\data\2_dataset_train.tsv
+    data_val_tsv                  : ..\data\2_dataset_val.tsv
+    data_test_tsv                 : ..\data\2_dataset_test.tsv
+    tsv_sep                       : 	
+    model_name                    : Qwen/Qwen3-VL-2B-Instruct
+    attn_implementation           : flash_attention_2
+    dtype                         : bfloat16
+    use_qlora                     : False
+    bnb_4bit_compute_dtype        : bfloat16
+    bnb_4bit_quant_type           : nf4
+    bnb_4bit_use_double_quant     : True
+    video_fps                     : 18
+    video_min_pixels              : 4096
+    video_max_pixels              : 50176
+    video_total_pixels            : 20971520
+    system_prompt                 : You are a sign language translator.
+    user_prompt                   : Translate this American Sign Language video into English.
+    max_text_tokens               : 60
+    lora_r                        : 16
+    lora_alpha                    : 32
+    lora_target_modules           : ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj']
+    lora_include_vision           : False
+    lora_vision_targets           : ['qkv', 'proj', 'linear_fc1', 'linear_fc2']
+    lora_dropout                  : 0.05
+    lora_bias                     : none
+    lora_use_dora                 : False
+    lora_use_rslora               : True
+    num_epochs                    : 3
+    batch_size                    : 1
+    grad_accum_steps              : 16
+    train_num_workers             : 2
+    train_prefetch_factor         : 2
+    train_pin_memory              : True
+    train_persistent_workers      : True
+    val_num_workers               : 1
+    val_prefetch_factor           : 2
+    val_pin_memory                : False
+    val_persistent_workers        : False
+    learning_rate                 : 2e-05
+    min_lr                        : 1e-06
+    warmup_ratio                  : 0.03
+    warmup_steps                  : 100
+    weight_decay                  : 0.01
+    adam_betas                    : (0.9, 0.98)
+    max_grad_norm                 : 1.0
+    log_every_steps               : 1
+    train_log_file                : ..\saved_metrics\qwen3vl_train_log.csv
+    val_log_file                  : ..\saved_metrics\qwen3vl_val_log.csv
+    gen_samples_log_file          : ..\saved_metrics\qwen3vl_gen_samples_log.csv
+    tensorboard_dir               : ..\saved_metrics\tensorboard\qwen3vl_training
+    save_every_steps              : 15
+    keep_last_n_checkpoints       : 3
+    checkpoint_dir                : ..\checkpoints\qwen3vl
+    eval_every_steps              : 200
+    eval_every_steps_warmup       : 200
+    eval_warmup_threshold         : 1000
+    max_eval_batches              : 60
+    num_print_samples             : 5
+    val_gen_batch_size            : 1
+    max_generate_samples          : 100
+    val_beam_size                 : 1
+    val_length_penalty            : 1.0
+    val_no_repeat_ngram_size      : 3
+    val_repetition_penalty        : 1.1
+    val_max_new_tokens            : 60
+    early_stopping_patience       : 12
+    use_8bit_adam                 : True
+    use_gradient_checkpointing    : True
+    use_torch_compile             : False
+    torch_compile_mode            : default
+    resume_training               : True
+    load_best_model               : False
+    resume_checkpoint_step        : 15
+    lr_override                   : {'enabled': False, 'lr': 2e-05, 'eta_min': 1e-06}
+    use_bucket_batching           : True
+    label_smoothing               : 0.1
+    seed                          : 42
+    wait_for_manual_start         : False
+    aug_debug_save_images         : True
+    aug_debug_save_interval       : 20
+    aug_debug_save_dir            : ..\data\debugging_images
+
+========================================================================
+
+📂 Loading training data...
+Loading 2_dataset_train:   0%|                                                               | 0/57347 [00:00<?, ?it/s]Loading 2_dataset_train:  10%|████▉                                            | 5723/57347 [00:00<00:00, 56849.59it/s]Loading 2_dataset_train:  20%|█████████▊                                      | 11694/57347 [00:00<00:00, 58201.50it/s]Loading 2_dataset_train:  31%|██████████████▋                                 | 17536/57347 [00:00<00:00, 58279.37it/s]Loading 2_dataset_train:  41%|███████████████████▌                            | 23364/57347 [00:00<00:00, 55129.26it/s]Loading 2_dataset_train:  50%|████████████████████████▏                       | 28901/57347 [00:00<00:00, 54634.93it/s]Loading 2_dataset_train:  60%|████████████████████████████▊                   | 34379/57347 [00:00<00:00, 54457.48it/s]Loading 2_dataset_train:  70%|█████████████████████████████████▎              | 39860/57347 [00:00<00:00, 54567.20it/s]Loading 2_dataset_train:  79%|█████████████████████████████████████▉          | 45323/57347 [00:00<00:00, 53752.48it/s]Loading 2_dataset_train:  88%|██████████████████████████████████████████▍     | 50704/57347 [00:00<00:00, 50817.45it/s]Loading 2_dataset_train:  97%|██████████████████████████████████████████████▋ | 55817/57347 [00:01<00:00, 50403.92it/s]Loading 2_dataset_train: 100%|████████████████████████████████████████████████| 57347/57347 [00:01<00:00, 53250.38it/s]
+  ✓ Loaded 57347 samples (0 missing files)
+
+📂 Loading validation data...
+Loading 2_dataset_val:   0%|                                                                  | 0/1399 [00:00<?, ?it/s]Loading 2_dataset_val: 100%|████████████████████████████████████████████████████| 1399/1399 [00:00<00:00, 53806.66it/s]
+  ✓ Loaded 1399 samples (0 missing files)
+
+📦 Train dataset: 57347 samples
+📦 Val dataset:   1399 samples
+
+🧠 Loading model: Qwen/Qwen3-VL-2B-Instruct...
+  ✓ Using Flash Attention 2
+C:\Users\mamou\AppData\Roaming\Python\Python312\site-packages\transformers\modeling_utils.py:6105: UserWarning: expandable_segments not supported on this platform (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\c10/cuda/CUDAAllocatorConfig.h:39.)
+  _ = torch.empty(byte_count // factor, dtype=torch.float16, device=device, requires_grad=False)
+  Model loaded in 8.0s | VRAM: 4.26 GB
+
+Applying LoRA...
+
+🔄 Resuming from checkpoint: checkpoint_step_15
+  ✅ Resumed at step 15, epoch 1, best_val_loss: inf
+trainable params: 17,432,576 || all params: 2,144,964,608 || trainable%: 0.8127
+  Total parameters:     2,144,964,608
+  Trainable parameters: 17,432,576 (0.81%)
+  ✓ Gradient checkpointing enabled
+  VRAM after LoRA: 4.33 GB
+
+⚙️  Creating data loaders...
+  Using bucket batch sampling (57347 batches)
+  Train loader: 57347 micro-batches/epoch
+  Optimizer steps/epoch: 3585
+  Total optimizer steps: 10755
+
+⚙️  Setting up optimizer...
+  ✓ Using Paged 8-bit AdamW (bitsandbytes) — optimizer states page to CPU under VRAM pressure
+
+📈 LR Schedule:
+  Warmup: 100 steps | Cosine: 10655 steps
+  LR: 2.00e-05 -> 1.00e-06
+  ✅ Optimizer and scheduler state restored
+  ✅ RNG states restored
+  📋 CheckpointManager: found 1 existing checkpoint(s) (keep_last_n=3).
+
+🔍 Label masking verification (first training batch):
+qwen-vl-utils using decord to read video.
+  Ground truth: This is all the you know, take off on the idea of the acanthus leaf.
+  Decoded labels (non-masked): This is all the you know, take off on the idea of the acanthus leaf.
+
+  Total tokens: 2912 | Masked: 2891 | Unmasked: 21
+
+GPU: NVIDIA GeForce RTX 4060
+VRAM total: 8.59 GB
+  Trainable parameters for grad clipping: 17,432,576
+
+============================================================
+🚀 TRAINING STARTED
+============================================================
+
+  ⏭️  Resuming mid-epoch: skipping 240 micro-batches (sampler-level, no video decoding)
+================================================================================================================================================================
+[Step     16/10755] [Epoch  1/3] Train Loss: 5.6562 | Train PPL: 286.074 | LR: 3.2084e-06 | Grad Norm: 18.853 | Speed: 0.011 steps/s | VRAM: 4.380/9.338 GB | Elapsed: 15m 56s | ETA: 7d 10h 14m 49s
+================================================================================================================================================================
+[Step     17/10755] [Epoch  1/3] Train Loss: 5.4375 | Train PPL: 229.867 | LR: 3.4083e-06 | Grad Norm: 18.034 | Speed: 0.016 steps/s | VRAM: 4.380/9.338 GB | Elapsed: 16m 57s | ETA: 7d 10h 29m 14s
+================================================================================================================================================================
+[Step     18/10755] [Epoch  1/3] Train Loss: 5.4062 | Train PPL: 222.795 | LR: 3.6082e-06 | Grad Norm: 19.376 | Speed: 0.019 steps/s | VRAM: 4.380/9.338 GB | Elapsed: 17m 51s | ETA: 7d 9h 30m 22s
+================================================================================================================================================================
+[Step     19/10755] [Epoch  1/3] Train Loss: 5.3750 | Train PPL: 215.940 | LR: 3.8081e-06 | Grad Norm: 14.080 | Speed: 0.011 steps/s | VRAM: 4.380/9.582 GB | Elapsed: 19m 25s | ETA: 7d 14h 57m 23s
+================================================================================================================================================================
+[Step     20/10755] [Epoch  1/3] Train Loss: 5.4688 | Train PPL: 237.164 | LR: 4.0080e-06 | Grad Norm: 15.953 | Speed: 0.015 steps/s | VRAM: 4.380/9.582 GB | Elapsed: 20m 31s | ETA: 7d 15h 34m 50s
+================================================================================================================================================================
+[Step     21/10755] [Epoch  1/3] Train Loss: 5.2812 | Train PPL: 196.615 | LR: 4.2079e-06 | Grad Norm: 11.409 | Speed: 0.011 steps/s | VRAM: 4.380/9.582 GB | Elapsed: 22m 0s | ETA: 7d 19h 26m 40s
+================================================================================================================================================================
+[Step     22/10755] [Epoch  1/3] Train Loss: 4.9688 | Train PPL: 143.847 | LR: 4.4078e-06 | Grad Norm: 10.671 | Speed: 0.019 steps/s | VRAM: 4.380/9.582 GB | Elapsed: 22m 52s | ETA: 7d 18h 2m 47s
+================================================================================================================================================================
+[Step     23/10755] [Epoch  1/3] Train Loss: 4.9688 | Train PPL: 143.847 | LR: 4.6077e-06 | Grad Norm: 12.408 | Speed: 0.015 steps/s | VRAM: 4.380/9.582 GB | Elapsed: 23m 58s | ETA: 7d 18h 29m 25s
+================================================================================================================================================================
+[Step     24/10755] [Epoch  1/3] Train Loss: 5.0000 | Train PPL: 148.413 | LR: 4.8076e-06 | Grad Norm: 8.271 | Speed: 0.013 steps/s | VRAM: 4.380/9.582 GB | Elapsed: 25m 17s | ETA: 7d 20h 27m 25s
+================================================================================================================================================================
+[Step     25/10755] [Epoch  1/3] Train Loss: 5.3125 | Train PPL: 202.857 | LR: 5.0075e-06 | Grad Norm: 9.250 | Speed: 0.009 steps/s | VRAM: 4.380/9.582 GB | Elapsed: 27m 4s | ETA: 8d 1h 43m 48s
+================================================================================================================================================================
+[Step     26/10755] [Epoch  1/3] Train Loss: 5.0312 | Train PPL: 153.124 | LR: 5.2074e-06 | Grad Norm: 8.766 | Speed: 0.015 steps/s | VRAM: 4.380/9.582 GB | Elapsed: 28m 12s | ETA: 8d 2h 0m 16s
+================================================================================================================================================================
+[Step     27/10755] [Epoch  1/3] Train Loss: 4.8750 | Train PPL: 130.974 | LR: 5.4073e-06 | Grad Norm: 7.986 | Speed: 0.013 steps/s | VRAM: 4.380/9.582 GB | Elapsed: 29m 31s | ETA: 8d 3h 29m 50s
+================================================================================================================================================================
+[Step     28/10755] [Epoch  1/3] Train Loss: 4.9375 | Train PPL: 139.421 | LR: 5.6072e-06 | Grad Norm: 9.178 | Speed: 0.015 steps/s | VRAM: 4.380/9.639 GB | Elapsed: 30m 37s | ETA: 8d 3h 35m 46s
+================================================================================================================================================================
+[Step     29/10755] [Epoch  1/3] Train Loss: 4.9375 | Train PPL: 139.421 | LR: 5.8071e-06 | Grad Norm: 7.863 | Speed: 0.018 steps/s | VRAM: 4.380/9.639 GB | Elapsed: 31m 35s | ETA: 8d 2h 41m 58s
+================================================================================================================================================================
+[Step     30/10755] [Epoch  1/3] Train Loss: 4.8438 | Train PPL: 126.945 | LR: 6.0070e-06 | Grad Norm: 9.095 | Speed: 0.011 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 33m 2s | ETA: 8d 4h 50m 27s
+  💾 Saved periodic checkpoint: checkpoint_step_30
+================================================================================================================================================================
+[Step     31/10755] [Epoch  1/3] Train Loss: 5.0000 | Train PPL: 148.413 | LR: 6.2069e-06 | Grad Norm: 10.930 | Speed: 0.013 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 34m 20s | ETA: 8d 6h 0m 4s
+================================================================================================================================================================
+[Step     32/10755] [Epoch  1/3] Train Loss: 5.3125 | Train PPL: 202.857 | LR: 6.4068e-06 | Grad Norm: 10.122 | Speed: 0.013 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 35m 40s | ETA: 8d 7h 12m 2s
+================================================================================================================================================================
+[Step     33/10755] [Epoch  1/3] Train Loss: 4.6875 | Train PPL: 108.581 | LR: 6.6067e-06 | Grad Norm: 17.173 | Speed: 0.017 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 36m 39s | ETA: 8d 6h 28m 15s
+================================================================================================================================================================
+[Step     34/10755] [Epoch  1/3] Train Loss: 4.9688 | Train PPL: 143.847 | LR: 6.8066e-06 | Grad Norm: 9.989 | Speed: 0.011 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 38m 13s | ETA: 8d 8h 53m 24s
+================================================================================================================================================================
+[Step     35/10755] [Epoch  1/3] Train Loss: 5.0938 | Train PPL: 163.000 | LR: 7.0065e-06 | Grad Norm: 8.699 | Speed: 0.011 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 39m 41s | ETA: 8d 10h 37m 58s
+================================================================================================================================================================
+[Step     36/10755] [Epoch  1/3] Train Loss: 4.9375 | Train PPL: 139.421 | LR: 7.2064e-06 | Grad Norm: 5.977 | Speed: 0.013 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 41m 0s | ETA: 8d 11h 29m 8s
+================================================================================================================================================================
+[Step     37/10755] [Epoch  1/3] Train Loss: 5.0000 | Train PPL: 148.413 | LR: 7.4063e-06 | Grad Norm: 6.730 | Speed: 0.021 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 41m 48s | ETA: 8d 9h 49m 15s
+================================================================================================================================================================
+[Step     38/10755] [Epoch  1/3] Train Loss: 4.9062 | Train PPL: 135.132 | LR: 7.6062e-06 | Grad Norm: 6.065 | Speed: 0.010 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 43m 27s | ETA: 8d 12h 15m 32s
+================================================================================================================================================================
+[Step     39/10755] [Epoch  1/3] Train Loss: 4.9062 | Train PPL: 135.132 | LR: 7.8061e-06 | Grad Norm: 5.202 | Speed: 0.010 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 45m 12s | ETA: 8d 15h 0m 28s
+================================================================================================================================================================
+[Step     40/10755] [Epoch  1/3] Train Loss: 5.0625 | Train PPL: 157.985 | LR: 8.0060e-06 | Grad Norm: 6.216 | Speed: 0.016 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 46m 14s | ETA: 8d 14h 24m 56s
+================================================================================================================================================================
+[Step     41/10755] [Epoch  1/3] Train Loss: 5.0938 | Train PPL: 163.000 | LR: 8.2059e-06 | Grad Norm: 6.640 | Speed: 0.017 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 47m 13s | ETA: 8d 13h 40m 25s
+================================================================================================================================================================
+[Step     42/10755] [Epoch  1/3] Train Loss: 4.6875 | Train PPL: 108.581 | LR: 8.4058e-06 | Grad Norm: 5.296 | Speed: 0.013 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 48m 31s | ETA: 8d 14h 18m 38s
+================================================================================================================================================================
+[Step     43/10755] [Epoch  1/3] Train Loss: 4.8750 | Train PPL: 130.974 | LR: 8.6057e-06 | Grad Norm: 5.291 | Speed: 0.010 steps/s | VRAM: 4.380/9.701 GB | Elapsed: 50m 10s | ETA: 8d 16h 19m 14s
+================================================================================================================================================================
+[Step     44/10755] [Epoch  1/3] Train Loss: 4.6250 | Train PPL: 102.003 | LR: 8.8056e-06 | Grad Norm: 5.239 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 52m 22s | ETA: 8d 20h 30m 4s
+================================================================================================================================================================
+[Step     45/10755] [Epoch  1/3] Train Loss: 4.5938 | Train PPL: 98.864 | LR: 9.0055e-06 | Grad Norm: 5.010 | Speed: 0.015 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 53m 29s | ETA: 8d 20h 9m 3s
+  💾 Saved periodic checkpoint: checkpoint_step_45
+================================================================================================================================================================
+[Step     46/10755] [Epoch  1/3] Train Loss: 4.5625 | Train PPL: 95.823 | LR: 9.2054e-06 | Grad Norm: 4.692 | Speed: 0.018 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 54m 24s | ETA: 8d 19h 7m 47s
+================================================================================================================================================================
+[Step     47/10755] [Epoch  1/3] Train Loss: 4.5000 | Train PPL: 90.017 | LR: 9.4053e-06 | Grad Norm: 4.564 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 55m 54s | ETA: 8d 20h 17m 17s
+================================================================================================================================================================
+[Step     48/10755] [Epoch  1/3] Train Loss: 4.5312 | Train PPL: 92.875 | LR: 9.6052e-06 | Grad Norm: 4.360 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 57m 54s | ETA: 8d 23h 17m 28s
+================================================================================================================================================================
+[Step     49/10755] [Epoch  1/3] Train Loss: 4.5312 | Train PPL: 92.875 | LR: 9.8051e-06 | Grad Norm: 5.542 | Speed: 0.017 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 58m 53s | ETA: 8d 22h 25m 28s
+================================================================================================================================================================
+[Step     50/10755] [Epoch  1/3] Train Loss: 4.6250 | Train PPL: 102.003 | LR: 1.0005e-05 | Grad Norm: 4.747 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 0m 8s | ETA: 8d 22h 38m 3s
+================================================================================================================================================================
+[Step     51/10755] [Epoch  1/3] Train Loss: 4.6250 | Train PPL: 102.003 | LR: 1.0205e-05 | Grad Norm: 4.365 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 1m 22s | ETA: 8d 22h 42m 3s
+================================================================================================================================================================
+[Step     52/10755] [Epoch  1/3] Train Loss: 4.5625 | Train PPL: 95.823 | LR: 1.0405e-05 | Grad Norm: 4.617 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 2m 59s | ETA: 9d 0h 3m 41s
+================================================================================================================================================================
+[Step     53/10755] [Epoch  1/3] Train Loss: 4.5938 | Train PPL: 98.864 | LR: 1.0605e-05 | Grad Norm: 5.266 | Speed: 0.018 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 3m 53s | ETA: 8d 23h 2m 11s
+================================================================================================================================================================
+[Step     54/10755] [Epoch  1/3] Train Loss: 4.5312 | Train PPL: 92.875 | LR: 1.0805e-05 | Grad Norm: 5.324 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 5m 44s | ETA: 9d 1h 6m 49s
+================================================================================================================================================================
+[Step     55/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.1005e-05 | Grad Norm: 4.609 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 7m 44s | ETA: 9d 3h 39m 29s
+================================================================================================================================================================
+[Step     56/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.1204e-05 | Grad Norm: 5.968 | Speed: 0.018 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 8m 40s | ETA: 9d 2h 40m 22s
+================================================================================================================================================================
+[Step     57/10755] [Epoch  1/3] Train Loss: 4.6562 | Train PPL: 105.241 | LR: 1.1404e-05 | Grad Norm: 5.106 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 10m 12s | ETA: 9d 3h 37m 25s
+================================================================================================================================================================
+[Step     58/10755] [Epoch  1/3] Train Loss: 4.3750 | Train PPL: 79.440 | LR: 1.1604e-05 | Grad Norm: 5.091 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 11m 46s | ETA: 9d 4h 36m 26s
+================================================================================================================================================================
+[Step     59/10755] [Epoch  1/3] Train Loss: 4.4062 | Train PPL: 81.962 | LR: 1.1804e-05 | Grad Norm: 4.828 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 13m 28s | ETA: 9d 6h 0m 14s
+================================================================================================================================================================
+[Step     60/10755] [Epoch  1/3] Train Loss: 4.5625 | Train PPL: 95.823 | LR: 1.2004e-05 | Grad Norm: 4.876 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 15m 12s | ETA: 9d 7h 24m 33s
+  💾 Saved periodic checkpoint: checkpoint_step_60
+  🗑️  Evicted old checkpoint: checkpoint_step_15
+================================================================================================================================================================
+[Step     61/10755] [Epoch  1/3] Train Loss: 4.4375 | Train PPL: 84.563 | LR: 1.2204e-05 | Grad Norm: 4.328 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 16m 41s | ETA: 9d 8h 5m 56s
+================================================================================================================================================================
+[Step     62/10755] [Epoch  1/3] Train Loss: 4.4375 | Train PPL: 84.563 | LR: 1.2404e-05 | Grad Norm: 4.570 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 18m 26s | ETA: 9d 9h 29m 57s
+================================================================================================================================================================
+[Step     63/10755] [Epoch  1/3] Train Loss: 4.5938 | Train PPL: 98.864 | LR: 1.2604e-05 | Grad Norm: 4.479 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 19m 50s | ETA: 9d 9h 49m 41s
+================================================================================================================================================================
+[Step     64/10755] [Epoch  1/3] Train Loss: 4.4688 | Train PPL: 87.248 | LR: 1.2804e-05 | Grad Norm: 4.296 | Speed: 0.017 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 20m 49s | ETA: 9d 9h 1m 35s
+================================================================================================================================================================
+[Step     65/10755] [Epoch  1/3] Train Loss: 4.3438 | Train PPL: 76.996 | LR: 1.3004e-05 | Grad Norm: 5.106 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 21m 58s | ETA: 9d 8h 42m 8s
+================================================================================================================================================================
+[Step     66/10755] [Epoch  1/3] Train Loss: 4.6875 | Train PPL: 108.581 | LR: 1.3203e-05 | Grad Norm: 5.305 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 23m 13s | ETA: 9d 8h 39m 11s
+================================================================================================================================================================
+[Step     67/10755] [Epoch  1/3] Train Loss: 4.5312 | Train PPL: 92.875 | LR: 1.3403e-05 | Grad Norm: 4.608 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 24m 55s | ETA: 9d 9h 47m 15s
+================================================================================================================================================================
+[Step     68/10755] [Epoch  1/3] Train Loss: 4.5312 | Train PPL: 92.875 | LR: 1.3603e-05 | Grad Norm: 5.069 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 26m 24s | ETA: 9d 10h 20m 17s
+================================================================================================================================================================
+[Step     69/10755] [Epoch  1/3] Train Loss: 4.5000 | Train PPL: 90.017 | LR: 1.3803e-05 | Grad Norm: 4.848 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 28m 37s | ETA: 9d 12h 44m 38s
+================================================================================================================================================================
+[Step     70/10755] [Epoch  1/3] Train Loss: 4.3750 | Train PPL: 79.440 | LR: 1.4003e-05 | Grad Norm: 4.760 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 29m 54s | ETA: 9d 12h 44m 19s
+================================================================================================================================================================
+[Step     71/10755] [Epoch  1/3] Train Loss: 4.0625 | Train PPL: 58.119 | LR: 1.4203e-05 | Grad Norm: 4.754 | Speed: 0.015 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 31m 2s | ETA: 9d 12h 18m 35s
+================================================================================================================================================================
+[Step     72/10755] [Epoch  1/3] Train Loss: 4.6875 | Train PPL: 108.581 | LR: 1.4403e-05 | Grad Norm: 4.771 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 32m 33s | ETA: 9d 12h 53m 0s
+================================================================================================================================================================
+[Step     73/10755] [Epoch  1/3] Train Loss: 4.2812 | Train PPL: 72.331 | LR: 1.4603e-05 | Grad Norm: 4.992 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 34m 20s | ETA: 9d 14h 5m 18s
+================================================================================================================================================================
+[Step     74/10755] [Epoch  1/3] Train Loss: 4.6875 | Train PPL: 108.581 | LR: 1.4803e-05 | Grad Norm: 5.010 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 35m 34s | ETA: 9d 13h 55m 30s
+================================================================================================================================================================
+[Step     75/10755] [Epoch  1/3] Train Loss: 4.5312 | Train PPL: 92.875 | LR: 1.5003e-05 | Grad Norm: 5.633 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 37m 8s | ETA: 9d 14h 33m 34s
+  💾 Saved periodic checkpoint: checkpoint_step_75
+  🗑️  Evicted old checkpoint: checkpoint_step_30
+================================================================================================================================================================
+[Step     76/10755] [Epoch  1/3] Train Loss: 4.4688 | Train PPL: 87.248 | LR: 1.5202e-05 | Grad Norm: 5.008 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 38m 24s | ETA: 9d 14h 27m 43s
+================================================================================================================================================================
+[Step     77/10755] [Epoch  1/3] Train Loss: 4.4062 | Train PPL: 81.962 | LR: 1.5402e-05 | Grad Norm: 5.489 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 39m 48s | ETA: 9d 14h 41m 41s
+================================================================================================================================================================
+[Step     78/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.5602e-05 | Grad Norm: 4.681 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 41m 1s | ETA: 9d 14h 28m 50s
+================================================================================================================================================================
+[Step     79/10755] [Epoch  1/3] Train Loss: 4.4375 | Train PPL: 84.563 | LR: 1.5802e-05 | Grad Norm: 5.313 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 42m 22s | ETA: 9d 14h 34m 1s
+================================================================================================================================================================
+[Step     80/10755] [Epoch  1/3] Train Loss: 4.2188 | Train PPL: 67.948 | LR: 1.6002e-05 | Grad Norm: 4.714 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 44m 11s | ETA: 9d 15h 44m 4s
+================================================================================================================================================================
+[Step     81/10755] [Epoch  1/3] Train Loss: 4.7188 | Train PPL: 112.028 | LR: 1.6202e-05 | Grad Norm: 4.996 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 45m 38s | ETA: 9d 16h 0m 35s
+================================================================================================================================================================
+[Step     82/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.6402e-05 | Grad Norm: 5.212 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 47m 2s | ETA: 9d 16h 12m 5s
+================================================================================================================================================================
+[Step     83/10755] [Epoch  1/3] Train Loss: 4.2812 | Train PPL: 72.331 | LR: 1.6602e-05 | Grad Norm: 4.964 | Speed: 0.015 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 48m 7s | ETA: 9d 15h 41m 41s
+================================================================================================================================================================
+[Step     84/10755] [Epoch  1/3] Train Loss: 4.3438 | Train PPL: 76.996 | LR: 1.6802e-05 | Grad Norm: 4.341 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 49m 30s | ETA: 9d 15h 51m 17s
+================================================================================================================================================================
+[Step     85/10755] [Epoch  1/3] Train Loss: 4.4062 | Train PPL: 81.962 | LR: 1.7002e-05 | Grad Norm: 5.681 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 51m 22s | ETA: 9d 17h 0m 41s
+================================================================================================================================================================
+[Step     86/10755] [Epoch  1/3] Train Loss: 4.1562 | Train PPL: 63.832 | LR: 1.7201e-05 | Grad Norm: 5.404 | Speed: 0.016 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 52m 26s | ETA: 9d 16h 29m 29s
+================================================================================================================================================================
+[Step     87/10755] [Epoch  1/3] Train Loss: 4.5625 | Train PPL: 95.823 | LR: 1.7401e-05 | Grad Norm: 6.117 | Speed: 0.020 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 53m 17s | ETA: 9d 15h 32m 27s
+================================================================================================================================================================
+[Step     88/10755] [Epoch  1/3] Train Loss: 4.5625 | Train PPL: 95.823 | LR: 1.7601e-05 | Grad Norm: 5.397 | Speed: 0.015 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 54m 26s | ETA: 9d 15h 11m 57s
+================================================================================================================================================================
+[Step     89/10755] [Epoch  1/3] Train Loss: 4.5312 | Train PPL: 92.875 | LR: 1.7801e-05 | Grad Norm: 4.357 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 56m 23s | ETA: 9d 16h 28m 40s
+================================================================================================================================================================
+[Step     90/10755] [Epoch  1/3] Train Loss: 4.5938 | Train PPL: 98.864 | LR: 1.8001e-05 | Grad Norm: 5.226 | Speed: 0.017 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 57m 23s | ETA: 9d 15h 51m 1s
+  💾 Saved periodic checkpoint: checkpoint_step_90
+  🗑️  Evicted old checkpoint: checkpoint_step_45
+================================================================================================================================================================
+[Step     91/10755] [Epoch  1/3] Train Loss: 4.5000 | Train PPL: 90.017 | LR: 1.8201e-05 | Grad Norm: 5.125 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 1h 59m 7s | ETA: 9d 16h 39m 28s
+================================================================================================================================================================
+[Step     92/10755] [Epoch  1/3] Train Loss: 4.1250 | Train PPL: 61.868 | LR: 1.8401e-05 | Grad Norm: 5.246 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 0m 27s | ETA: 9d 16h 40m 34s
+================================================================================================================================================================
+[Step     93/10755] [Epoch  1/3] Train Loss: 4.1250 | Train PPL: 61.868 | LR: 1.8601e-05 | Grad Norm: 5.314 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 1m 48s | ETA: 9d 16h 44m 55s
+================================================================================================================================================================
+[Step     94/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.8801e-05 | Grad Norm: 5.625 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 2m 58s | ETA: 9d 16h 26m 23s
+================================================================================================================================================================
+[Step     95/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 1.9001e-05 | Grad Norm: 5.060 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 4m 11s | ETA: 9d 16h 15m 42s
+================================================================================================================================================================
+[Step     96/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 1.9200e-05 | Grad Norm: 5.995 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 5m 43s | ETA: 9d 16h 39m 49s
+================================================================================================================================================================
+[Step     97/10755] [Epoch  1/3] Train Loss: 3.9531 | Train PPL: 52.098 | LR: 1.9400e-05 | Grad Norm: 5.196 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 7m 3s | ETA: 9d 16h 40m 49s
+================================================================================================================================================================
+[Step     98/10755] [Epoch  1/3] Train Loss: 3.9219 | Train PPL: 50.495 | LR: 1.9600e-05 | Grad Norm: 5.244 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 8m 21s | ETA: 9d 16h 38m 30s
+================================================================================================================================================================
+[Step     99/10755] [Epoch  1/3] Train Loss: 4.4375 | Train PPL: 84.563 | LR: 1.9800e-05 | Grad Norm: 6.024 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 10m 17s | ETA: 9d 17h 44m 23s
+================================================================================================================================================================
+[Step    100/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 2.0000e-05 | Grad Norm: 5.476 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 11m 37s | ETA: 9d 17h 44m 17s
+================================================================================================================================================================
+[Step    101/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 2.0000e-05 | Grad Norm: 5.845 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 13m 3s | ETA: 9d 17h 56m 6s
+================================================================================================================================================================
+[Step    102/10755] [Epoch  1/3] Train Loss: 4.4062 | Train PPL: 81.962 | LR: 2.0000e-05 | Grad Norm: 5.393 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 14m 15s | ETA: 9d 17h 41m 28s
+================================================================================================================================================================
+[Step    103/10755] [Epoch  1/3] Train Loss: 4.2812 | Train PPL: 72.331 | LR: 2.0000e-05 | Grad Norm: 5.890 | Speed: 0.018 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 15m 10s | ETA: 9d 17h 0m 16s
+================================================================================================================================================================
+[Step    104/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 2.0000e-05 | Grad Norm: 4.708 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 17m 9s | ETA: 9d 18h 6m 12s
+================================================================================================================================================================
+[Step    105/10755] [Epoch  1/3] Train Loss: 4.1875 | Train PPL: 65.858 | LR: 2.0000e-05 | Grad Norm: 5.007 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 19m 11s | ETA: 9d 19h 18m 34s
+  💾 Saved periodic checkpoint: checkpoint_step_105
+  🗑️  Evicted old checkpoint: checkpoint_step_60
+================================================================================================================================================================
+[Step    106/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 2.0000e-05 | Grad Norm: 5.601 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 21m 14s | ETA: 9d 20h 29m 40s
+================================================================================================================================================================
+[Step    107/10755] [Epoch  1/3] Train Loss: 4.5000 | Train PPL: 90.017 | LR: 2.0000e-05 | Grad Norm: 5.105 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 22m 43s | ETA: 9d 20h 43m 42s
+================================================================================================================================================================
+[Step    108/10755] [Epoch  1/3] Train Loss: 4.1250 | Train PPL: 61.868 | LR: 2.0000e-05 | Grad Norm: 4.745 | Speed: 0.007 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 25m 8s | ETA: 9d 22h 28m 2s
+================================================================================================================================================================
+[Step    109/10755] [Epoch  1/3] Train Loss: 4.0625 | Train PPL: 58.119 | LR: 2.0000e-05 | Grad Norm: 5.082 | Speed: 0.015 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 26m 16s | ETA: 9d 22h 6m 37s
+================================================================================================================================================================
+[Step    110/10755] [Epoch  1/3] Train Loss: 4.5625 | Train PPL: 95.823 | LR: 2.0000e-05 | Grad Norm: 5.658 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 28m 25s | ETA: 9d 23h 23m 59s
+================================================================================================================================================================
+[Step    111/10755] [Epoch  1/3] Train Loss: 4.1250 | Train PPL: 61.868 | LR: 2.0000e-05 | Grad Norm: 5.586 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 30m 12s | ETA: 10d 0h 2m 59s
+================================================================================================================================================================
+[Step    112/10755] [Epoch  1/3] Train Loss: 4.0312 | Train PPL: 56.331 | LR: 2.0000e-05 | Grad Norm: 5.878 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 31m 36s | ETA: 10d 0h 6m 22s
+================================================================================================================================================================
+[Step    113/10755] [Epoch  1/3] Train Loss: 4.0000 | Train PPL: 54.598 | LR: 2.0000e-05 | Grad Norm: 5.999 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 32m 55s | ETA: 10d 0h 1m 48s
+================================================================================================================================================================
+[Step    114/10755] [Epoch  1/3] Train Loss: 4.0625 | Train PPL: 58.119 | LR: 2.0000e-05 | Grad Norm: 5.807 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 34m 15s | ETA: 9d 23h 59m 11s
+================================================================================================================================================================
+[Step    115/10755] [Epoch  1/3] Train Loss: 4.1562 | Train PPL: 63.832 | LR: 2.0000e-05 | Grad Norm: 6.370 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 36m 12s | ETA: 10d 0h 52m 36s
+================================================================================================================================================================
+[Step    116/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 2.0000e-05 | Grad Norm: 5.319 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 38m 13s | ETA: 10d 1h 51m 26s
+================================================================================================================================================================
+[Step    117/10755] [Epoch  1/3] Train Loss: 4.4375 | Train PPL: 84.563 | LR: 2.0000e-05 | Grad Norm: 5.832 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 39m 45s | ETA: 10d 2h 5m 25s
+================================================================================================================================================================
+[Step    118/10755] [Epoch  1/3] Train Loss: 4.4688 | Train PPL: 87.248 | LR: 2.0000e-05 | Grad Norm: 5.992 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 41m 19s | ETA: 10d 2h 21m 56s
+================================================================================================================================================================
+[Step    119/10755] [Epoch  1/3] Train Loss: 3.9688 | Train PPL: 52.918 | LR: 2.0000e-05 | Grad Norm: 5.672 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 42m 32s | ETA: 10d 2h 7m 57s
+================================================================================================================================================================
+[Step    120/10755] [Epoch  1/3] Train Loss: 3.9688 | Train PPL: 52.918 | LR: 2.0000e-05 | Grad Norm: 5.628 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 43m 52s | ETA: 10d 2h 3m 17s
+  💾 Saved periodic checkpoint: checkpoint_step_120
+  🗑️  Evicted old checkpoint: checkpoint_step_75
+================================================================================================================================================================
+[Step    121/10755] [Epoch  1/3] Train Loss: 4.3438 | Train PPL: 76.996 | LR: 2.0000e-05 | Grad Norm: 5.077 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 45m 35s | ETA: 10d 2h 33m 24s
+================================================================================================================================================================
+[Step    122/10755] [Epoch  1/3] Train Loss: 3.8281 | Train PPL: 45.976 | LR: 2.0000e-05 | Grad Norm: 5.980 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 47m 3s | ETA: 10d 2h 40m 23s
+================================================================================================================================================================
+[Step    123/10755] [Epoch  1/3] Train Loss: 4.0312 | Train PPL: 56.331 | LR: 2.0000e-05 | Grad Norm: 5.432 | Speed: 0.017 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 48m 3s | ETA: 10d 2h 6m 30s
+================================================================================================================================================================
+[Step    124/10755] [Epoch  1/3] Train Loss: 4.3438 | Train PPL: 76.996 | LR: 2.0000e-05 | Grad Norm: 5.488 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 49m 17s | ETA: 10d 1h 54m 44s
+================================================================================================================================================================
+[Step    125/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 2.0000e-05 | Grad Norm: 7.178 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 50m 50s | ETA: 10d 2h 7m 46s
+================================================================================================================================================================
+[Step    126/10755] [Epoch  1/3] Train Loss: 4.2188 | Train PPL: 67.948 | LR: 2.0000e-05 | Grad Norm: 6.749 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 52m 1s | ETA: 10d 1h 51m 44s
+================================================================================================================================================================
+[Step    127/10755] [Epoch  1/3] Train Loss: 4.3750 | Train PPL: 79.440 | LR: 2.0000e-05 | Grad Norm: 8.113 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 53m 41s | ETA: 10d 2h 15m 27s
+================================================================================================================================================================
+[Step    128/10755] [Epoch  1/3] Train Loss: 4.1875 | Train PPL: 65.858 | LR: 2.0000e-05 | Grad Norm: 6.031 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 54m 56s | ETA: 10d 2h 4m 11s
+================================================================================================================================================================
+[Step    129/10755] [Epoch  1/3] Train Loss: 4.4375 | Train PPL: 84.563 | LR: 2.0000e-05 | Grad Norm: 5.506 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 56m 24s | ETA: 10d 2h 10m 53s
+================================================================================================================================================================
+[Step    130/10755] [Epoch  1/3] Train Loss: 4.2812 | Train PPL: 72.331 | LR: 2.0000e-05 | Grad Norm: 6.000 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 58m 8s | ETA: 10d 2h 39m 10s
+================================================================================================================================================================
+[Step    131/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 2.0000e-05 | Grad Norm: 5.768 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 2h 59m 25s | ETA: 10d 2h 31m 13s
+================================================================================================================================================================
+[Step    132/10755] [Epoch  1/3] Train Loss: 4.2188 | Train PPL: 67.948 | LR: 2.0000e-05 | Grad Norm: 5.774 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 1m 4s | ETA: 10d 2h 52m 29s
+================================================================================================================================================================
+[Step    133/10755] [Epoch  1/3] Train Loss: 4.1562 | Train PPL: 63.832 | LR: 2.0000e-05 | Grad Norm: 6.432 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 2m 33s | ETA: 10d 3h 0m 18s
+================================================================================================================================================================
+[Step    134/10755] [Epoch  1/3] Train Loss: 4.0938 | Train PPL: 59.964 | LR: 2.0000e-05 | Grad Norm: 4.755 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 4m 17s | ETA: 10d 3h 26m 46s
+================================================================================================================================================================
+[Step    135/10755] [Epoch  1/3] Train Loss: 4.3438 | Train PPL: 76.996 | LR: 1.9999e-05 | Grad Norm: 5.245 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 5m 50s | ETA: 10d 3h 39m 22s
+  💾 Saved periodic checkpoint: checkpoint_step_135
+  🗑️  Evicted old checkpoint: checkpoint_step_90
+================================================================================================================================================================
+[Step    136/10755] [Epoch  1/3] Train Loss: 4.1562 | Train PPL: 63.832 | LR: 1.9999e-05 | Grad Norm: 5.536 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 7m 13s | ETA: 10d 3h 39m 2s
+================================================================================================================================================================
+[Step    137/10755] [Epoch  1/3] Train Loss: 4.2188 | Train PPL: 67.948 | LR: 1.9999e-05 | Grad Norm: 5.806 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 8m 29s | ETA: 10d 3h 28m 17s
+================================================================================================================================================================
+[Step    138/10755] [Epoch  1/3] Train Loss: 4.2812 | Train PPL: 72.331 | LR: 1.9999e-05 | Grad Norm: 7.015 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 9m 41s | ETA: 10d 3h 13m 15s
+================================================================================================================================================================
+[Step    139/10755] [Epoch  1/3] Train Loss: 4.3750 | Train PPL: 79.440 | LR: 1.9999e-05 | Grad Norm: 5.664 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 11m 40s | ETA: 10d 3h 59m 17s
+================================================================================================================================================================
+[Step    140/10755] [Epoch  1/3] Train Loss: 4.1875 | Train PPL: 65.858 | LR: 1.9999e-05 | Grad Norm: 5.905 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 13m 10s | ETA: 10d 4h 6m 51s
+================================================================================================================================================================
+[Step    141/10755] [Epoch  1/3] Train Loss: 4.2188 | Train PPL: 67.948 | LR: 1.9999e-05 | Grad Norm: 6.310 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 14m 59s | ETA: 10d 4h 37m 54s
+================================================================================================================================================================
+[Step    142/10755] [Epoch  1/3] Train Loss: 4.2812 | Train PPL: 72.331 | LR: 1.9999e-05 | Grad Norm: 7.759 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 16m 18s | ETA: 10d 4h 32m 15s
+================================================================================================================================================================
+[Step    143/10755] [Epoch  1/3] Train Loss: 4.0938 | Train PPL: 59.964 | LR: 1.9999e-05 | Grad Norm: 5.055 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 17m 56s | ETA: 10d 4h 48m 52s
+================================================================================================================================================================
+[Step    144/10755] [Epoch  1/3] Train Loss: 3.5781 | Train PPL: 35.806 | LR: 1.9999e-05 | Grad Norm: 6.426 | Speed: 0.027 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 18m 33s | ETA: 10d 3h 51m 1s
+================================================================================================================================================================
+[Step    145/10755] [Epoch  1/3] Train Loss: 4.4062 | Train PPL: 81.962 | LR: 1.9999e-05 | Grad Norm: 6.638 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 19m 45s | ETA: 10d 3h 37m 6s
+================================================================================================================================================================
+[Step    146/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 1.9999e-05 | Grad Norm: 6.600 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 20m 55s | ETA: 10d 3h 20m 20s
+================================================================================================================================================================
+[Step    147/10755] [Epoch  1/3] Train Loss: 4.3438 | Train PPL: 76.996 | LR: 1.9999e-05 | Grad Norm: 6.150 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 23m 0s | ETA: 10d 4h 9m 32s
+================================================================================================================================================================
+[Step    148/10755] [Epoch  1/3] Train Loss: 3.9375 | Train PPL: 51.290 | LR: 1.9999e-05 | Grad Norm: 5.155 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 24m 55s | ETA: 10d 4h 46m 30s
+================================================================================================================================================================
+[Step    149/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 1.9999e-05 | Grad Norm: 4.807 | Speed: 0.015 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 26m 1s | ETA: 10d 4h 25m 28s
+================================================================================================================================================================
+[Step    150/10755] [Epoch  1/3] Train Loss: 4.1875 | Train PPL: 65.858 | LR: 1.9999e-05 | Grad Norm: 5.309 | Speed: 0.020 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 26m 51s | ETA: 10d 3h 45m 21s
+  💾 Saved periodic checkpoint: checkpoint_step_150
+  🗑️  Evicted old checkpoint: checkpoint_step_105
+================================================================================================================================================================
+[Step    151/10755] [Epoch  1/3] Train Loss: 3.9062 | Train PPL: 49.712 | LR: 1.9999e-05 | Grad Norm: 10.808 | Speed: 0.019 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 27m 44s | ETA: 10d 3h 9m 13s
+================================================================================================================================================================
+[Step    152/10755] [Epoch  1/3] Train Loss: 4.1250 | Train PPL: 61.868 | LR: 1.9999e-05 | Grad Norm: 5.221 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 29m 23s | ETA: 10d 3h 26m 3s
+================================================================================================================================================================
+[Step    153/10755] [Epoch  1/3] Train Loss: 4.0000 | Train PPL: 54.598 | LR: 1.9999e-05 | Grad Norm: 6.061 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 30m 47s | ETA: 10d 3h 26m 9s
+================================================================================================================================================================
+[Step    154/10755] [Epoch  1/3] Train Loss: 4.1562 | Train PPL: 63.832 | LR: 1.9999e-05 | Grad Norm: 8.625 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 32m 16s | ETA: 10d 3h 32m 15s
+================================================================================================================================================================
+[Step    155/10755] [Epoch  1/3] Train Loss: 4.0000 | Train PPL: 54.598 | LR: 1.9999e-05 | Grad Norm: 4.661 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 33m 43s | ETA: 10d 3h 36m 22s
+================================================================================================================================================================
+[Step    156/10755] [Epoch  1/3] Train Loss: 3.7031 | Train PPL: 40.574 | LR: 1.9999e-05 | Grad Norm: 6.495 | Speed: 0.019 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 34m 36s | ETA: 10d 3h 0m 45s
+================================================================================================================================================================
+[Step    157/10755] [Epoch  1/3] Train Loss: 3.7812 | Train PPL: 43.871 | LR: 1.9999e-05 | Grad Norm: 5.720 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 36m 10s | ETA: 10d 3h 13m 0s
+================================================================================================================================================================
+[Step    158/10755] [Epoch  1/3] Train Loss: 3.7188 | Train PPL: 41.213 | LR: 1.9999e-05 | Grad Norm: 5.849 | Speed: 0.017 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 37m 9s | ETA: 10d 2h 44m 22s
+================================================================================================================================================================
+[Step    159/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.9999e-05 | Grad Norm: 5.230 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 38m 53s | ETA: 10d 3h 6m 48s
+================================================================================================================================================================
+[Step    160/10755] [Epoch  1/3] Train Loss: 4.4688 | Train PPL: 87.248 | LR: 1.9999e-05 | Grad Norm: 6.943 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 40m 25s | ETA: 10d 3h 16m 33s
+================================================================================================================================================================
+[Step    161/10755] [Epoch  1/3] Train Loss: 4.1250 | Train PPL: 61.868 | LR: 1.9998e-05 | Grad Norm: 5.551 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 42m 1s | ETA: 10d 3h 29m 42s
+================================================================================================================================================================
+[Step    162/10755] [Epoch  1/3] Train Loss: 4.0312 | Train PPL: 56.331 | LR: 1.9998e-05 | Grad Norm: 7.321 | Speed: 0.019 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 42m 54s | ETA: 10d 2h 56m 0s
+================================================================================================================================================================
+[Step    163/10755] [Epoch  1/3] Train Loss: 4.0938 | Train PPL: 59.964 | LR: 1.9998e-05 | Grad Norm: 11.737 | Speed: 0.020 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 43m 45s | ETA: 10d 2h 20m 14s
+================================================================================================================================================================
+[Step    164/10755] [Epoch  1/3] Train Loss: 4.0000 | Train PPL: 54.598 | LR: 1.9998e-05 | Grad Norm: 6.387 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 45m 6s | ETA: 10d 2h 17m 0s
+================================================================================================================================================================
+[Step    165/10755] [Epoch  1/3] Train Loss: 4.4375 | Train PPL: 84.563 | LR: 1.9998e-05 | Grad Norm: 7.328 | Speed: 0.016 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 46m 10s | ETA: 10d 1h 56m 31s
+  💾 Saved periodic checkpoint: checkpoint_step_165
+  🗑️  Evicted old checkpoint: checkpoint_step_120
+================================================================================================================================================================
+[Step    166/10755] [Epoch  1/3] Train Loss: 4.2188 | Train PPL: 67.948 | LR: 1.9998e-05 | Grad Norm: 6.180 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 47m 34s | ETA: 10d 1h 56m 24s
+================================================================================================================================================================
+[Step    167/10755] [Epoch  1/3] Train Loss: 4.5312 | Train PPL: 92.875 | LR: 1.9998e-05 | Grad Norm: 5.473 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 49m 8s | ETA: 10d 2h 7m 23s
+================================================================================================================================================================
+[Step    168/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.9998e-05 | Grad Norm: 5.660 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 51m 5s | ETA: 10d 2h 43m 0s
+================================================================================================================================================================
+[Step    169/10755] [Epoch  1/3] Train Loss: 3.9062 | Train PPL: 49.712 | LR: 1.9998e-05 | Grad Norm: 9.819 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 52m 38s | ETA: 10d 2h 52m 38s
+================================================================================================================================================================
+[Step    170/10755] [Epoch  1/3] Train Loss: 4.3438 | Train PPL: 76.996 | LR: 1.9998e-05 | Grad Norm: 5.378 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 54m 29s | ETA: 10d 3h 20m 41s
+================================================================================================================================================================
+[Step    171/10755] [Epoch  1/3] Train Loss: 3.9688 | Train PPL: 52.918 | LR: 1.9998e-05 | Grad Norm: 6.162 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 55m 56s | ETA: 10d 3h 23m 52s
+================================================================================================================================================================
+[Step    172/10755] [Epoch  1/3] Train Loss: 3.9688 | Train PPL: 52.918 | LR: 1.9998e-05 | Grad Norm: 6.766 | Speed: 0.016 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 57m 0s | ETA: 10d 3h 3m 14s
+================================================================================================================================================================
+[Step    173/10755] [Epoch  1/3] Train Loss: 3.8438 | Train PPL: 46.700 | LR: 1.9998e-05 | Grad Norm: 7.314 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 58m 19s | ETA: 10d 2h 57m 40s
+================================================================================================================================================================
+[Step    174/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.9998e-05 | Grad Norm: 6.141 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 3h 59m 37s | ETA: 10d 2h 51m 19s
+================================================================================================================================================================
+[Step    175/10755] [Epoch  1/3] Train Loss: 4.1875 | Train PPL: 65.858 | LR: 1.9998e-05 | Grad Norm: 6.342 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 1m 29s | ETA: 10d 3h 19m 32s
+================================================================================================================================================================
+[Step    176/10755] [Epoch  1/3] Train Loss: 4.0625 | Train PPL: 58.119 | LR: 1.9998e-05 | Grad Norm: 4.953 | Speed: 0.009 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 3m 22s | ETA: 10d 3h 48m 49s
+================================================================================================================================================================
+[Step    177/10755] [Epoch  1/3] Train Loss: 4.4062 | Train PPL: 81.962 | LR: 1.9998e-05 | Grad Norm: 6.884 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 4m 54s | ETA: 10d 3h 56m 16s
+================================================================================================================================================================
+[Step    178/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 1.9997e-05 | Grad Norm: 5.122 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 6m 9s | ETA: 10d 3h 47m 22s
+================================================================================================================================================================
+[Step    179/10755] [Epoch  1/3] Train Loss: 3.5938 | Train PPL: 36.370 | LR: 1.9997e-05 | Grad Norm: 5.799 | Speed: 0.011 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 7m 40s | ETA: 10d 3h 53m 32s
+================================================================================================================================================================
+[Step    180/10755] [Epoch  1/3] Train Loss: 4.3125 | Train PPL: 74.627 | LR: 1.9997e-05 | Grad Norm: 5.501 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 8m 57s | ETA: 10d 3h 46m 39s
+  💾 Saved periodic checkpoint: checkpoint_step_180
+  🗑️  Evicted old checkpoint: checkpoint_step_135
+================================================================================================================================================================
+[Step    181/10755] [Epoch  1/3] Train Loss: 3.8906 | Train PPL: 48.941 | LR: 1.9997e-05 | Grad Norm: 7.097 | Speed: 0.008 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 11m 4s | ETA: 10d 4h 28m 5s
+================================================================================================================================================================
+[Step    182/10755] [Epoch  1/3] Train Loss: 3.6562 | Train PPL: 38.716 | LR: 1.9997e-05 | Grad Norm: 6.870 | Speed: 0.015 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 12m 11s | ETA: 10d 4h 10m 25s
+================================================================================================================================================================
+[Step    183/10755] [Epoch  1/3] Train Loss: 4.1875 | Train PPL: 65.858 | LR: 1.9997e-05 | Grad Norm: 7.465 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 13m 24s | ETA: 10d 3h 59m 24s
+================================================================================================================================================================
+[Step    184/10755] [Epoch  1/3] Train Loss: 4.5000 | Train PPL: 90.017 | LR: 1.9997e-05 | Grad Norm: 6.290 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 14m 42s | ETA: 10d 3h 53m 13s
+================================================================================================================================================================
+[Step    185/10755] [Epoch  1/3] Train Loss: 3.7969 | Train PPL: 44.562 | LR: 1.9997e-05 | Grad Norm: 8.372 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 15m 55s | ETA: 10d 3h 42m 0s
+================================================================================================================================================================
+[Step    186/10755] [Epoch  1/3] Train Loss: 4.0625 | Train PPL: 58.119 | LR: 1.9997e-05 | Grad Norm: 5.921 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 17m 34s | ETA: 10d 3h 55m 59s
+================================================================================================================================================================
+[Step    187/10755] [Epoch  1/3] Train Loss: 3.9844 | Train PPL: 53.752 | LR: 1.9997e-05 | Grad Norm: 6.098 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 19m 16s | ETA: 10d 4h 12m 6s
+================================================================================================================================================================
+[Step    188/10755] [Epoch  1/3] Train Loss: 4.1562 | Train PPL: 63.832 | LR: 1.9997e-05 | Grad Norm: 5.454 | Speed: 0.010 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 20m 56s | ETA: 10d 4h 26m 47s
+================================================================================================================================================================
+[Step    189/10755] [Epoch  1/3] Train Loss: 3.9531 | Train PPL: 52.098 | LR: 1.9997e-05 | Grad Norm: 5.823 | Speed: 0.013 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 22m 15s | ETA: 10d 4h 21m 20s
+================================================================================================================================================================
+[Step    190/10755] [Epoch  1/3] Train Loss: 3.9531 | Train PPL: 52.098 | LR: 1.9997e-05 | Grad Norm: 6.709 | Speed: 0.015 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 23m 22s | ETA: 10d 4h 4m 52s
+================================================================================================================================================================
+[Step    191/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 1.9997e-05 | Grad Norm: 5.827 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 24m 48s | ETA: 10d 4h 6m 19s
+================================================================================================================================================================
+[Step    192/10755] [Epoch  1/3] Train Loss: 3.9844 | Train PPL: 53.752 | LR: 1.9997e-05 | Grad Norm: 6.508 | Speed: 0.015 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 25m 57s | ETA: 10d 3h 51m 33s
+================================================================================================================================================================
+[Step    193/10755] [Epoch  1/3] Train Loss: 4.0625 | Train PPL: 58.119 | LR: 1.9996e-05 | Grad Norm: 5.440 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 27m 8s | ETA: 10d 3h 39m 31s
+================================================================================================================================================================
+[Step    194/10755] [Epoch  1/3] Train Loss: 4.2500 | Train PPL: 70.105 | LR: 1.9996e-05 | Grad Norm: 8.392 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 28m 31s | ETA: 10d 3h 37m 42s
+================================================================================================================================================================
+[Step    195/10755] [Epoch  1/3] Train Loss: 4.1562 | Train PPL: 63.832 | LR: 1.9996e-05 | Grad Norm: 5.658 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 29m 53s | ETA: 10d 3h 36m 0s
+  💾 Saved periodic checkpoint: checkpoint_step_195
+  🗑️  Evicted old checkpoint: checkpoint_step_150
+================================================================================================================================================================
+[Step    196/10755] [Epoch  1/3] Train Loss: 4.1875 | Train PPL: 65.858 | LR: 1.9996e-05 | Grad Norm: 6.675 | Speed: 0.016 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 30m 57s | ETA: 10d 3h 17m 12s
+================================================================================================================================================================
+[Step    197/10755] [Epoch  1/3] Train Loss: 4.2188 | Train PPL: 67.948 | LR: 1.9996e-05 | Grad Norm: 5.615 | Speed: 0.007 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 33m 29s | ETA: 10d 4h 17m 50s
+================================================================================================================================================================
+[Step    198/10755] [Epoch  1/3] Train Loss: 3.9688 | Train PPL: 52.918 | LR: 1.9996e-05 | Grad Norm: 5.373 | Speed: 0.012 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 34m 49s | ETA: 10d 4h 13m 33s
+================================================================================================================================================================
+[Step    199/10755] [Epoch  1/3] Train Loss: 4.0312 | Train PPL: 56.331 | LR: 1.9996e-05 | Grad Norm: 8.756 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 36m 0s | ETA: 10d 4h 1m 5s
+================================================================================================================================================================
+[Step    200/10755] [Epoch  1/3] Train Loss: 4.1875 | Train PPL: 65.858 | LR: 1.9996e-05 | Grad Norm: 6.747 | Speed: 0.014 steps/s | VRAM: 4.380/10.012 GB | Elapsed: 4h 37m 10s | ETA: 10d 3h 48m 17s
+
+────────────────────────────────────────────────────────────
+  📊 Validation @ Step 200 / Epoch 1
+────────────────────────────────────────────────────────────
+  Val loss:   0%|                                     | 0/60 [00:00<?, ?batch/s]  Val loss:   2%|▍                            | 1/60 [00:39<39:17, 39.96s/batch]  Val loss:   3%|▉                            | 2/60 [00:40<16:09, 16.72s/batch]  Val loss:   5%|█▍                           | 3/60 [00:58<16:19, 17.18s/batch]  Val loss:   7%|█▉                           | 4/60 [00:58<09:54, 10.62s/batch]  Val loss:   8%|██▍                          | 5/60 [01:01<07:09,  7.81s/batch]  Val loss:  10%|██▉                          | 6/60 [01:12<07:58,  8.86s/batch]  Val loss:  12%|███▍                         | 7/60 [01:19<07:26,  8.42s/batch]  Val loss:  13%|███▊                         | 8/60 [01:20<05:07,  5.91s/batch]  Val loss:  15%|████▎                        | 9/60 [01:23<04:21,  5.12s/batch]  Val loss:  17%|████▋                       | 10/60 [01:25<03:22,  4.05s/batch]  Val loss:  18%|█████▏                      | 11/60 [01:27<02:40,  3.28s/batch]  Val loss:  20%|█████▌                      | 12/60 [01:32<03:09,  3.94s/batch]  Val loss:  22%|██████                      | 13/60 [01:35<02:57,  3.77s/batch]  Val loss:  23%|██████▌                     | 14/60 [01:45<04:11,  5.46s/batch]  Val loss:  25%|███████                     | 15/60 [01:47<03:18,  4.42s/batch]  Val loss:  27%|███████▍                    | 16/60 [01:53<03:43,  5.08s/batch]  Val loss:  28%|███████▉                    | 17/60 [01:55<02:56,  4.10s/batch]  Val loss:  30%|████████▍                   | 18/60 [01:58<02:32,  3.64s/batch]  Val loss:  32%|████████▊                   | 19/60 [02:01<02:19,  3.40s/batch]  Val loss:  33%|█████████▎                  | 20/60 [02:02<01:50,  2.77s/batch]  Val loss:  35%|█████████▊                  | 21/60 [02:02<01:20,  2.07s/batch]  Val loss:  37%|██████████▎                 | 22/60 [02:19<04:10,  6.60s/batch]  Val loss:  38%|██████████▋                 | 23/60 [02:23<03:24,  5.54s/batch]  Val loss:  40%|███████████▏                | 24/60 [02:25<02:51,  4.76s/batch]  Val loss:  42%|███████████▋                | 25/60 [02:28<02:23,  4.10s/batch]  Val loss:  43%|████████████▏               | 26/60 [02:30<01:56,  3.42s/batch]  Val loss:  45%|████████████▌               | 27/60 [02:32<01:44,  3.17s/batch]  Val loss:  47%|█████████████               | 28/60 [02:41<02:29,  4.67s/batch]  Val loss:  48%|█████████████▌              | 29/60 [02:44<02:12,  4.28s/batch]  Val loss:  50%|██████████████              | 30/60 [02:45<01:37,  3.24s/batch]  Val loss:  52%|██████████████▍             | 31/60 [02:46<01:18,  2.72s/batch]  Val loss:  53%|██████████████▉             | 32/60 [02:56<02:11,  4.71s/batch]  Val loss:  55%|███████████████▍            | 33/60 [03:02<02:22,  5.28s/batch]  Val loss:  57%|███████████████▊            | 34/60 [03:23<04:14,  9.80s/batch]  Val loss:  58%|████████████████▎           | 35/60 [03:23<02:56,  7.06s/batch]  Val loss:  60%|████████████████▊           | 36/60 [03:32<03:01,  7.55s/batch]  Val loss:  62%|█████████████████▎          | 37/60 [03:34<02:12,  5.75s/batch]  Val loss:  63%|█████████████████▋          | 38/60 [03:34<01:32,  4.21s/batch]  Val loss:  65%|██████████████████▏         | 39/60 [03:43<01:56,  5.55s/batch]  Val loss:  67%|██████████████████▋         | 40/60 [04:00<03:01,  9.05s/batch]  Val loss:  68%|███████████████████▏        | 41/60 [04:06<02:31,  7.97s/batch]  Val loss:  70%|███████████████████▌        | 42/60 [04:06<01:42,  5.71s/batch]  Val loss:  72%|████████████████████        | 43/60 [04:06<01:10,  4.12s/batch]  Val loss:  73%|████████████████████▌       | 44/60 [04:09<01:00,  3.77s/batch]  Val loss:  75%|█████████████████████       | 45/60 [04:18<01:16,  5.13s/batch]  Val loss:  77%|█████████████████████▍      | 46/60 [04:19<00:56,  4.05s/batch]  Val loss:  78%|█████████████████████▉      | 47/60 [04:20<00:39,  3.03s/batch]  Val loss:  80%|██████████████████████▍     | 48/60 [04:20<00:26,  2.24s/batch]  Val loss:  82%|██████████████████████▊     | 49/60 [04:22<00:22,  2.03s/batch]  Val loss:  83%|███████████████████████▎    | 50/60 [04:24<00:22,  2.20s/batch]  Val loss:  85%|███████████████████████▊    | 51/60 [04:26<00:19,  2.14s/batch]  Val loss:  87%|████████████████████████▎   | 52/60 [04:31<00:23,  2.90s/batch]  Val loss:  88%|████████████████████████▋   | 53/60 [04:32<00:15,  2.17s/batch]  Val loss:  90%|█████████████████████████▏  | 54/60 [04:39<00:22,  3.76s/batch]  Val loss:  92%|█████████████████████████▋  | 55/60 [04:46<00:24,  4.87s/batch]  Val loss:  93%|██████████████████████████▏ | 56/60 [04:47<00:14,  3.54s/batch]  Val loss:  95%|██████████████████████████▌ | 57/60 [04:47<00:07,  2.60s/batch]  Val loss:  97%|███████████████████████████ | 58/60 [04:58<00:10,  5.04s/batch]  Val loss:  98%|███████████████████████████▌| 59/60 [05:08<00:06,  6.61s/batch]  Val loss: 100%|████████████████████████████| 60/60 [05:09<00:00,  4.77s/batch]                                                                                  Val gen :   0%|                                   | 0/100 [00:00<?, ?sample/s]  Val gen :   1%|▎                          | 1/100 [00:10<16:36, 10.06s/sample]  Val gen :   2%|▌                          | 2/100 [00:25<21:38, 13.25s/sample]  Val gen :   3%|▊                          | 3/100 [00:40<22:43, 14.05s/sample]  Val gen :   4%|█                          | 4/100 [00:41<14:14,  8.91s/sample]  Val gen :   5%|█▎                         | 5/100 [00:54<16:34, 10.47s/sample]  Val gen :   6%|█▌                         | 6/100 [01:09<18:26, 11.77s/sample]  Val gen :   7%|█▉                         | 7/100 [01:20<18:09, 11.72s/sample]  Val gen :   8%|██▏                        | 8/100 [01:22<13:05,  8.54s/sample]  Val gen :   9%|██▍                        | 9/100 [01:27<11:27,  7.55s/sample]  Val gen :  10%|██▌                       | 10/100 [01:31<09:34,  6.38s/sample]  Val gen :  11%|██▊                       | 11/100 [01:37<09:02,  6.09s/sample]  Val gen :  12%|███                       | 12/100 [01:58<15:38, 10.67s/sample]  Val gen :  13%|███▍                      | 13/100 [02:10<16:13, 11.19s/sample]  Val gen :  14%|███▋                      | 14/100 [02:31<20:14, 14.12s/sample]  Val gen :  15%|███▉                      | 15/100 [02:41<18:04, 12.75s/sample]  Val gen :  16%|████▏                     | 16/100 [02:43<13:22,  9.55s/sample]  Val gen :  17%|████▍                     | 17/100 [02:57<15:11, 10.99s/sample]  Val gen :  18%|████▋                     | 18/100 [03:05<13:50, 10.13s/sample]  Val gen :  19%|████▉                     | 19/100 [03:21<16:02, 11.89s/sample]  Val gen :  20%|█████▏                    | 20/100 [03:23<12:00,  9.01s/sample]  Val gen :  21%|█████▍                    | 21/100 [03:45<16:41, 12.67s/sample]  Val gen :  22%|█████▋                    | 22/100 [03:46<11:57,  9.20s/sample]  Val gen :  23%|█████▉                    | 23/100 [03:53<11:02,  8.61s/sample]  Val gen :  24%|██████▏                   | 24/100 [04:14<15:31, 12.25s/sample]  Val gen :  25%|██████▌                   | 25/100 [04:26<15:22, 12.29s/sample]  Val gen :  26%|██████▊                   | 26/100 [04:40<15:56, 12.93s/sample]  Val gen :  27%|███████                   | 27/100 [04:41<11:20,  9.32s/sample]  Val gen :  28%|███████▎                  | 28/100 [04:55<12:44, 10.61s/sample]  Val gen :  29%|███████▌                  | 29/100 [05:00<10:36,  8.97s/sample]  Val gen :  30%|███████▊                  | 30/100 [05:07<09:41,  8.31s/sample]  Val gen :  31%|████████                  | 31/100 [05:33<15:32, 13.51s/sample]  Val gen :  32%|████████▎                 | 32/100 [05:34<11:13,  9.91s/sample]  Val gen :  33%|████████▌                 | 33/100 [05:37<08:47,  7.87s/sample]  Val gen :  34%|████████▊                 | 34/100 [05:52<11:05, 10.09s/sample]  Val gen :  35%|█████████                 | 35/100 [05:59<09:39,  8.92s/sample]  Val gen :  36%|█████████▎                | 36/100 [06:01<07:24,  6.94s/sample]  Val gen :  37%|█████████▌                | 37/100 [06:19<10:39, 10.16s/sample]  Val gen :  38%|█████████▉                | 38/100 [06:30<10:47, 10.44s/sample]  Val gen :  39%|██████████▏               | 39/100 [06:33<08:19,  8.19s/sample]  Val gen :  40%|██████████▍               | 40/100 [06:39<07:38,  7.64s/sample]  Val gen :  41%|██████████▋               | 41/100 [06:44<06:35,  6.70s/sample]  Val gen :  42%|██████████▉               | 42/100 [07:09<11:50, 12.25s/sample]  Val gen :  43%|███████████▏              | 43/100 [07:15<09:58, 10.51s/sample]  Val gen :  44%|███████████▍              | 44/100 [07:17<07:21,  7.89s/sample]  Val gen :  45%|███████████▋              | 45/100 [07:32<09:12, 10.05s/sample]  Val gen :  46%|███████████▉              | 46/100 [07:41<08:49,  9.80s/sample]  Val gen :  47%|████████████▏             | 47/100 [07:48<07:48,  8.84s/sample]  Val gen :  48%|████████████▍             | 48/100 [07:50<05:50,  6.74s/sample]  Val gen :  49%|████████████▋             | 49/100 [07:58<06:09,  7.24s/sample]  Val gen :  50%|█████████████             | 50/100 [08:14<08:13,  9.88s/sample]  Val gen :  51%|█████████████▎            | 51/100 [08:18<06:36,  8.08s/sample]  Val gen :  52%|█████████████▌            | 52/100 [08:25<06:05,  7.61s/sample]  Val gen :  53%|█████████████▊            | 53/100 [08:30<05:21,  6.83s/sample]  Val gen :  54%|██████████████            | 54/100 [08:31<03:53,  5.08s/sample]  Val gen :  55%|██████████████▎           | 55/100 [08:33<03:12,  4.28s/sample]  Val gen :  56%|██████████████▌           | 56/100 [08:34<02:19,  3.18s/sample]  Val gen :  57%|██████████████▊           | 57/100 [08:40<03:02,  4.24s/sample]  Val gen :  58%|███████████████           | 58/100 [08:59<05:57,  8.50s/sample]  Val gen :  59%|███████████████▎          | 59/100 [09:05<05:20,  7.83s/sample]  Val gen :  60%|███████████████▌          | 60/100 [09:22<07:04, 10.60s/sample]  Val gen :  61%|███████████████▊          | 61/100 [09:23<04:59,  7.67s/sample]  Val gen :  62%|████████████████          | 62/100 [09:34<05:33,  8.77s/sample]  Val gen :  63%|████████████████▍         | 63/100 [09:37<04:21,  7.07s/sample]  Val gen :  64%|████████████████▋         | 64/100 [09:53<05:50,  9.73s/sample]  Val gen :  65%|████████████████▉         | 65/100 [09:56<04:29,  7.69s/sample]  Val gen :  66%|█████████████████▏        | 66/100 [09:58<03:17,  5.82s/sample]  Val gen :  67%|█████████████████▍        | 67/100 [09:59<02:24,  4.39s/sample]  Val gen :  68%|█████████████████▋        | 68/100 [10:10<03:23,  6.36s/sample]  Val gen :  69%|█████████████████▉        | 69/100 [10:11<02:27,  4.76s/sample]  Val gen :  70%|██████████████████▏       | 70/100 [10:19<02:58,  5.95s/sample]  Val gen :  71%|██████████████████▍       | 71/100 [10:20<02:09,  4.47s/sample]  Val gen :  72%|██████████████████▋       | 72/100 [10:27<02:26,  5.23s/sample]  Val gen :  73%|██████████████████▉       | 73/100 [10:43<03:44,  8.31s/sample]  Val gen :  74%|███████████████████▏      | 74/100 [10:53<03:52,  8.95s/sample]  Val gen :  75%|███████████████████▌      | 75/100 [11:02<03:44,  8.97s/sample]  Val gen :  76%|███████████████████▊      | 76/100 [11:18<04:24, 11.03s/sample]  Val gen :  77%|████████████████████      | 77/100 [11:19<03:01,  7.91s/sample]  Val gen :  78%|████████████████████▎     | 78/100 [11:28<03:03,  8.32s/sample]  Val gen :  79%|████████████████████▌     | 79/100 [11:50<04:18, 12.30s/sample]  Val gen :  80%|████████████████████▊     | 80/100 [11:58<03:40, 11.04s/sample]  Val gen :  81%|█████████████████████     | 81/100 [12:08<03:25, 10.80s/sample]  Val gen :  82%|█████████████████████▎    | 82/100 [12:16<02:58,  9.89s/sample]  Val gen :  83%|█████████████████████▌    | 83/100 [12:20<02:19,  8.23s/sample]  Val gen :  84%|█████████████████████▊    | 84/100 [12:24<01:49,  6.84s/sample]  Val gen :  85%|██████████████████████    | 85/100 [12:43<02:36, 10.46s/sample]  Val gen :  86%|██████████████████████▎   | 86/100 [12:48<02:03,  8.82s/sample]  Val gen :  87%|██████████████████████▌   | 87/100 [12:54<01:43,  7.94s/sample]  Val gen :  88%|██████████████████████▉   | 88/100 [13:17<02:31, 12.65s/sample]  Val gen :  89%|███████████████████████▏  | 89/100 [13:33<02:29, 13.61s/sample]  Val gen :  90%|███████████████████████▍  | 90/100 [13:57<02:46, 16.64s/sample]  Val gen :  91%|███████████████████████▋  | 91/100 [14:09<02:18, 15.36s/sample]  Val gen :  92%|███████████████████████▉  | 92/100 [14:18<01:48, 13.52s/sample]  Val gen :  93%|████████████████████████▏ | 93/100 [14:33<01:37, 13.90s/sample]  Val gen :  94%|████████████████████████▍ | 94/100 [14:49<01:27, 14.51s/sample]  Val gen :  95%|████████████████████████▋ | 95/100 [15:05<01:14, 14.96s/sample]  Val gen :  96%|████████████████████████▉ | 96/100 [15:09<00:46, 11.52s/sample]  Val gen :  97%|█████████████████████████▏| 97/100 [15:16<00:31, 10.36s/sample]  Val gen :  98%|█████████████████████████▍| 98/100 [15:37<00:26, 13.41s/sample]  Val gen :  99%|█████████████████████████▋| 99/100 [15:46<00:12, 12.24s/sample]  Val gen : 100%|█████████████████████████| 100/100 [15:50<00:00,  9.72s/sample]                                                                                
