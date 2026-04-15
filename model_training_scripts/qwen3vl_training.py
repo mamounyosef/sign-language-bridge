@@ -95,15 +95,15 @@ CONFIG = {
     'dtype': 'bfloat16',                         # Model weights precision
 
     # ── Quantization (QLoRA) ──
-    'use_qlora': False,                           # True = 4-bit quantized base model
+    'use_qlora': True,                            # True = 4-bit quantized base model
     'bnb_4bit_compute_dtype': 'bfloat16',
     'bnb_4bit_quant_type': 'nf4',
     'bnb_4bit_use_double_quant': True,
 
     # ── Video Processing ──
-    'video_fps': 18,                              # Frames per second to sample (18 minimum for sign language)
+    'video_fps': 18,                              # Frames per second to sample
     'video_min_pixels': 4 * 32 * 32,              # Min visual tokens per frame pair (~4 tokens)
-    'video_max_pixels': 64 * 32 * 32,             # Max visual tokens per frame pair (64 = 256x256 at patch_size=16, merge=2)
+    'video_max_pixels': 49 * 32 * 32,             # Max visual tokens per frame pair (49 = 224*224 at patch_size=16, merge=2)
     'video_total_pixels': 20480 * 32 * 32,        # Total pixel budget cap across all frames (None = no cap)
 
     # ── Chat Template / Prompts ──
@@ -120,31 +120,35 @@ CONFIG = {
         'q_proj', 'k_proj', 'v_proj', 'o_proj',  # attention projections
         'gate_proj', 'up_proj', 'down_proj',      # MLP projections
     ],
-    'lora_include_vision': False,                  # Apply LoRA to vision encoder too
+    
+    'lora_include_vision': True,                   # Apply LoRA to vision encoder too
     'lora_vision_targets': [                      # Vision encoder targets
         'qkv', 'proj',                            # vision attention (fused qkv + output proj)
         'linear_fc1', 'linear_fc2',               # merger + deepstack_merger_list
     ],
-    'lora_dropout': 0.05,
+    'lora_vision_r': 4,                           # Lower rank for vision (pretrained encoder needs less adaptation)
+    'lora_vision_alpha': 8,                       # 2x vision rank
+    'lora_dropout': 0.08,
     'lora_bias': 'none',
     'lora_use_dora': False,                       # Weight-Decomposed LoRA
     'lora_use_rslora': True,                      # Rank-Stabilized LoRA (sqrt(r) scaling; better stability)
+    'lora_init_weights': True,                     # Default init (PiSSA not supported for Conv3d layers in vision encoder)
 
     # ── Core Training ──
     'num_epochs': 3,
-    'batch_size': 1,                              # VRAM constraint — 1 sample per micro-batch
+    'batch_size': 1,                              # VRAM constraint with vision LoRA — 1 sample per micro-batch
 
     # ── Gradient Accumulation ──
     'grad_accum_steps': 16,                       # Effective batch = 1 x 16 = 16
 
     # ── DataLoader Config ──
-    'train_num_workers': 3,                       # 3 workers decode videos in parallel, maximising CPU-GPU overlap
-    'train_prefetch_factor': 2,                   # Pre-load 2 batches ahead (safe now that pin_memory is permanently off)
-    'train_pin_memory': False,                     # Disabled — pinned memory caused CUDA OOM in pin_memory thread
+    'train_num_workers': 1,                       # 2 workers; lower count avoids Windows shared-memory exhaustion (error 1455)
+    'train_prefetch_factor': 1,                   # Pre-load 2 batches ahead (safe now that pin_memory is permanently off)
+    'train_pin_memory': True,                     # Disabled — pinned memory caused CUDA OOM in pin_memory thread
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
     'val_num_workers': 1,                          # 1 worker overlaps video decoding with GPU inference during validation
-    'val_prefetch_factor': 2,                      # Pre-load 2 batches ahead during validation
+    'val_prefetch_factor': 1,                      # Pre-load 2 batches ahead during validation
     'val_pin_memory': False,                        # Pinned memory for async CPU→GPU DMA during validation
     'val_persistent_workers': False,               # Keep val worker alive across validation runs
 
@@ -165,13 +169,13 @@ CONFIG = {
     'tensorboard_dir': Path('..') / 'saved_metrics' / 'tensorboard' / 'qwen3vl_training',
 
     # ── Checkpointing ──
-    'save_every_steps': 15,
+    'save_every_steps': 10,
     'keep_last_n_checkpoints': 3,
     'checkpoint_dir': Path('..') / 'checkpoints' / 'qwen3vl',
 
     # ── Evaluation ──
-    'eval_every_steps': 200,
-    'eval_every_steps_warmup': 200,               # More frequent eval early on
+    'eval_every_steps': 100,
+    'eval_every_steps_warmup': 100,               # More frequent eval early on
     'eval_warmup_threshold': 1000,                # Switch to normal eval freq after this step
     'max_eval_batches': 60,
     'num_print_samples': 5,
@@ -195,7 +199,7 @@ CONFIG = {
     # ── Resuming ──
     'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': 450,               # None = latest, or specific step number
+    'resume_checkpoint_step': 500,               # None = latest, or specific step number
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -217,7 +221,7 @@ CONFIG = {
     'use_bucket_batching': True,                  # Group clips by duration to minimise padding waste
 
     # ── Label Smoothing ──
-    'label_smoothing': 0.1,
+    'label_smoothing': 0.0,
 
     # ── Seed ──
     'seed': 42,
@@ -226,30 +230,31 @@ CONFIG = {
     'wait_for_manual_start': False,               # Interactive safety gate before training loop starts
 
     # ── Data Augmentation (video frames, training only) ──
+    'aug_start_epoch': 2,                         # Epoch at which to enable augmentation (1 = from the start)
     'aug_temporal_jitter': True,
     'aug_temporal_jitter_range': 2,           # Max frames to shift (±2)
     'aug_temporal_jitter_prob': 0.4,
 
     'aug_color_jitter': True,
-    'aug_color_jitter_prob': 0.5,             # Fires on half of clips
-    'aug_color_jitter_brightness': 0.25,
-    'aug_color_jitter_contrast': 0.25,
-    'aug_color_jitter_saturation': 0.2,       # Moderate swing
-    'aug_color_jitter_hue': 0.12,             # ±43° — covers green-screen variation without being extreme
+    'aug_color_jitter_prob': 0.45,             
+    'aug_color_jitter_brightness': 0.1,
+    'aug_color_jitter_contrast': 0.1,
+    'aug_color_jitter_saturation': 0.1,       # Moderate swing
+    'aug_color_jitter_hue': 0.1,             # ±43° — covers green-screen variation without being extreme
 
     'aug_random_grayscale': True,
-    'aug_random_grayscale_prob': 0.10,        # Forces shape/motion reliance over colour
+    'aug_random_grayscale_prob': 0.08,        # Forces shape/motion reliance over colour
 
-    'aug_gaussian_blur': True,
+    'aug_gaussian_blur': False,
     'aug_gaussian_blur_prob': 0.1,
     'aug_gaussian_blur_kernel': (3, 3),
 
     'aug_solarize': True,                     # Inverts pixels above threshold — extreme colour variety
     'aug_solarize_prob': 0.07,
-    'aug_solarize_threshold': 190,            # 0–255; pixels above this get inverted
+    'aug_solarize_threshold': 220,            # 0–255; pixels above this get inverted
 
     'aug_equalize': True,                     # Histogram equalisation — bridges studio vs natural lighting
-    'aug_equalize_prob': 0.12,
+    'aug_equalize_prob': 0.1,
 
     'aug_random_erasing': False,              # Randomly blacks out small patches — occlusion robustness
     'aug_random_erasing_prob': 0.2,
@@ -258,15 +263,15 @@ CONFIG = {
 
     'aug_affine': True,                       # Small rotation + translation + scale — camera angle variation
     'aug_affine_prob': 0.3,
-    'aug_affine_degrees': 8,                  # ±8° rotation
+    'aug_affine_degrees': 4,                  # ±4° rotation
     'aug_affine_translate': 0.05,             # ±5% of frame width/height
     'aug_affine_scale_min': 0.95,             # 95%–105% zoom
     'aug_affine_scale_max': 1.05,
 
     'aug_speed_perturb': True,                # Simulate faster/slower signing by resampling frames
-    'aug_speed_perturb_prob': 0.4,
+    'aug_speed_perturb_prob': 0.2,
     'aug_speed_perturb_min': 0.9,             # 0.9× = 10% slower (frames stretched)
-    'aug_speed_perturb_max': 1.1,             # 1.1× = 10% faster (frames compressed, tail padded)
+    'aug_speed_perturb_max': 1.0,             # 1.0× = no change (frames compressed, tail padded)
 
     # ── Debug: save augmented frames to disk ──
     'aug_debug_save_images': True,
@@ -329,10 +334,12 @@ class BucketBatchSampler(torch.utils.data.Sampler):
         # Sort by duration to group similar-length clips
         lengths = [s['duration_sec'] for s in dataset.samples]
         sorted_indices = sorted(range(len(dataset)), key=lambda i: lengths[i])
+        del lengths  # no longer needed once sorted_indices is built
         self.batches = [
             sorted_indices[i:i + batch_size]
             for i in range(0, len(sorted_indices), batch_size)
         ]
+        del sorted_indices  # no longer needed once batches are built
         self._skip_first_n = 0  # number of batches to skip on next iteration
 
     def set_skip(self, n):
@@ -366,6 +373,7 @@ class Qwen3VLCollator:
         self.processor = processor
         self.config = config
         self.is_training = is_training
+        self.augmentation_enabled = False          # Toggled by training loop based on aug_start_epoch
         self.debug_save_images = is_training and config.get('aug_debug_save_images', False)
 
         # ── Build spatial augmentation transform (applied per-clip, training only) ──
@@ -517,6 +525,8 @@ class Qwen3VLCollator:
             # Also mask padding tokens
             labels[i, input_ids[i] == self._pad_id] = IGNORE_INDEX
 
+            del ids  # free the Python list for this row before moving to the next
+
         return labels
 
     def __call__(self, batch):
@@ -544,6 +554,7 @@ class Qwen3VLCollator:
                 messages, image_patch_size=16,
                 return_video_kwargs=True, return_video_metadata=True,
             )
+            del messages  # free the message dicts (contain video path strings & nested dicts)
 
             if images:
                 all_images.extend(images)
@@ -552,6 +563,7 @@ class Qwen3VLCollator:
                 vids, metas = zip(*videos)
                 all_videos.extend(list(vids))
                 all_video_metadatas.extend(list(metas))
+            del images, videos  # free intermediate references
 
             # Merge video_kwargs (should be same for all samples)
             if video_kwargs:
@@ -564,9 +576,12 @@ class Qwen3VLCollator:
         # process_vision_info returns (T, C, H, W) torch.Tensor; we ensure uint8 for
         # torchvision v2 transforms, then keep uint8 for the processor (which normalizes
         # internally regardless of the input dtype).
-        if self.is_training and all_videos:
+        if self.is_training and self.augmentation_enabled and all_videos:
             augmented = []
             for vid in all_videos:
+                # Work on a local reference so we can clear the slot in all_videos
+                # as soon as augmentation finishes — the original and augmented copy
+                # would otherwise coexist in RAM for the full loop duration.
                 # Ensure torch.Tensor uint8 [0, 255] for T_v2 compatibility.
                 if not isinstance(vid, torch.Tensor):
                     vid = torch.as_tensor(np.asarray(vid))
@@ -591,7 +606,7 @@ class Qwen3VLCollator:
                     vid = vid[indices]
                     if new_len < T:
                         # Faster clip: fewer frames — pad tail with last frame
-                        pad = vid[-1:].expand(T - new_len, -1, -1, -1)
+                        pad = vid[-1:].expand(T - new_len, -1, -1, -1).contiguous()
                         vid = torch.cat([vid, pad], dim=0)
                     else:
                         # Slower clip: more frames — truncate back to T
@@ -618,7 +633,10 @@ class Qwen3VLCollator:
                     vid = self.aug_transform(vid)
 
                 augmented.append(vid)
+                del vid  # drop the reference to the (possibly dtype-converted) clip
+            all_videos.clear()  # release original frame tensors before assigning augmented
             all_videos = augmented
+            del augmented
 
         # Capture one frame for debug saving AFTER augmentation.
         # Shape is (C, H, W) uint8 from the first frame of the first clip.
@@ -640,6 +658,9 @@ class Qwen3VLCollator:
             do_resize=False,  # qwen_vl_utils already resized
             **all_video_kwargs,
         )
+
+        # Free heavy intermediate lists now that the processor has consumed them
+        del all_texts, all_images, all_videos, all_video_metadatas, all_video_kwargs
 
         # Build labels with masking
         inputs['labels'] = self._mask_labels(inputs['input_ids'])
@@ -895,9 +916,9 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
         if batch_idx >= config['max_eval_batches']:
             break
 
-        # Extract metadata before moving to device
-        _vids = batch.pop('_vids', [])
-        _gts = batch.pop('_ground_truths', [])
+        # Extract metadata before moving to device (discard — not needed for loss)
+        batch.pop('_vids', None)
+        batch.pop('_ground_truths', None)
         batch.pop('_debug_frame', None)
 
         batch_gpu = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
@@ -914,6 +935,10 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
 
     avg_loss = total_loss / max(num_batches, 1)
     perplexity = math.exp(min(avg_loss, MAX_PPL_CAP))
+
+    # Free VRAM from loss evaluation before starting generation
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # ── Part 2: Generate Text for BLEU / ROUGE-L ──
     _orig_use_cache = getattr(model.config, 'use_cache', None) if hasattr(model, 'config') else None
@@ -959,12 +984,14 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
                     messages, image_patch_size=16,
                     return_video_kwargs=True, return_video_metadata=True,
                 )
+                del messages
                 if images:
                     all_images.extend(images)
                 if videos is not None:
                     vids, metas = zip(*videos)
                     all_videos.extend(list(vids))
                     all_video_metadatas.extend(list(metas))
+                del images, videos
                 if video_kwargs:
                     all_video_kwargs.update(video_kwargs)
 
@@ -978,6 +1005,8 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
                 do_resize=False,
                 **all_video_kwargs,
             )
+            # Free decoded video frames before moving tensors to GPU
+            del all_texts, all_images, all_videos, all_video_metadatas, all_video_kwargs
             inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                       for k, v in inputs.items()}
 
@@ -1012,7 +1041,8 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
                 if len(sample_pairs) < config['num_print_samples']:
                     sample_pairs.append((ref_text, hyp_text))
 
-            del inputs, generated_ids, generated_ids_trimmed
+            del inputs, generated_ids, generated_ids_trimmed, batch_hypotheses, batch_samples
+            torch.cuda.empty_cache()
 
         except torch.cuda.OutOfMemoryError:
             print(f"  ⚠️  OOM during generation — skipping batch {i}")
@@ -1020,9 +1050,12 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
             torch.cuda.empty_cache()
         except Exception as e:
             print(f"  ⚠️  Error during generation batch {i}: {e}")
+            gc.collect()
+            torch.cuda.empty_cache()
 
         gen_pbar.update(batch_end - i)
     gen_pbar.close()
+    del sample_indices  # no longer needed after generation loop
 
     bleu1 = compute_bleu(references, hypotheses, max_n=1)
     bleu2 = compute_bleu(references, hypotheses, max_n=2)
@@ -1059,7 +1092,7 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
 def train(model, processor, train_loader, val_loader, val_dataset,
           optimizer, scheduler, train_config, ckpt_manager,
           train_csv_logger, val_csv_logger, gen_samples_csv_logger, tb_writer,
-          _val_collator=None,
+          _val_collator=None, _train_collator=None,
           start_epoch=1, start_global_step=0, start_steps_done_in_epoch=None,
           best_val_loss=float('inf'), start_evals_without_improvement=0, start_elapsed_sec=0.0):
     """Full training loop for Qwen3-VL LoRA fine-tuning."""
@@ -1088,6 +1121,53 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     step_losses = []
     step_grad_norms = []
     log_step_start = time.time()
+
+    # ── CUDA RT handle for sticky-error recovery ─────────────────────────────
+    # Resolve the CUDA runtime DLL once and cache it.  Used by the CUDA error
+    # handler to call cudaGetLastError(), which clears the sticky error flag so
+    # tensor destructors (StorageImpl::~StorageImpl → CUDAEvent::record) don't
+    # trigger the c10 AbortHandler while freeing memory after an OOM.
+    _cudart_handle = None
+    try:
+        import ctypes, os, glob as _glob
+        _torch_lib = os.path.join(os.path.dirname(torch.__file__), 'lib')
+        # torch ships cudart64_12.dll (or cudart64_110.dll) inside its own lib dir
+        _dll_candidates = (
+            _glob.glob(os.path.join(_torch_lib, 'cudart64_*.dll'))
+            + ['cudart64_12.dll', 'cudart64_120.dll', 'cudart64_110.dll', 'cudart64_11.dll']
+        )
+        for _dll in _dll_candidates:
+            try:
+                _cudart_handle = ctypes.CDLL(_dll)
+                _ = _cudart_handle.cudaGetLastError   # verify symbol exists
+                break
+            except (OSError, AttributeError):
+                _cudart_handle = None
+    except Exception:
+        pass
+
+    def _clear_cuda_sticky_error():
+        """Call cudaGetLastError() to reset CUDA's per-thread sticky error flag."""
+        if _cudart_handle is not None:
+            try:
+                _cudart_handle.cudaGetLastError()
+                return
+            except Exception:
+                pass
+        # Fallback: PyTorch's internal binding (may be None in type stubs but
+        # is always a valid ctypes handle at runtime when CUDA is initialized).
+        try:
+            _rt = torch.cuda.cudart()
+            if _rt is not None:
+                _rt.cudaGetLastError()  # type: ignore[union-attr]
+        except Exception:
+            pass
+
+    # Proactive VRAM guard threshold: skip a batch if free VRAM falls below
+    # this fraction of total to avoid RuntimeError: CUDA error: out of memory,
+    # which corrupts the CUDA context and cannot be safely recovered.
+    _total_vram = torch.cuda.get_device_properties(device).total_memory
+    _vram_guard_bytes = max(int(_total_vram * 0.12), 1 * 1024 ** 3)  # 12% or 1 GB floor
 
     # Pre-collect trainable params for clip_grad_norm_
     _all_trainable_params = [p for p in model.parameters() if p.requires_grad]
@@ -1119,7 +1199,27 @@ def train(model, processor, train_loader, val_loader, val_dataset,
         start_epoch += 1
         print(f"  ⏭️  Checkpoint was at exact end of Epoch {start_epoch - 1}. Advancing to Epoch {start_epoch}.")
 
+    aug_start_epoch = train_config.get('aug_start_epoch', 1)
+
     for epoch in range(start_epoch, num_epochs + 1):
+        # Toggle data augmentation based on aug_start_epoch
+        if _train_collator is not None:
+            was_enabled = _train_collator.augmentation_enabled
+            should_aug = epoch >= aug_start_epoch
+            _train_collator.augmentation_enabled = should_aug
+
+            if not should_aug:
+                print(f"  🧊 Data augmentation: OFF — training on clean data (augmentation starts at epoch {aug_start_epoch})")
+            elif should_aug and not was_enabled:
+                print("")
+                print("  " + "=" * 55)
+                print("  🔥🎨 DATA AUGMENTATION ACTIVATED! 🎨🔥")
+                print(f"  📊 Epoch {epoch}: switching from clean → augmented data")
+                print("  " + "=" * 55)
+                print("")
+            else:
+                print(f"  🎨 Data augmentation: ON")
+
         epoch_start = time.time()
         epoch_loss_sum = None
         epoch_microbatches = 0
@@ -1151,9 +1251,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 del batch
                 continue
 
-            # Extract metadata
-            _vids = batch.pop('_vids', [])
-            _gts = batch.pop('_ground_truths', [])
+            # Extract metadata (pop to keep them out of the model forward pass)
+            batch.pop('_vids', None)
+            batch.pop('_ground_truths', None)
             _dbg_frame = batch.pop('_debug_frame', None)
 
             is_accum_step = (micro_step + 1) % grad_accum_steps == 0
@@ -1168,6 +1268,25 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
             # ── Forward pass with mixed precision ──
             try:
+                # Proactive VRAM guard — skip BEFORE touching the GPU if free memory
+                # is below the safety threshold.  Prevents RuntimeError: CUDA error:
+                # out of memory, which corrupts the CUDA context and cannot be safely
+                # recovered (unlike torch.cuda.OutOfMemoryError).
+                #
+                # Use PyTorch-aware free memory, not raw CUDA free memory.
+                # torch.cuda.mem_get_info() returns CUDA-level free bytes, but PyTorch's
+                # caching allocator has already reserved a large pool.  That reserved-but-
+                # idle memory is "used" from CUDA's view yet fully reusable by PyTorch.
+                # Correct formula: (reserved − allocated) + truly_free_cuda
+                _reserved  = torch.cuda.memory_reserved(device)
+                _allocated = torch.cuda.memory_allocated(device)
+                _cuda_free = torch.cuda.mem_get_info(device)[0]
+                _free_vram = (_reserved - _allocated) + _cuda_free
+                if _free_vram < _vram_guard_bytes:
+                    print(f"  ⚠️  Low VRAM ({_free_vram / 1024**3:.2f} GB free) — skipping batch proactively")
+                    del batch
+                    continue
+
                 batch_gpu = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
                              for k, v in batch.items()}
                 del batch  # free CPU tensors
@@ -1228,8 +1347,76 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 gc.collect()
                 torch.cuda.empty_cache()
                 continue
+            except RuntimeError as e:
+                # RuntimeError: CUDA error: out of memory  (and other CUDA runtime errors)
+                # are *not* torch.cuda.OutOfMemoryError — they set CUDA's "sticky" error flag.
+                # Any subsequent CUDA call (including cudaFree inside StorageImpl::~StorageImpl)
+                # sees the stale error and fires c10 AbortHandler, crashing the process.
+                #
+                # Fix: call cudaGetLastError() FIRST to clear the sticky flag so that tensor
+                # destructors (and all later CUDA ops) can proceed safely.  Only then is it
+                # safe to delete locals, zero grads, synchronize, or empty the cache.
+                err_str = str(e)
+                if "CUDA" in err_str or "cuda" in err_str:
+                    print(f"  ⚠️  CUDA RuntimeError at micro_step {micro_step}: {e} — clearing CUDA error state, skipping batch")
+                    # ── Step 1: clear CUDA's sticky error flag ──────────────────────────
+                    # Must happen before ANY tensor destructor runs.  The flag is "sticky":
+                    # StorageImpl::~StorageImpl calls CUDAEvent::record which calls
+                    # c10_cuda_check_implementation which re-throws on a non-zero flag,
+                    # making std::terminate() fire (the c10 AbortHandler).
+                    _clear_cuda_sticky_error()
+                    # ── Step 2: release CUDA tensor locals now that destructors are safe ─
+                    # Each del may internally touch CUDA (CUDAEvent::record for free-tracking).
+                    # That's now safe because the flag was cleared in Step 1.
+                    try: del batch_gpu
+                    except NameError: pass
+                    try: del forward_inputs
+                    except NameError: pass
+                    try: del outputs
+                    except NameError: pass
+                    try: del logits
+                    except NameError: pass
+                    try: del shift_logits
+                    except NameError: pass
+                    try: del shift_labels
+                    except NameError: pass
+                    try: del labels
+                    except NameError: pass
+                    try: del raw_loss
+                    except NameError: pass
+                    try: del loss
+                    except NameError: pass
+                    try: del raw_loss_detached
+                    except NameError: pass
+                    # ── Step 3: zero gradients and reclaim VRAM ─────────────────────────
+                    # NOTE: do NOT call torch.cuda.synchronize() here — it waits for
+                    # pending async CUDA work and if any of it failed it RE-ARMS the
+                    # sticky error flag, causing the same abort on the next destructor.
+                    try:
+                        optimizer.zero_grad(set_to_none=True)
+                    except Exception:
+                        pass
+                    gc.collect()
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    # ── Step 4: clear again ─────────────────────────────────────────────
+                    # Steps 2–3 may have triggered new CUDA calls (CUDAEvent records,
+                    # allocator bookkeeping) that re-set the flag.  Clear one final time
+                    # so any remaining locals cleaned up by Python's frame teardown
+                    # (autograd graph nodes, dict-comprehension temporaries) also land
+                    # on a clean CUDA context when their destructors fire.
+                    _clear_cuda_sticky_error()
+                else:
+                    print(f"  ⚠️  RuntimeError at micro_step {micro_step}: {e} — skipping batch (accumulated gradients preserved)")
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                continue
             except Exception as e:
                 print(f"  ⚠️  Error at micro_step {micro_step}: {e} — skipping batch (accumulated gradients preserved)")
+                gc.collect()
+                torch.cuda.empty_cache()
                 continue
 
             epoch_microbatches += 1
@@ -1297,6 +1484,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         )
                     except Exception:
                         pass  # Never let a debug save crash training
+                del _dbg_frame
 
                 # ── Logging ──
                 if global_step % log_every == 0:
@@ -1436,6 +1624,11 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         print("=" * 60)
                         return global_step, best_val_loss
 
+                    # Reclaim VRAM from validation before resuming training
+                    del val_results
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
                     print(f"{'─' * 60}\n")
 
                 # ── Periodic Checkpoint ──
@@ -1446,11 +1639,15 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         (micro_step + 1) // grad_accum_steps, best_val_loss,
                         evals_without_improvement, elapsed
                     )
+                    # Checkpoint serialization creates temporary CPU copies — reclaim them
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
         # End of epoch
         epoch_time = time.time() - epoch_start
         epoch_avg_loss = ((epoch_loss_sum / max(epoch_microbatches, 1)).item()
                           if epoch_loss_sum is not None else 0.0)
+        epoch_loss_sum = None  # release the accumulated loss tensor for the next epoch
         print(f"\n{'=' * 60}")
         print(f"  ✅ Epoch {epoch}/{num_epochs} Complete")
         print(f"  Avg Train Loss: {epoch_avg_loss:.4f} | Time: {format_time(epoch_time)}")
@@ -1462,6 +1659,13 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 # ═══════════════════════════════════════════════════════════════
 #  MAIN
 # ═══════════════════════════════════════════════════════════════
+
+def _worker_init_fn(worker_id):
+    try:
+        import torch.multiprocessing as _mp
+        _mp.set_sharing_strategy('file_system')
+    except Exception:
+        pass
 
 def main():
     """Main entry point for Qwen3-VL training."""
@@ -1540,11 +1744,12 @@ def main():
     print(f"    User                   : {CONFIG['user_prompt']}")
 
     print("\n  [ LoRA ]")
-    print(f"    Rank / Alpha           : {CONFIG['lora_r']} / {CONFIG['lora_alpha']}")
+    print(f"    Rank / Alpha (LM)      : {CONFIG['lora_r']} / {CONFIG['lora_alpha']}")
     print(f"    Target modules (LM)    : {', '.join(CONFIG['lora_target_modules'])}")
     print(f"    Include vision encoder : {CONFIG['lora_include_vision']}")
     if CONFIG['lora_include_vision']:
         print(f"    Vision targets         : {', '.join(CONFIG['lora_vision_targets'])}")
+        print(f"    Rank / Alpha (Vision)  : {CONFIG['lora_vision_r']} / {CONFIG['lora_vision_alpha']}")
     print(f"    Dropout                : {CONFIG['lora_dropout']}")
     print(f"    DoRA / RSLoRA          : {CONFIG['lora_use_dora']} / {CONFIG['lora_use_rslora']}")
 
@@ -1575,6 +1780,9 @@ def main():
     print(f"    Checkpoint dir         : {CONFIG['checkpoint_dir'].resolve()}")
 
     print("\n  [ DATA AUGMENTATION (training only) ]")
+    _aug_start = CONFIG['aug_start_epoch']
+    _aug_note = 'from the start' if _aug_start <= 1 else f'clean data for first {_aug_start - 1} epoch(s)'
+    print(f"    Augmentation start     : epoch {_aug_start}  ({_aug_note})")
     print(f"    Horizontal flip        : DISABLED  (sign language handedness is semantically meaningful)")
     print(f"    Color jitter           : {'ON' if CONFIG['aug_color_jitter'] else 'OFF'}  (prob={CONFIG['aug_color_jitter_prob']}, b={CONFIG['aug_color_jitter_brightness']}, c={CONFIG['aug_color_jitter_contrast']}, s={CONFIG['aug_color_jitter_saturation']}, h={CONFIG['aug_color_jitter_hue']})")
     print(f"    Random grayscale       : {'ON' if CONFIG['aug_random_grayscale'] else 'OFF'}  (prob={CONFIG['aug_random_grayscale_prob']})")
@@ -1650,12 +1858,13 @@ def main():
     else:
         model_kwargs['device_map'] = 'cuda'
 
-    model = AutoModelForImageTextToText.from_pretrained(CONFIG['model_name'], **model_kwargs)
+    model = AutoModelForImageTextToText.from_pretrained(CONFIG['model_name'], local_files_only=True, **model_kwargs)
+    del model_kwargs  # no longer needed after model is loaded
 
     if CONFIG['use_qlora']:
         model = prepare_model_for_kbit_training(model)
 
-    processor = AutoProcessor.from_pretrained(CONFIG['model_name'])
+    processor = AutoProcessor.from_pretrained(CONFIG['model_name'], local_files_only=True)
 
     load_time = time.time() - load_start
     model_vram = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
@@ -1667,16 +1876,28 @@ def main():
     if CONFIG['lora_include_vision']:
         target_modules.extend(CONFIG['lora_vision_targets'])
 
+    # Build per-module rank/alpha overrides for vision encoder layers.
+    # Use "model.visual." prefix pattern — bare names like "proj" would also match LM layers (q_proj, etc.)
+    rank_pattern = {}
+    alpha_pattern = {}
+    if CONFIG['lora_include_vision']:
+        rank_pattern[r"model\.visual\."] = CONFIG['lora_vision_r']
+        alpha_pattern[r"model\.visual\."] = CONFIG['lora_vision_alpha']
+
     lora_config = LoraConfig(
         r=CONFIG['lora_r'],
         lora_alpha=CONFIG['lora_alpha'],
         target_modules=target_modules,
+        rank_pattern=rank_pattern,
+        alpha_pattern=alpha_pattern,
         lora_dropout=CONFIG['lora_dropout'],
         bias=CONFIG['lora_bias'],
         task_type='CAUSAL_LM',
         use_dora=CONFIG['lora_use_dora'],
         use_rslora=CONFIG['lora_use_rslora'],
+        init_lora_weights=CONFIG.get('lora_init_weights', True),
     )
+    del target_modules, rank_pattern, alpha_pattern  # consumed by lora_config
 
     # Check if resuming — load LoRA from checkpoint
     start_epoch = 1
@@ -1717,6 +1938,7 @@ def main():
             model = get_peft_model(model, lora_config)
     else:
         model = get_peft_model(model, lora_config)
+    del lora_config  # consumed by get_peft_model / PeftModel
 
     model.print_trainable_parameters()
     _total_params = sum(p.numel() for p in model.parameters())
@@ -1760,6 +1982,7 @@ def main():
             prefetch_factor=CONFIG['train_prefetch_factor'] if _nw_train > 0 else None,
             pin_memory=CONFIG['train_pin_memory'],
             persistent_workers=CONFIG['train_persistent_workers'] and _nw_train > 0,
+            worker_init_fn=_worker_init_fn,
         )
         print(f"  Using bucket batch sampling ({len(train_batch_sampler)} batches)")
     else:
@@ -1772,6 +1995,7 @@ def main():
             prefetch_factor=CONFIG['train_prefetch_factor'] if _nw_train > 0 else None,
             pin_memory=CONFIG['train_pin_memory'],
             persistent_workers=CONFIG['train_persistent_workers'] and _nw_train > 0,
+            worker_init_fn=_worker_init_fn,
         )
 
     _nw_val = CONFIG['val_num_workers']
@@ -1784,6 +2008,7 @@ def main():
         prefetch_factor=CONFIG['val_prefetch_factor'] if _nw_val > 0 else None,
         pin_memory=CONFIG['val_pin_memory'],
         persistent_workers=CONFIG['val_persistent_workers'] and _nw_val > 0,
+        worker_init_fn=_worker_init_fn,
     )
 
     steps_per_epoch = len(train_loader)
@@ -1814,6 +2039,7 @@ def main():
             weight_decay=CONFIG['weight_decay'],
         )
         print("  Using standard AdamW")
+    del trainable_params  # optimizer holds its own references to param groups
 
     # ── Scheduler: Linear warmup + Cosine annealing ──
     if CONFIG['warmup_steps'] is not None:
@@ -1926,9 +2152,11 @@ def main():
         print(f"  Decoded labels (non-masked): {decoded_labels}")
         print(f"  Total tokens: {len(input_ids)} | Masked: {(labels == -100).sum().item()} | Unmasked: {(labels != -100).sum().item()}")
 
-        del first_batch
+        del first_batch, first_sample, input_ids, labels, label_tokens, decoded_labels
     except Exception as e:
         print(f"  ⚠️  Warning: Label verification failed: {e}")
+    gc.collect()
+    torch.cuda.empty_cache()
 
     # ── Train ──
     print(f"\nGPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
@@ -1949,6 +2177,7 @@ def main():
         gen_samples_csv_logger=gen_samples_csv_logger,
         tb_writer=tb_writer,
         _val_collator=val_collator,
+        _train_collator=train_collator,
         start_epoch=start_epoch,
         start_global_step=start_global_step,
         start_steps_done_in_epoch=start_steps_done_in_epoch,
@@ -1987,3 +2216,5 @@ def _safe_main():
 
 if __name__ == '__main__':
     _safe_main()
+
+# %%
