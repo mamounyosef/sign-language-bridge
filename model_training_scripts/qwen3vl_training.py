@@ -43,6 +43,7 @@ import torchvision.transforms.v2 as T_v2
 ## Additional Imports
 import time
 import csv
+import threading
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import sacrebleu
 
@@ -114,25 +115,31 @@ CONFIG = {
     'max_text_tokens': 60,                        # Max tokens for the assistant response (translation)
 
     # ── LoRA ──
-    'lora_r': 16,
-    'lora_alpha': 32,                             # 2x rank
-    'lora_target_modules': [                      # Language model targets: attention + MLP
-        'q_proj', 'k_proj', 'v_proj', 'o_proj',  # attention projections
-        'gate_proj', 'up_proj', 'down_proj',      # MLP projections
+    # Tier 1 (default r): LM attention + MLP — most critical, trains at highest rank
+    # Tier 2 (r=4):       Vision encoder — needs less adaptation (pretrained weights)
+    # Tier 3 (r=2):       Embeddings + output head — remaining trainable layers
+    # Alpha = 2x rank throughout, consistent with RSLoRA (alpha/sqrt(r)) scaling.
+    'lora_t1_r': 16,                             'lora_t1_alpha': 32,
+    'lora_t1_modules': [
+        'q_proj', 'k_proj', 'v_proj', 'o_proj',  # LM attention projections
+        'gate_proj', 'up_proj', 'down_proj',      # LM MLP projections
     ],
-    
-    'lora_include_vision': True,                   # Apply LoRA to vision encoder too
-    'lora_vision_targets': [                      # Vision encoder targets
-        'qkv', 'proj',                            # vision attention (fused qkv + output proj)
-        'linear_fc1', 'linear_fc2',               # merger + deepstack_merger_list
+    'lora_t2_r': 4,                              'lora_t2_alpha': 8,
+    'lora_t2_modules': [
+        'qkv', 'proj',                            # Vision attention: fused QKV + output proj (incl. Conv3d patch_embed.proj)
+        'linear_fc1', 'linear_fc2',               # Vision MLP + merger + deepstack_merger_list
     ],
-    'lora_vision_r': 4,                           # Lower rank for vision (pretrained encoder needs less adaptation)
-    'lora_vision_alpha': 8,                       # 2x vision rank
+    'lora_t3_r': 2,                              'lora_t3_alpha': 4,
+    'lora_t3_modules': [                         # Remaining trainable layers (Linear + Embedding)
+        'lm_head',                               # Output head (Linear; base weight tied to embed_tokens)
+        'embed_tokens',                          # LM input embeddings (Embedding; tied to lm_head)
+        'pos_embed',                             # Vision positional embeddings (Embedding)
+    ],
     'lora_dropout': 0.08,
     'lora_bias': 'none',
     'lora_use_dora': False,                       # Weight-Decomposed LoRA
     'lora_use_rslora': True,                      # Rank-Stabilized LoRA (sqrt(r) scaling; better stability)
-    'lora_init_weights': True,                     # Default init (PiSSA not supported for Conv3d layers in vision encoder)
+    'lora_init_weights': True,                    # Default init (PiSSA not supported for Conv3d layers in vision encoder)
 
     # ── Core Training ──
     'num_epochs': 3,
@@ -174,8 +181,8 @@ CONFIG = {
     'checkpoint_dir': Path('..') / 'checkpoints' / 'qwen3vl',
 
     # ── Evaluation ──
-    'eval_every_steps': 100,
-    'eval_every_steps_warmup': 100,               # More frequent eval early on
+    'eval_every_steps': 80,
+    'eval_every_steps_warmup': 80,               # More frequent eval early on
     'eval_warmup_threshold': 1000,                # Switch to normal eval freq after this step
     'max_eval_batches': 60,
     'num_print_samples': 5,
@@ -197,9 +204,9 @@ CONFIG = {
     'torch_compile_mode': 'default',              # 'default' or 'max-autotune'
 
     # ── Resuming ──
-    'resume_training': True,
+    'resume_training': True,                    # Set to True to resume from checkpoint
     'load_best_model': False,
-    'resume_checkpoint_step': 500,               # None = latest, or specific step number
+    'resume_checkpoint_step': 600,               # None = latest, or specific step number
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -283,6 +290,154 @@ torch.manual_seed(CONFIG['seed'])
 torch.cuda.manual_seed_all(CONFIG['seed'])
 np.random.seed(CONFIG['seed'])
 random.seed(CONFIG['seed'])
+
+
+# ═══════════════════════════════════════════════════════════════
+#  INTERACTIVE TRAINING CONTROLLER
+# ═══════════════════════════════════════════════════════════════
+
+class InteractiveController:
+    """
+    Allows live adjustment of hyperparameters during training without stopping.
+
+    A background thread watches stdin. Typing 'p' + Enter sets a pause flag.
+    The training loop calls .check() after each optimizer step; when the flag
+    is set the loop blocks here and accepts commands before continuing.
+
+    Commands (case-insensitive):
+        lr=<value>    Set learning rate and rebuild the cosine scheduler for
+                      the remaining steps.
+        clip=<value>  Set gradient clip max_norm.
+        resume        Continue training.
+    """
+
+    def __init__(self):
+        self._pause_flag = threading.Event()
+        self._stop_flag  = threading.Event()
+        self._thread = threading.Thread(
+            target=self._listen, daemon=True, name="interactive-ctrl"
+        )
+        self._thread.start()
+        _SEP = "─" * 64
+        print()
+        print(f"  ┌{_SEP}┐")
+        print(f"  │{'  Interactive Training Controller  active':^64}│")
+        print(f"  │{'  Type  p + Enter  at any time to pause training':^64}│")
+        print(f"  │{'  Commands:  lr=<val>   clip=<val>   resume':^64}│")
+        print(f"  └{_SEP}┘")
+        print()
+
+    # ── Background stdin listener ───────────────────────────────────────────
+
+    def _listen(self):
+        while not self._stop_flag.is_set():
+            try:
+                line = sys.stdin.readline()
+                if not line:            # EOF / pipe closed
+                    break
+                if line.strip().lower() in ('p', 'pause'):
+                    print(
+                        "\n  [ ⏸  Pause requested — will pause after current optimizer step... ]\n"
+                    )
+                    sys.stdout.flush()
+                    self._pause_flag.set()
+            except Exception:
+                break
+
+    def stop(self):
+        """Signal the listener thread to exit (called at end of training)."""
+        self._stop_flag.set()
+
+    # ── Interactive pause UI ────────────────────────────────────────────────
+
+    def check(self, optimizer, scheduler_ref, train_config, global_step, total_optimizer_steps):
+        """
+        Call this after every optimizer step.
+        Blocks until the user types 'resume' if a pause was requested.
+
+        scheduler_ref is a one-element list [scheduler] so this method can
+        swap the scheduler in-place when lr= is used.
+        """
+        if not self._pause_flag.is_set():
+            return
+        self._pause_flag.clear()
+
+        current_lr   = optimizer.param_groups[0]['lr']
+        current_clip = train_config['max_grad_norm']
+        remaining    = total_optimizer_steps - global_step
+
+        _THICK = "═" * 64
+        _THIN  = "─" * 64
+
+        print()
+        print(f"  {_THICK}")
+        print(f"  ⏸  TRAINING PAUSED")
+        print(f"  {_THIN}")
+        print(f"  Step      : {global_step} / {total_optimizer_steps}  ({remaining} steps remaining)")
+        print(f"  LR        : {current_lr:.4e}")
+        print(f"  Grad clip : {current_clip}")
+        print(f"  {_THIN}")
+        print(f"  Commands (type one then press Enter):")
+        print(f"    lr=<value>    — set learning rate  (rebuilds cosine scheduler over remaining steps)")
+        print(f"    clip=<value>  — set gradient clip max_norm")
+        print(f"    resume        — continue training")
+        print(f"  {_THICK}")
+
+        while True:
+            try:
+                raw = input("  > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\n  ▶  Resuming (EOF / interrupt)...\n")
+                break
+
+            cmd = raw.lower()
+
+            if cmd in ('resume', 'r', ''):
+                break
+
+            elif cmd.startswith('lr='):
+                try:
+                    new_lr = float(cmd[3:])
+                    if new_lr <= 0:
+                        print(f"  ✗  LR must be positive.  Got: {new_lr}")
+                        continue
+                    old_lr = optimizer.param_groups[0]['lr']
+                    for pg in optimizer.param_groups:
+                        pg['lr'] = new_lr
+                    # Replace scheduler: fresh cosine decaying from new_lr → min_lr
+                    # over the remaining steps so the schedule stays smooth.
+                    scheduler_ref[0] = CosineAnnealingLR(
+                        optimizer,
+                        T_max=max(remaining, 1),
+                        eta_min=train_config.get('min_lr', 1e-6),
+                    )
+                    print(f"  ✓  Learning rate  :  {old_lr:.4e}  →  {new_lr:.4e}")
+                    print(f"  ✓  Scheduler      :  new cosine decay  {new_lr:.4e} → {train_config.get('min_lr', 1e-6):.4e}  over {remaining} steps")
+                except ValueError:
+                    print(f"  ✗  Invalid value: '{raw}'.  Example: lr=1e-5")
+
+            elif cmd.startswith('clip='):
+                try:
+                    new_clip = float(cmd[5:])
+                    if new_clip <= 0:
+                        print(f"  ✗  Clip must be positive.  Got: {new_clip}")
+                        continue
+                    old_clip = train_config['max_grad_norm']
+                    train_config['max_grad_norm'] = new_clip
+                    print(f"  ✓  Grad clip      :  {old_clip}  →  {new_clip}")
+                except ValueError:
+                    print(f"  ✗  Invalid value: '{raw}'.  Example: clip=0.5")
+
+            else:
+                print(f"  ✗  Unknown command: '{raw}'")
+                print(f"     Available: lr=<value>  |  clip=<value>  |  resume")
+
+        _SEP = "─" * 64
+        print()
+        print(f"  ┌{_SEP}┐")
+        print(f"  │{'  ▶  Resuming training...  ':^64}│")
+        print(f"  └{_SEP}┘")
+        print()
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1094,13 +1249,15 @@ def train(model, processor, train_loader, val_loader, val_dataset,
           train_csv_logger, val_csv_logger, gen_samples_csv_logger, tb_writer,
           _val_collator=None, _train_collator=None,
           start_epoch=1, start_global_step=0, start_steps_done_in_epoch=None,
-          best_val_loss=float('inf'), start_evals_without_improvement=0, start_elapsed_sec=0.0):
+          best_val_loss=float('inf'), start_evals_without_improvement=0, start_elapsed_sec=0.0,
+          controller=None):
     """Full training loop for Qwen3-VL LoRA fine-tuning."""
 
     # Unpack config
     num_epochs = train_config['num_epochs']
     grad_accum_steps = train_config['grad_accum_steps']
-    max_grad_norm = train_config['max_grad_norm']
+    # max_grad_norm is read live from train_config['max_grad_norm'] each step
+    # so that InteractiveController.check() can update it mid-training.
     log_every = train_config['log_every_steps']
     save_every = train_config['save_every_steps']
     eval_every = train_config['eval_every_steps']
@@ -1121,6 +1278,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     step_losses = []
     step_grad_norms = []
     log_step_start = time.time()
+
+    # Wrap scheduler in a one-element list so InteractiveController can replace
+    # it in-place (e.g. after the user types lr=<new_value>).
+    _sched = [scheduler]
 
     # ── CUDA RT handle for sticky-error recovery ─────────────────────────────
     # Resolve the CUDA runtime DLL once and cache it.  Used by the CUDA error
@@ -1442,13 +1603,20 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                           f"re-scaled gradients by {scale:.2f}x")
 
                 grad_norm = torch.nn.utils.clip_grad_norm_(
-                    _all_trainable_params, max_norm=max_grad_norm
+                    _all_trainable_params, max_norm=train_config['max_grad_norm']
                 ).item()
 
                 window_valid_microbatches = valid_microbatches_in_window
                 optimizer.step()
-                scheduler.step()
+                _sched[0].step()
                 optimizer.zero_grad(set_to_none=True)
+
+                # ── Interactive controller check ──────────────────────────────────
+                # Runs AFTER optimizer/scheduler step and gradient zero — the only
+                # completely safe point to block the training loop for user input.
+                if controller is not None:
+                    controller.check(optimizer, _sched, train_config, global_step + 1, total_optimizer_steps)
+
                 valid_microbatches_in_window = 0
 
                 global_step += 1
@@ -1490,7 +1658,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 if global_step % log_every == 0:
                     avg_loss = sum(step_losses) / len(step_losses)
                     avg_grad_norm = sum(step_grad_norms) / len(step_grad_norms)
-                    current_lr = scheduler.get_last_lr()[0]
+                    current_lr = _sched[0].get_last_lr()[0]
                     elapsed = time.time() - training_start
                     log_elapsed = time.time() - log_step_start
                     speed = len(step_losses) / max(log_elapsed, 1e-6)
@@ -1608,7 +1776,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         best_val_loss = val_results['val_loss']
                         evals_without_improvement = 0
                         ckpt_manager.save_best(
-                            model, optimizer, scheduler, epoch, global_step,
+                            model, optimizer, _sched[0], epoch, global_step,
                             (micro_step + 1) // grad_accum_steps, best_val_loss,
                             evals_without_improvement, elapsed
                         )
@@ -1635,7 +1803,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 if global_step % save_every == 0:
                     elapsed = time.time() - training_start
                     ckpt_manager.save_periodic(
-                        model, optimizer, scheduler, epoch, global_step,
+                        model, optimizer, _sched[0], epoch, global_step,
                         (micro_step + 1) // grad_accum_steps, best_val_loss,
                         evals_without_improvement, elapsed
                     )
@@ -1744,12 +1912,9 @@ def main():
     print(f"    User                   : {CONFIG['user_prompt']}")
 
     print("\n  [ LoRA ]")
-    print(f"    Rank / Alpha (LM)      : {CONFIG['lora_r']} / {CONFIG['lora_alpha']}")
-    print(f"    Target modules (LM)    : {', '.join(CONFIG['lora_target_modules'])}")
-    print(f"    Include vision encoder : {CONFIG['lora_include_vision']}")
-    if CONFIG['lora_include_vision']:
-        print(f"    Vision targets         : {', '.join(CONFIG['lora_vision_targets'])}")
-        print(f"    Rank / Alpha (Vision)  : {CONFIG['lora_vision_r']} / {CONFIG['lora_vision_alpha']}")
+    print(f"    Tier 1 — LM attn + MLP : r={CONFIG['lora_t1_r']}, alpha={CONFIG['lora_t1_alpha']}  modules: {', '.join(CONFIG['lora_t1_modules'])}")
+    print(f"    Tier 2 — Vision encoder: r={CONFIG['lora_t2_r']}, alpha={CONFIG['lora_t2_alpha']}  modules: {', '.join(CONFIG['lora_t2_modules'])}")
+    print(f"    Tier 3 — embed+head    : r={CONFIG['lora_t3_r']}, alpha={CONFIG['lora_t3_alpha']}  modules: {', '.join(CONFIG['lora_t3_modules'])}")
     print(f"    Dropout                : {CONFIG['lora_dropout']}")
     print(f"    DoRA / RSLoRA          : {CONFIG['lora_use_dora']} / {CONFIG['lora_use_rslora']}")
 
@@ -1872,21 +2037,29 @@ def main():
 
     # ── Apply LoRA ──
     print("\nApplying LoRA...")
-    target_modules = list(CONFIG['lora_target_modules'])
-    if CONFIG['lora_include_vision']:
-        target_modules.extend(CONFIG['lora_vision_targets'])
 
-    # Build per-module rank/alpha overrides for vision encoder layers.
-    # Use "model.visual." prefix pattern — bare names like "proj" would also match LM layers (q_proj, etc.)
-    rank_pattern = {}
-    alpha_pattern = {}
-    if CONFIG['lora_include_vision']:
-        rank_pattern[r"model\.visual\."] = CONFIG['lora_vision_r']
-        alpha_pattern[r"model\.visual\."] = CONFIG['lora_vision_alpha']
+    target_modules = (
+        list(CONFIG['lora_t1_modules'])
+        + list(CONFIG['lora_t2_modules'])
+        + list(CONFIG['lora_t3_modules'])
+    )
+
+    # rank_pattern / alpha_pattern use PEFT's get_pattern_key() suffix matching:
+    #   re.match(rf"(.*\.)?({key})$", module_path)
+    # Tier 2 leaf names match only vision modules (e.g. 'proj' matches '.proj' not 'q_proj').
+    # Tier 3 keys match only their respective modules (lm_head, embed_tokens, pos_embed).
+    # Tier 1 (LM) needs no entry — it inherits the default r=lora_t1_r.
+    # NOTE: lm_head and embed_tokens share their base weight (tie_word_embeddings=True).
+    #   PEFT adds independent LoRA delta matrices — the tie is preserved.
+    rank_pattern  = {k: CONFIG['lora_t2_r']    for k in CONFIG['lora_t2_modules']}
+    alpha_pattern = {k: CONFIG['lora_t2_alpha'] for k in CONFIG['lora_t2_modules']}
+    for k in CONFIG['lora_t3_modules']:
+        rank_pattern[k]  = CONFIG['lora_t3_r']
+        alpha_pattern[k] = CONFIG['lora_t3_alpha']
 
     lora_config = LoraConfig(
-        r=CONFIG['lora_r'],
-        lora_alpha=CONFIG['lora_alpha'],
+        r=CONFIG['lora_t1_r'],
+        lora_alpha=CONFIG['lora_t1_alpha'],
         target_modules=target_modules,
         rank_pattern=rank_pattern,
         alpha_pattern=alpha_pattern,
@@ -1940,11 +2113,63 @@ def main():
         model = get_peft_model(model, lora_config)
     del lora_config  # consumed by get_peft_model / PeftModel
 
-    model.print_trainable_parameters()
-    _total_params = sum(p.numel() for p in model.parameters())
+    # ── Parameter summary (per-tier breakdown) ──
+    # Classify trainable parameters by tier by inspecting the leaf module name
+    # that appears immediately before the lora_A/lora_B marker in each param path.
+    _t1_set      = set(CONFIG['lora_t1_modules'])
+    _t2_set      = set(CONFIG['lora_t2_modules'])
+    _t3_set      = set(CONFIG['lora_t3_modules'])
+    _lora_marks  = ('lora_A', 'lora_B', 'lora_embedding_A', 'lora_embedding_B')
+    _tier_params = {'Tier 1': 0, 'Tier 2': 0, 'Tier 3': 0}
+    _tier_layers = {'Tier 1': set(), 'Tier 2': set(), 'Tier 3': set()}
+
+    for _pname, _param in model.named_parameters():
+        if not _param.requires_grad:
+            continue
+        _parts = _pname.split('.')
+        for _i, _p in enumerate(_parts):
+            if _p in _lora_marks and _i > 0:
+                _leaf = _parts[_i - 1]
+                if   _leaf in _t2_set: _tier = 'Tier 2'
+                elif _leaf in _t3_set: _tier = 'Tier 3'
+                elif _leaf in _t1_set: _tier = 'Tier 1'
+                else:                  _tier = None
+                if _tier:
+                    _tier_params[_tier] += _param.numel()
+                    _tier_layers[_tier].add('.'.join(_parts[:_i]))
+                break
+
+    _total_params    = sum(p.numel() for p in model.parameters())
     _trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"  Total parameters:     {_total_params:,}")
-    print(f"  Trainable parameters: {_trainable_params:,} ({_trainable_params / _total_params * 100:.2f}%)")
+    _frozen_params   = _total_params - _trainable_params
+    _lora_total      = sum(_tier_params.values())
+
+    _tier_meta = {
+        'Tier 1': (f"LM attention + MLP",       CONFIG['lora_t1_r']),
+        'Tier 2': (f"Vision encoder",            CONFIG['lora_t2_r']),
+        'Tier 3': (f"Embeddings + output head",  CONFIG['lora_t3_r']),
+    }
+
+    _W = 80
+    print("\n" + "=" * _W)
+    print("  MODEL PARAMETER SUMMARY")
+    print("=" * _W)
+    print(f"  {'Tier':<10} {'Description':<28} {'Rank':>5} {'LoRA Layers':>12} {'Trainable Params':>18}")
+    print("  " + "─" * (_W - 2))
+    for _tl in ['Tier 1', 'Tier 2', 'Tier 3']:
+        _desc, _r = _tier_meta[_tl]
+        _n = len(_tier_layers[_tl])
+        _p = _tier_params[_tl]
+        print(f"  {_tl:<10} {_desc:<28} {_r:>5} {_n:>12,} {_p:>18,}")
+    print("  " + "─" * (_W - 2))
+    print(f"  {'Total LoRA':<10} {'(all trainable adapters)':<28} {'':>5} {'':>12} {_lora_total:>18,}")
+    print(f"  {'Frozen':<10} {'Base model weights':<28} {'':>5} {'':>12} {_frozen_params:>18,}")
+    print(f"  {'TOTAL':<10} {'All parameters':<28} {'':>5} {'':>12} {_total_params:>18,}")
+    print("  " + "─" * (_W - 2))
+    print(f"  Trainable: {_trainable_params:,} / {_total_params:,}  ({_trainable_params / _total_params * 100:.4f}% of total model)")
+    print("=" * _W)
+    del _t1_set, _t2_set, _t3_set, _lora_marks, _tier_params, _tier_layers
+    del _lora_total, _frozen_params, _tier_meta, _W
 
     # ── Gradient Checkpointing ──
     if CONFIG['use_gradient_checkpointing']:
@@ -2161,7 +2386,8 @@ def main():
     # ── Train ──
     print(f"\nGPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
     print(f"VRAM total: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB" if torch.cuda.is_available() else "")
-
+    
+    controller = InteractiveController()
     final_step, final_best_loss = train(
         model=model,
         processor=processor,
@@ -2184,6 +2410,7 @@ def main():
         best_val_loss=best_val_loss,
         start_evals_without_improvement=start_evals_without_improvement,
         start_elapsed_sec=start_elapsed_sec,
+        controller=controller,
     )
 
     print("\n" + "=" * 60)
