@@ -1,3 +1,1 @@
-timestamp,global_step,epoch,val_loss,val_ppl,bleu1,bleu2,bleu4,rouge_l,wer,meteor,num_eval_batches,num_gen_samples
-2026-04-13 13:00:54,200,1,3.122361,22.6999,16.5428,4.3024,0.6320,7.8006,106.0100,6.7246,60,100
-2026-04-13 15:39:28,400,1,3.034176,20.7838,19.0704,5.7948,0.8693,8.8894,112.9382,8.3008,60,100
+timestamp,global_step,epoch,val_loss,val_ppl,bleu1,bleu2,bleu4,rouge_l,wer,meteor,bleu1_how2sign,bleu2_how2sign,bleu4_how2sign,rouge_l_how2sign,wer_how2sign,meteor_how2sign,n_how2sign,bleu1_openasl,bleu2_openasl,bleu4_openasl,rouge_l_openasl,wer_openasl,meteor_openasl,n_openasl,num_eval_batches,num_gen_samples

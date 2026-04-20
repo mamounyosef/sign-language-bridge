@@ -102,38 +102,49 @@ CONFIG = {
     'bnb_4bit_use_double_quant': True,
 
     # ── Video Processing ──
-    'video_fps': 18,                              # Frames per second to sample
+    'video_fps': 14,                              # Frames per second to sample (lowered from 18 to fit bigger per-frame budget within 20M total cap)
     'video_min_pixels': 4 * 32 * 32,              # Min visual tokens per frame pair (~4 tokens)
-    'video_max_pixels': 49 * 32 * 32,             # Max visual tokens per frame pair (49 = 224*224 at patch_size=16, merge=2)
+    'video_max_pixels': 100 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
     'video_total_pixels': 20480 * 32 * 32,        # Total pixel budget cap across all frames (None = no cap)
+
+    # ── Signer Cropping (pre-computed MediaPipe bboxes) ──
+    # Bboxes are one static box per clip (padded union of pose landmarks across
+    # sampled frames). Crop is applied to decoded frames BEFORE Qwen3-VL's
+    # internal resize, so the full pixel budget lands on the signing region.
+    # CSVs are produced by data_code/11_extract_signer_bboxes.py.
+    'use_signer_crop': True,
+    'bbox_csv_train': Path('..') / 'data' / '2_dataset_train_bboxes.csv',
+    'bbox_csv_val':   Path('..') / 'data' / '2_dataset_val_bboxes.csv',
+    'bbox_csv_test':  Path('..') / 'data' / '2_dataset_test_bboxes.csv',
 
     # ── Chat Template / Prompts ──
     'system_prompt': 'You are a sign language translator.',
     'user_prompt': 'Translate this American Sign Language video into English.',
 
     # ── Sequence Lengths ──
-    'max_text_tokens': 60,                        # Max tokens for the assistant response (translation)
+    'max_text_tokens': 70,                        # Max tokens for the assistant response (translation)
 
     # ── LoRA ──
-    # Tier 1 (default r): LM attention + MLP — most critical, trains at highest rank
-    # Tier 2 (r=4):       Vision encoder — needs less adaptation (pretrained weights)
-    # Tier 3 (r=2):       Embeddings + output head — remaining trainable layers
     # Alpha = 2x rank throughout, consistent with RSLoRA (alpha/sqrt(r)) scaling.
-    'lora_t1_r': 16,                             'lora_t1_alpha': 32,
+    'lora_t1_r': 16,                             
+    'lora_t1_alpha': 32,
     'lora_t1_modules': [
         'q_proj', 'k_proj', 'v_proj', 'o_proj',  # LM attention projections
         'gate_proj', 'up_proj', 'down_proj',      # LM MLP projections
     ],
-    'lora_t2_r': 4,                              'lora_t2_alpha': 8,
+    'lora_t2_r': 32,                             
+    'lora_t2_alpha': 64,
     'lora_t2_modules': [
         'qkv', 'proj',                            # Vision attention: fused QKV + output proj (incl. Conv3d patch_embed.proj)
         'linear_fc1', 'linear_fc2',               # Vision MLP + merger + deepstack_merger_list
+        'pos_embed',                             # Vision positional embeddings (Embedding)
+
     ],
-    'lora_t3_r': 2,                              'lora_t3_alpha': 4,
+    'lora_t3_r': 2,                              
+    'lora_t3_alpha': 4,
     'lora_t3_modules': [                         # Remaining trainable layers (Linear + Embedding)
         'lm_head',                               # Output head (Linear; base weight tied to embed_tokens)
-        'embed_tokens',                          # LM input embeddings (Embedding; tied to lm_head)
-        'pos_embed',                             # Vision positional embeddings (Embedding)
+        # 'embed_tokens',                          # LM input embeddings (Embedding; tied to lm_head)
     ],
     'lora_dropout': 0.08,
     'lora_bias': 'none',
@@ -146,12 +157,12 @@ CONFIG = {
     'batch_size': 1,                              # VRAM constraint with vision LoRA — 1 sample per micro-batch
 
     # ── Gradient Accumulation ──
-    'grad_accum_steps': 16,                       # Effective batch = 1 x 16 = 16
+    'grad_accum_steps': 32,                       # Effective batch = 1 x 32 = 32
 
     # ── DataLoader Config ──
     'train_num_workers': 1,                       # 2 workers; lower count avoids Windows shared-memory exhaustion (error 1455)
     'train_prefetch_factor': 1,                   # Pre-load 2 batches ahead (safe now that pin_memory is permanently off)
-    'train_pin_memory': True,                     # Disabled — pinned memory caused CUDA OOM in pin_memory thread
+    'train_pin_memory': True,                 
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
     'val_num_workers': 1,                          # 1 worker overlaps video decoding with GPU inference during validation
@@ -159,11 +170,18 @@ CONFIG = {
     'val_pin_memory': False,                        # Pinned memory for async CPU→GPU DMA during validation
     'val_persistent_workers': False,               # Keep val worker alive across validation runs
 
-    # ── Learning Rate ──
-    'learning_rate': 2e-5,
-    'min_lr': 1e-6,                               # Cosine annealing down to it's 5% value
+    # ── Learning Rates ──
+    'lr_tier1_lm':          3e-5,                 # LM LoRA (attn + MLP) — moderate rate, already fluent English
+    'min_lr_tier1':         3e-7,                 # Cosine floor for tier 1 1% of it's value
+
+    'lr_tier2_vision':      5e-5,                 # Vision LoRA — highest rate, adapting ViT to ASL
+    'min_lr_tier2':         5e-7,                 # Cosine floor for tier 2 (deeper decay) 1% of it's value
+
+    'lr_tier3_embed_head':  2e-5,                 # Embed + LM head — moderate rate
+    'min_lr_tier3':         2e-7,                 # Cosine floor for tier 3 1% of it's value
+
     'warmup_ratio': 0.03,                         # Fraction of total steps for warmup
-    'warmup_steps': 100,                         # If set, overrides warmup_ratio
+    'warmup_steps': 350,                          # If set, overrides warmup_ratio (raised from 100 to let bigger vision LoRA stabilise)
     'weight_decay': 0.01,
     'adam_betas': (0.9, 0.98),
     'max_grad_norm': 1.0,
@@ -188,11 +206,11 @@ CONFIG = {
     'num_print_samples': 5,
     'val_gen_batch_size': 1,                      # Low — generation is VRAM-intensive
     'max_generate_samples': 100,
-    'val_beam_size': 1,                             # 1 = greedy (faster validation); run beam=4 on final checkpoint
+    'val_beam_size': 2,                             # 1 = greedy (faster validation); run beam=4 on final checkpoint
     'val_length_penalty': 1.0,                      # > 1.0 favors longer outputs (counters BLEU brevity penalty); < 1.0 favors shorter
-    'val_no_repeat_ngram_size': 3,                  # Block any n-gram from repeating; improves BLEU precision (0 = disabled)
-    'val_repetition_penalty': 1.1,
-    'val_max_new_tokens': 60,
+    'val_no_repeat_ngram_size': 0,                  # Block any n-gram from repeating; improves BLEU precision (0 = disabled)
+    'val_repetition_penalty': 1.0,
+    'val_max_new_tokens': 70,
 
     # ── Early Stopping ──
     'early_stopping_patience': 12,                # Evals without improvement before stopping
@@ -204,9 +222,11 @@ CONFIG = {
     'torch_compile_mode': 'default',              # 'default' or 'max-autotune'
 
     # ── Resuming ──
-    'resume_training': True,                    # Set to True to resume from checkpoint
+    # Fresh run — old checkpoints are NOT compatible with the new Tier-2 LoRA
+    # rank (4 → 32) or the new signer-crop data path.
+    'resume_training': True,                   # Set to True to resume from checkpoint
     'load_best_model': False,
-    'resume_checkpoint_step': 600,               # None = latest, or specific step number
+    'resume_checkpoint_step': 10,             # None = latest, or specific step number
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -215,20 +235,28 @@ CONFIG = {
     # Set 'enabled' to False after the resumed run starts successfully.
     #
     # How it works:
-    #   Resets the CosineAnnealingLR to start from 'lr' and decay to 'eta_min'
-    #   over a fresh T_max cycle — no warmup, straight into cosine decay.
+    #   Rebuilds a per-tier LambdaLR cosine schedule starting from the given
+    #   peak LRs and decaying to the given minimums over the remaining steps.
+    #   No warmup — straight into cosine decay from the override values.
+    #   Each tier is independent; omit a tier key to keep its original LR.
     # ─────────────────────────────────────────────────────────────────────────
     'lr_override': {
-        'enabled': False,             # Set True to apply, False after resuming
-        'lr': 2e-5,                   # New peak/starting LR for cosine
-        'eta_min': 1e-6,              # New minimum LR floor for cosine
+        'enabled': False,                   # Set True to apply, False after resuming
+        'lr_tier1_lm':          1e-5,       # New peak LR for Tier 1 (LM attn + MLP)
+        'lr_tier2_vision':      5e-5,       # New peak LR for Tier 2 (Vision encoder)
+        'lr_tier3_embed_head':  1e-5,       # New peak LR for Tier 3 (Embed + LM head)
+        'min_lr_tier1':         1e-6,       # Cosine floor for Tier 1
+        'min_lr_tier2':         5e-7,       # Cosine floor for Tier 2
+        'min_lr_tier3':         1e-6,       # Cosine floor for Tier 3
     },
 
     # ── Bucket Batch Sampling ──
     'use_bucket_batching': True,                  # Group clips by duration to minimise padding waste
 
     # ── Label Smoothing ──
-    'label_smoothing': 0.0,
+    # Gentle smoothing helps with OpenASL's noisy ASR-style captions without
+    # overly dulling the training signal on clean How2Sign data.
+    'label_smoothing': 0.04,
 
     # ── Seed ──
     'seed': 42,
@@ -282,7 +310,7 @@ CONFIG = {
 
     # ── Debug: save augmented frames to disk ──
     'aug_debug_save_images': True,
-    'aug_debug_save_interval': 10,          # Save one frame every N optimiser steps
+    'aug_debug_save_interval': 20,          # Save one frame every N optimiser steps
     'aug_debug_save_dir': Path('..') / 'data' / 'debugging_images',
 }
 
@@ -305,10 +333,11 @@ class InteractiveController:
     is set the loop blocks here and accepts commands before continuing.
 
     Commands (case-insensitive):
-        lr=<value>    Set learning rate and rebuild the cosine scheduler for
-                      the remaining steps.
-        clip=<value>  Set gradient clip max_norm.
-        resume        Continue training.
+        lr=<t1>,<t2>,<t3>   Set per-tier LRs and rebuild per-tier cosine scheduler.
+                             Provide all three values (e.g. lr=1e-5,3e-5,1e-5).
+                             Alternatively lr=<value> sets all tiers to the same LR.
+        clip=<value>         Set gradient clip max_norm.
+        resume               Continue training.
     """
 
     def __init__(self):
@@ -323,7 +352,7 @@ class InteractiveController:
         print(f"  ┌{_SEP}┐")
         print(f"  │{'  Interactive Training Controller  active':^64}│")
         print(f"  │{'  Type  p + Enter  at any time to pause training':^64}│")
-        print(f"  │{'  Commands:  lr=<val>   clip=<val>   resume':^64}│")
+        print(f"  │{'  Commands:  lr=<t1>,<t2>,<t3>   clip=<val>   resume':^64}│")
         print(f"  └{_SEP}┘")
         print()
 
@@ -362,7 +391,9 @@ class InteractiveController:
             return
         self._pause_flag.clear()
 
-        current_lr   = optimizer.param_groups[0]['lr']
+        lr_t1        = optimizer.param_groups[0]['lr']
+        lr_t2        = optimizer.param_groups[1]['lr']
+        lr_t3        = optimizer.param_groups[2]['lr']
         current_clip = train_config['max_grad_norm']
         remaining    = total_optimizer_steps - global_step
 
@@ -374,13 +405,16 @@ class InteractiveController:
         print(f"  ⏸  TRAINING PAUSED")
         print(f"  {_THIN}")
         print(f"  Step      : {global_step} / {total_optimizer_steps}  ({remaining} steps remaining)")
-        print(f"  LR        : {current_lr:.4e}")
+        print(f"  LR T1 (LM)         : {lr_t1:.4e}")
+        print(f"  LR T2 (Vision)     : {lr_t2:.4e}")
+        print(f"  LR T3 (Embed/Head) : {lr_t3:.4e}")
         print(f"  Grad clip : {current_clip}")
         print(f"  {_THIN}")
         print(f"  Commands (type one then press Enter):")
-        print(f"    lr=<value>    — set learning rate  (rebuilds cosine scheduler over remaining steps)")
-        print(f"    clip=<value>  — set gradient clip max_norm")
-        print(f"    resume        — continue training")
+        print(f"    lr=<t1>,<t2>,<t3>  — set per-tier LRs  (e.g. lr=1e-5,3e-5,1e-5)")
+        print(f"    lr=<value>         — set all tiers to the same LR")
+        print(f"    clip=<value>       — set gradient clip max_norm")
+        print(f"    resume             — continue training")
         print(f"  {_THICK}")
 
         while True:
@@ -397,24 +431,46 @@ class InteractiveController:
 
             elif cmd.startswith('lr='):
                 try:
-                    new_lr = float(cmd[3:])
-                    if new_lr <= 0:
-                        print(f"  ✗  LR must be positive.  Got: {new_lr}")
+                    raw_val = cmd[3:]
+                    parts = [p.strip() for p in raw_val.split(',')]
+                    if len(parts) == 3:
+                        new_lrs = [float(p) for p in parts]
+                    elif len(parts) == 1:
+                        # Single value — apply uniformly to all tiers
+                        new_lrs = [float(parts[0])] * 3
+                    else:
+                        print(f"  ✗  Expected 1 or 3 comma-separated values.  Example: lr=1e-5,3e-5,1e-5")
                         continue
-                    old_lr = optimizer.param_groups[0]['lr']
-                    for pg in optimizer.param_groups:
-                        pg['lr'] = new_lr
-                    # Replace scheduler: fresh cosine decaying from new_lr → min_lr
-                    # over the remaining steps so the schedule stays smooth.
-                    scheduler_ref[0] = CosineAnnealingLR(
+                    if any(lr <= 0 for lr in new_lrs):
+                        print(f"  ✗  All LRs must be positive.  Got: {new_lrs}")
+                        continue
+                    old_lrs = [pg['lr'] for pg in optimizer.param_groups]
+                    min_lrs = [
+                        train_config.get('min_lr_tier1', 1e-6),
+                        train_config.get('min_lr_tier2', 5e-7),
+                        train_config.get('min_lr_tier3', 1e-6),
+                    ]
+                    for pg, new_lr in zip(optimizer.param_groups, new_lrs):
+                        pg['lr']         = new_lr
+                        pg['initial_lr'] = new_lr
+                    # Rebuild per-tier cosine LambdaLR over remaining steps
+                    def _pause_lambda(peak: float, floor: float):
+                        ratio = floor / peak
+                        def _fn(step: int) -> float:
+                            progress = min(max(step / max(remaining, 1), 0.0), 1.0)
+                            cos = 0.5 * (1.0 + math.cos(math.pi * progress))
+                            return ratio + (1.0 - ratio) * cos
+                        return _fn
+                    scheduler_ref[0] = torch.optim.lr_scheduler.LambdaLR(
                         optimizer,
-                        T_max=max(remaining, 1),
-                        eta_min=train_config.get('min_lr', 1e-6),
+                        lr_lambda=[_pause_lambda(pk, mn) for pk, mn in zip(new_lrs, min_lrs)],
                     )
-                    print(f"  ✓  Learning rate  :  {old_lr:.4e}  →  {new_lr:.4e}")
-                    print(f"  ✓  Scheduler      :  new cosine decay  {new_lr:.4e} → {train_config.get('min_lr', 1e-6):.4e}  over {remaining} steps")
+                    _tier_labels = ['T1 LM', 'T2 Vision', 'T3 Embed/Head']
+                    print(f"  ✓  Per-tier LR update  ({remaining} steps cosine):")
+                    for label, old, new, mn in zip(_tier_labels, old_lrs, new_lrs, min_lrs):
+                        print(f"     {label:16s}: {old:.4e}  →  {new:.4e}  (floor {mn:.2e})")
                 except ValueError:
-                    print(f"  ✗  Invalid value: '{raw}'.  Example: lr=1e-5")
+                    print(f"  ✗  Invalid value: '{raw}'.  Example: lr=1e-5,3e-5,1e-5")
 
             elif cmd.startswith('clip='):
                 try:
@@ -450,24 +506,64 @@ class SignLanguageQwen3VLDataset(Dataset):
     Video loading and tokenization happens in the collator (via Qwen3-VL processor).
     """
 
-    def __init__(self, tsv_path, sep='\t'):
+    def __init__(self, tsv_path, sep='\t', bbox_csv_path=None,
+                 tokenizer=None, max_text_tokens=None):
         df = pd.read_csv(tsv_path, sep=sep)
+        required_cols = {'vid', 'file_path', 'text', 'duration_sec', 'source'}
+        missing_cols = required_cols - set(df.columns)
+        if missing_cols:
+            raise RuntimeError(f"{tsv_path} missing columns: {missing_cols}")
+
+        # Load bbox CSV and build O(1) lookup by vid. Filter failed extractions.
+        bbox_by_vid = {}
+        n_bbox_failed = 0
+        if bbox_csv_path is not None:
+            bbox_df = pd.read_csv(bbox_csv_path)
+            n_bbox_failed = int(bbox_df['failed'].sum())
+            bbox_ok = bbox_df[~bbox_df['failed']]
+            for r in bbox_ok.itertuples(index=False):
+                bbox_by_vid[str(r.vid)] = (
+                    int(r.x1), int(r.y1), int(r.x2), int(r.y2),
+                    int(r.frame_width), int(r.frame_height),
+                )
+            print(f"  ✓ Loaded {len(bbox_by_vid)} bboxes from {Path(bbox_csv_path).name} "
+                  f"({n_bbox_failed} failed, filtered out)")
+
+        do_truncate = tokenizer is not None and max_text_tokens is not None and max_text_tokens > 0
+
         self.samples = []
         missing = 0
+        no_bbox = 0
+        truncated = 0
 
         for row in tqdm(df.itertuples(index=False), total=len(df), desc=f'Loading {Path(tsv_path).stem}'):
             fp = str(row.file_path)
-            if Path(fp).exists():
-                self.samples.append({
-                    'vid': row.vid,
-                    'text': str(row.text),
-                    'duration_sec': float(row.duration_sec),
-                    'file_path': fp,
-                })
-            else:
+            if not Path(fp).exists():
                 missing += 1
+                continue
+            vid = str(row.vid)
+            bbox = bbox_by_vid.get(vid) if bbox_csv_path is not None else None
+            if bbox_csv_path is not None and bbox is None:
+                no_bbox += 1
+                continue
+            text = str(row.text)
+            if do_truncate:
+                assert tokenizer is not None and max_text_tokens is not None
+                ids = tokenizer.encode(text, add_special_tokens=False)
+                if len(ids) > int(max_text_tokens):
+                    text = tokenizer.decode(ids[:int(max_text_tokens)], skip_special_tokens=True)
+                    truncated += 1
+            self.samples.append({
+                'vid': vid,
+                'text': text,
+                'duration_sec': float(row.duration_sec),
+                'file_path': fp,
+                'source': str(row.source),
+                'bbox': bbox,
+            })
 
-        print(f"  ✓ Loaded {len(self.samples)} samples ({missing} missing files)")
+        trunc_msg = f", {truncated} truncated to ≤{max_text_tokens} tokens" if do_truncate else ""
+        print(f"  ✓ Loaded {len(self.samples)} samples ({missing} missing files, {no_bbox} without valid bbox{trunc_msg})")
         del df
 
     def __len__(self):
@@ -530,6 +626,18 @@ class Qwen3VLCollator:
         self.is_training = is_training
         self.augmentation_enabled = False          # Toggled by training loop based on aug_start_epoch
         self.debug_save_images = is_training and config.get('aug_debug_save_images', False)
+
+        # Rate-limited logging for crop-alignment snaps in _apply_signer_crop. 
+        # Qwen3-VL requires H/W divisible by patch_size*merge_size (=32); bboxes
+        # rarely align, so we snap and report aggregated stats every N batches.
+        self._snap_align = 32
+        self._snap_log_every = int(config.get('snap_log_every_batches', 2000))
+        self._snap_batches = 0
+        self._snap_total_clips = 0
+        self._snap_snapped_clips = 0
+        self._snap_total_trim_px = 0
+        self._snap_max_trim_px = 0
+        self._snap_degenerate_bbox_ids = set()
 
         # ── Build spatial augmentation transform (applied per-clip, training only) ──
         # torchvision v2 applies the SAME random parameters to every frame in a
@@ -684,6 +792,116 @@ class Qwen3VLCollator:
 
         return labels
 
+    def _snap_down_to_align(self, lo, hi, align):
+        """Shrink [lo, hi) within [0, limit) so (hi-lo) is a multiple of `align`,
+        keeping the window centered on its midpoint. Returns (lo, hi)."""
+        span = hi - lo
+        new_span = max(align, (span // align) * align)
+        if new_span >= span:
+            return lo, hi
+        trim = span - new_span
+        left = trim // 2
+        right = trim - left
+        return lo + left, hi - right
+
+    def _maybe_log_snap_stats(self):
+        self._snap_batches += 1
+        if self._snap_batches % self._snap_log_every != 0:
+            return
+        if self._snap_total_clips == 0:
+            return
+        avg_trim = self._snap_total_trim_px / max(1, self._snap_snapped_clips)
+        print(
+            f"[signer_crop snap] batches={self._snap_batches} "
+            f"clips={self._snap_total_clips} snapped={self._snap_snapped_clips} "
+            f"avg_trim={avg_trim:.1f}px max_trim={self._snap_max_trim_px}px "
+            f"degenerate_bboxes={len(self._snap_degenerate_bbox_ids)}",
+            flush=True,
+        )
+
+    def _apply_signer_crop(self, videos, sample_bboxes):
+        """Crop each clip to its precomputed signer bbox.
+
+        The bbox was computed on original-video pixels (``frame_width`` /
+        ``frame_height`` stored with it); ``process_vision_info`` may return
+        frames at a different resolution, so we rescale the bbox to the
+        current frame H/W before slicing.
+
+        Reused by both ``__call__`` (training) and the validation generation
+        loop so train/eval see the same pixel distribution.
+        """
+        use_crop = bool(self.config.get('use_signer_crop'))
+        if not use_crop or not videos:
+            return videos
+        align = self._snap_align
+        cropped = []
+        for vid, bbox in zip(videos, sample_bboxes):
+            self._snap_total_clips += 1
+            if isinstance(vid, torch.Tensor):
+                cur_h, cur_w = int(vid.shape[-2]), int(vid.shape[-1])
+                arr = None
+            else:
+                arr = np.asarray(vid)
+                vid = arr
+                cur_h, cur_w = int(arr.shape[-2]), int(arr.shape[-1])
+
+            cx1, cy1, cx2, cy2 = 0, 0, cur_w, cur_h
+            bbox_used = False
+            if use_crop and bbox is not None:
+                x1, y1, x2, y2, fw, fh = bbox
+                sx = cur_w / max(fw, 1)
+                sy = cur_h / max(fh, 1)
+                bx1 = max(0, int(round(x1 * sx)))
+                by1 = max(0, int(round(y1 * sy)))
+                bx2 = min(cur_w, int(round(x2 * sx)))
+                by2 = min(cur_h, int(round(y2 * sy)))
+                if bx2 - bx1 >= align and by2 - by1 >= align:
+                    cx1, cy1, cx2, cy2 = bx1, by1, bx2, by2
+                    bbox_used = True
+                else:
+                    # Degenerate/tiny bbox — fall back to full frame, warn once.
+                    vid_id = None
+                    if isinstance(bbox, (list, tuple)) and len(bbox) >= 6:
+                        vid_id = (float(fw), float(fh), float(x1), float(y1), float(x2), float(y2))
+                    if vid_id not in self._snap_degenerate_bbox_ids:
+                        self._snap_degenerate_bbox_ids.add(vid_id)
+                        print(
+                            f"[signer_crop] degenerate bbox {bbox} -> using full frame "
+                            f"({cur_w}x{cur_h}); will be shown once per unique bbox.",
+                            flush=True,
+                        )
+
+            # Snap the chosen rectangle so (cy2-cy1) and (cx2-cx1) are multiples of `align`.
+            orig_w = cx2 - cx1
+            orig_h = cy2 - cy1
+            cx1, cx2 = self._snap_down_to_align(cx1, cx2, align)
+            cy1, cy2 = self._snap_down_to_align(cy1, cy2, align)
+            trim = (orig_w - (cx2 - cx1)) + (orig_h - (cy2 - cy1))
+            if trim > 0:
+                self._snap_snapped_clips += 1
+                self._snap_total_trim_px += trim
+                if trim > self._snap_max_trim_px:
+                    self._snap_max_trim_px = trim
+
+            # If the whole frame was smaller than `align` on either axis,
+            # _snap_down_to_align would have left it unchanged — only slice when safe.
+            take_full_frame = (
+                not bbox_used
+                and cx1 == 0 and cy1 == 0
+                and cx2 == cur_w and cy2 == cur_h
+            )
+            if take_full_frame:
+                cropped.append(vid if isinstance(vid, torch.Tensor) else arr)
+                continue
+
+            if isinstance(vid, torch.Tensor):
+                cropped.append(vid[..., cy1:cy2, cx1:cx2].contiguous())
+            else:
+                cropped.append(arr[..., cy1:cy2, cx1:cx2])
+
+        self._maybe_log_snap_stats()
+        return cropped
+
     def __call__(self, batch):
         """
         Process a batch of samples into model-ready inputs.
@@ -694,13 +912,15 @@ class Qwen3VLCollator:
         all_videos = []
         all_video_metadatas = []
         all_video_kwargs = {}
+        sample_bboxes = []  # parallel to all_videos: (x1,y1,x2,y2,fw,fh) or None
 
         for sample in batch:
             messages = self._build_messages(sample, include_assistant=True)
 
             # Get text template (not tokenized)
             text = self.processor.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=False
+                messages, tokenize=False, add_generation_prompt=False,
+                enable_thinking=False,
             )
             all_texts.append(text)
 
@@ -718,11 +938,15 @@ class Qwen3VLCollator:
                 vids, metas = zip(*videos)
                 all_videos.extend(list(vids))
                 all_video_metadatas.extend(list(metas))
+                sample_bboxes.extend([sample.get('bbox')] * len(vids))
             del images, videos  # free intermediate references
 
             # Merge video_kwargs (should be same for all samples)
             if video_kwargs:
                 all_video_kwargs.update(video_kwargs)
+
+        # ── Signer-centric crop (applied BEFORE augmentation) ──
+        all_videos = self._apply_signer_crop(all_videos, sample_bboxes)
 
         # ── Data Augmentation (training only) ──
         # Applied AFTER process_vision_info (frames decoded & resized to the Qwen3-VL
@@ -1102,6 +1326,7 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
 
     references = []
     hypotheses = []
+    sources = []  # parallel to references/hypotheses
     sample_pairs = []
 
     num_samples = min(config['max_generate_samples'], len(val_dataset))
@@ -1127,11 +1352,13 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
             all_videos = []
             all_video_metadatas = []
             all_video_kwargs = {}
+            sample_bboxes = []  # parallel to all_videos
 
             for sample in batch_samples:
                 messages = gen_collator._build_messages(sample, include_assistant=False)
                 text = processor.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
+                    messages, tokenize=False, add_generation_prompt=True,
+                    enable_thinking=False,
                 )
                 all_texts.append(text)
 
@@ -1146,9 +1373,13 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
                     vids, metas = zip(*videos)
                     all_videos.extend(list(vids))
                     all_video_metadatas.extend(list(metas))
+                    sample_bboxes.extend([sample.get('bbox')] * len(vids))
                 del images, videos
                 if video_kwargs:
                     all_video_kwargs.update(video_kwargs)
+
+            # Apply the SAME signer crop as training to keep train/eval distributions matched.
+            all_videos = gen_collator._apply_signer_crop(all_videos, sample_bboxes)
 
             inputs = processor(
                 text=all_texts,
@@ -1189,12 +1420,14 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
             for j, (sample, hyp_text) in enumerate(zip(batch_samples, batch_hypotheses)):
                 ref_text = sample['text'].strip()
                 hyp_text = hyp_text.strip()
+                src = sample.get('source', 'unknown')
 
                 references.append(ref_text)
                 hypotheses.append(hyp_text)
+                sources.append(src)
 
                 if len(sample_pairs) < config['num_print_samples']:
-                    sample_pairs.append((ref_text, hyp_text))
+                    sample_pairs.append((ref_text, hyp_text, src))
 
             del inputs, generated_ids, generated_ids_trimmed, batch_hypotheses, batch_samples
             torch.cuda.empty_cache()
@@ -1212,12 +1445,28 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
     gen_pbar.close()
     del sample_indices  # no longer needed after generation loop
 
-    bleu1 = compute_bleu(references, hypotheses, max_n=1)
-    bleu2 = compute_bleu(references, hypotheses, max_n=2)
-    bleu4 = compute_bleu(references, hypotheses, max_n=4)
-    rouge_l = compute_rouge_l(references, hypotheses)
-    wer = compute_wer(references, hypotheses)
-    meteor = compute_meteor(references, hypotheses)
+    def _metrics_for(refs, hyps):
+        if not refs:
+            return {'bleu1': 0.0, 'bleu2': 0.0, 'bleu4': 0.0,
+                    'rouge_l': 0.0, 'wer': 0.0, 'meteor': 0.0, 'n': 0}
+        return {
+            'bleu1':   compute_bleu(refs, hyps, max_n=1),
+            'bleu2':   compute_bleu(refs, hyps, max_n=2),
+            'bleu4':   compute_bleu(refs, hyps, max_n=4),
+            'rouge_l': compute_rouge_l(refs, hyps),
+            'wer':     compute_wer(refs, hyps),
+            'meteor':  compute_meteor(refs, hyps),
+            'n':       len(refs),
+        }
+
+    overall = _metrics_for(references, hypotheses)
+    per_source = {}
+    for src_name in ('how2sign', 'openasl'):
+        idxs = [i for i, s in enumerate(sources) if s == src_name]
+        per_source[src_name] = _metrics_for(
+            [references[i] for i in idxs],
+            [hypotheses[i] for i in idxs],
+        )
 
     if _orig_use_cache is not None:
         model.config.use_cache = _orig_use_cache
@@ -1227,14 +1476,15 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
     return {
         'val_loss': avg_loss,
         'val_ppl': perplexity,
-        'bleu1': bleu1,
-        'bleu2': bleu2,
-        'bleu4': bleu4,
-        'rouge_l': rouge_l,
-        'wer': wer,
-        'meteor': meteor,
+        'bleu1': overall['bleu1'],
+        'bleu2': overall['bleu2'],
+        'bleu4': overall['bleu4'],
+        'rouge_l': overall['rouge_l'],
+        'wer': overall['wer'],
+        'meteor': overall['meteor'],
+        'per_source': per_source,  # {'how2sign': {...}, 'openasl': {...}}
         'sample_pairs': sample_pairs,
-        'all_pairs': list(zip(references, hypotheses)),
+        'all_pairs': list(zip(references, hypotheses, sources)),
         'num_eval_batches': num_batches,
         'num_gen_samples': len(hypotheses),
     }
@@ -1392,11 +1642,15 @@ def train(model, processor, train_loader, val_loader, val_dataset,
         # Mid-epoch resume: skip already-processed micro-batches at the sampler level
         # so the collator (video decoding) never runs for skipped batches.
         micro_steps_already_processed = 0
+        # Offset added to `micro_step` to recover its absolute index within the epoch;
+        # only non-zero on the sampler-level set_skip() resume path.
+        _abs_micro_offset = 0
         if epoch == start_epoch and start_global_step > 0 and steps_done_in_epoch > 0:
             micro_steps_already_processed = steps_done_in_epoch * grad_accum_steps
             # Tell the bucket sampler to skip at index level (no collator overhead)
             if hasattr(train_loader, 'batch_sampler') and hasattr(train_loader.batch_sampler, 'set_skip'):
                 train_loader.batch_sampler.set_skip(micro_steps_already_processed)
+                _abs_micro_offset = micro_steps_already_processed
                 print(f"  ⏭️  Resuming mid-epoch: skipping {micro_steps_already_processed} micro-batches (sampler-level, no video decoding)")
             else:
                 print(f"  ⏭️  Resuming mid-epoch: skipping {micro_steps_already_processed} micro-batches (iterate-and-discard fallback)")
@@ -1658,7 +1912,11 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 if global_step % log_every == 0:
                     avg_loss = sum(step_losses) / len(step_losses)
                     avg_grad_norm = sum(step_grad_norms) / len(step_grad_norms)
-                    current_lr = _sched[0].get_last_lr()[0]
+                    _last_lrs = _sched[0].get_last_lr()
+                    current_lr   = _last_lrs[0]  # tier 1 (LM) — primary display
+                    lr_t1 = _last_lrs[0] if len(_last_lrs) > 0 else current_lr
+                    lr_t2 = _last_lrs[1] if len(_last_lrs) > 1 else current_lr
+                    lr_t3 = _last_lrs[2] if len(_last_lrs) > 2 else current_lr
                     elapsed = time.time() - training_start
                     log_elapsed = time.time() - log_step_start
                     speed = len(step_losses) / max(log_elapsed, 1e-6)
@@ -1674,7 +1932,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         f"[Epoch {epoch:>2d}/{num_epochs}] "
                         f"Train Loss: {avg_loss:.4f} | "
                         f"Train PPL: {train_ppl:.3f} | "
-                        f"LR: {current_lr:.4e} | "
+                        f"LR[T1/T2/T3]: {lr_t1:.2e}/{lr_t2:.2e}/{lr_t3:.2e} | "
                         f"Grad Norm: {avg_grad_norm:.3f} | "
                         f"Speed: {speed:.3f} steps/s | "
                         f"VRAM: {cuda_mem:.3f}/{cuda_peak:.3f} GB | "
@@ -1688,6 +1946,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         'train_loss': f"{avg_loss:.6f}",
                         'train_ppl': f"{train_ppl:.4f}",
                         'lr': f"{current_lr:.3e}",
+                        'lr_t1': f"{lr_t1:.3e}",
+                        'lr_t2': f"{lr_t2:.3e}",
+                        'lr_t3': f"{lr_t3:.3e}",
                         'grad_norm': f"{avg_grad_norm:.4f}",
                         'cuda_mem_gb': f"{cuda_mem:.2f}",
                         'cuda_peak_gb': f"{cuda_peak:.2f}",
@@ -1731,12 +1992,18 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                     if val_results['sample_pairs']:
                         print(f"\n  Sample Generations:")
-                        for i, (ref, hyp) in enumerate(val_results['sample_pairs'], 1):
-                            print(f"    [{i}] REF: \"{ref}\"")
-                            print(f"        HYP: \"{hyp}\"")
+                        for i, (ref, hyp, src) in enumerate(val_results['sample_pairs'], 1):
+                            print(f"    [{i}] ({src}) REF: \"{ref}\"")
+                            print(f"            HYP: \"{hyp}\"")
+
+                    # Per-source summary line
+                    ps = val_results['per_source']
+                    print(f"\n  Per-source BLEU-4:  "
+                          f"how2sign={ps['how2sign']['bleu4']:.3f}% (n={ps['how2sign']['n']})  |  "
+                          f"openasl={ps['openasl']['bleu4']:.3f}% (n={ps['openasl']['n']})")
 
                     # Log to CSV
-                    val_csv_logger.log({
+                    val_row = {
                         'global_step': global_step,
                         'epoch': epoch,
                         'val_loss': f"{val_results['val_loss']:.6f}",
@@ -1749,13 +2016,24 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         'meteor': f"{val_results['meteor']:.4f}",
                         'num_eval_batches': val_results['num_eval_batches'],
                         'num_gen_samples': val_results['num_gen_samples'],
-                    })
+                    }
+                    for _src in ('how2sign', 'openasl'):
+                        _m = ps[_src]
+                        val_row[f'bleu1_{_src}']   = f"{_m['bleu1']:.4f}"
+                        val_row[f'bleu2_{_src}']   = f"{_m['bleu2']:.4f}"
+                        val_row[f'bleu4_{_src}']   = f"{_m['bleu4']:.4f}"
+                        val_row[f'rouge_l_{_src}'] = f"{_m['rouge_l']:.4f}"
+                        val_row[f'wer_{_src}']     = f"{_m['wer']:.4f}"
+                        val_row[f'meteor_{_src}']  = f"{_m['meteor']:.4f}"
+                        val_row[f'n_{_src}']       = _m['n']
+                    val_csv_logger.log(val_row)
 
                     # Log generated samples
-                    for ref, hyp in val_results['all_pairs']:
+                    for ref, hyp, src in val_results['all_pairs']:
                         gen_samples_csv_logger.log({
                             'global_step': global_step,
                             'epoch': epoch,
+                            'source': src,
                             'reference': ref,
                             'hypothesis': hyp,
                         })
@@ -1769,6 +2047,12 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     tb_writer.add_scalar('ROUGE-L', val_results['rouge_l'], global_step)
                     tb_writer.add_scalar('WER', val_results['wer'], global_step)
                     tb_writer.add_scalar('METEOR', val_results['meteor'], global_step)
+                    for _src in ('how2sign', 'openasl'):
+                        _m = val_results['per_source'][_src]
+                        if _m['n'] > 0:
+                            tb_writer.add_scalar(f'BLEU/BLEU-4_{_src}', _m['bleu4'], global_step)
+                            tb_writer.add_scalar(f'ROUGE-L_{_src}',   _m['rouge_l'], global_step)
+                            tb_writer.add_scalar(f'WER_{_src}',       _m['wer'], global_step)
 
                     # Early stopping / best model
                     elapsed = time.time() - training_start
@@ -1777,7 +2061,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         evals_without_improvement = 0
                         ckpt_manager.save_best(
                             model, optimizer, _sched[0], epoch, global_step,
-                            (micro_step + 1) // grad_accum_steps, best_val_loss,
+                            (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
+                            best_val_loss,
                             evals_without_improvement, elapsed
                         )
                         print(f"\n  ⭐ New best val_loss: {best_val_loss:.4f}")
@@ -1804,7 +2089,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     elapsed = time.time() - training_start
                     ckpt_manager.save_periodic(
                         model, optimizer, _sched[0], epoch, global_step,
-                        (micro_step + 1) // grad_accum_steps, best_val_loss,
+                        (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
+                        best_val_loss,
                         evals_without_improvement, elapsed
                     )
                     # Checkpoint serialization creates temporary CPU copies — reclaim them
@@ -1933,7 +2219,10 @@ def main():
 
     print("\n  [ LEARNING RATE ]")
     warmup_info = f"{CONFIG['warmup_steps']} steps" if CONFIG['warmup_steps'] else f"{CONFIG['warmup_ratio']:.1%} of total"
-    print(f"    LR                     : {CONFIG['learning_rate']:.2e} -> {CONFIG['min_lr']:.2e}  (warmup: {warmup_info})")
+    print(f"    Warmup                 : {warmup_info}")
+    print(f"    Tier 1 (LM LoRA)       : {CONFIG['lr_tier1_lm']:.2e}  →  {CONFIG['min_lr_tier1']:.2e}  (cosine floor)")
+    print(f"    Tier 2 (Vision LoRA)   : {CONFIG['lr_tier2_vision']:.2e}  →  {CONFIG['min_lr_tier2']:.2e}  (cosine floor)")
+    print(f"    Tier 3 (Embed/Head)    : {CONFIG['lr_tier3_embed_head']:.2e}  →  {CONFIG['min_lr_tier3']:.2e}  (cosine floor)")
 
     print("\n  [ EVALUATION & CHECKPOINTING ]")
     print(f"    Eval every             : {CONFIG['eval_every_steps']} steps  (warmup: {CONFIG['eval_every_steps_warmup']} until step {CONFIG['eval_warmup_threshold']})")
@@ -1977,12 +2266,29 @@ def main():
 
     print("\n" + _SEP + "\n")
 
+    # ── Tokenizer (loaded early so the Dataset can truncate reference text
+    # to CONFIG['max_text_tokens']; the full processor is loaded with the model).
+    print("📂 Loading tokenizer for reference-text truncation ...")
+    from transformers import AutoTokenizer
+    _trunc_tokenizer = AutoTokenizer.from_pretrained(CONFIG['model_name'], local_files_only=True)
+
     # ── Load Data Manifests ──
     print("📂 Loading training data...")
-    train_dataset = SignLanguageQwen3VLDataset(CONFIG['data_train_tsv'], CONFIG['tsv_sep'])
+    train_dataset = SignLanguageQwen3VLDataset(
+        CONFIG['data_train_tsv'], CONFIG['tsv_sep'],
+        bbox_csv_path=CONFIG['bbox_csv_train'] if CONFIG.get('use_signer_crop') else None,
+        tokenizer=_trunc_tokenizer,
+        max_text_tokens=CONFIG['max_text_tokens'],
+    )
 
     print("\n📂 Loading validation data...")
-    val_dataset = SignLanguageQwen3VLDataset(CONFIG['data_val_tsv'], CONFIG['tsv_sep'])
+    val_dataset = SignLanguageQwen3VLDataset(
+        CONFIG['data_val_tsv'], CONFIG['tsv_sep'],
+        bbox_csv_path=CONFIG['bbox_csv_val'] if CONFIG.get('use_signer_crop') else None,
+        tokenizer=_trunc_tokenizer,
+        max_text_tokens=CONFIG['max_text_tokens'],
+    )
+    del _trunc_tokenizer  # processor's tokenizer takes over once model is loaded
 
     print(f"\n📦 Train dataset: {len(train_dataset)} samples")
     print(f"📦 Val dataset:   {len(val_dataset)} samples")
@@ -2244,29 +2550,63 @@ def main():
     print(f"  Optimizer steps/epoch: {optimizer_steps_per_epoch}")
     print(f"  Total optimizer steps: {total_optimizer_steps}")
 
-    # ── Optimizer ──
-    print("\n⚙️  Setting up optimizer...")
-    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    # ── Optimizer: 3-tier differential LR ──
+    # Partition trainable params by which LoRA tier their module name falls into.
+    # Matching mirrors PEFT's rank_pattern suffix matching (key at end of module path).
+    print("\n⚙️  Setting up optimizer (3-tier differential LR)...")
+
+    def _matches_tier(name: str, module_list) -> bool:
+        # LoRA param names look like `base_model.model.<...>.<tier_module>.lora_A.default.weight`
+        # Match if any tier module name appears as a `.<mod>.` or `.<mod>` segment.
+        return any(f".{m}." in name or name.endswith(f".{m}") or f".{m}.lora_" in name
+                   for m in module_list)
+
+    t1_params, t2_params, t3_params, unclassified = [], [], [], []
+    for n, p in model.named_parameters():
+        if not p.requires_grad:
+            continue
+        if _matches_tier(n, CONFIG['lora_t3_modules']):
+            t3_params.append(p)
+        elif _matches_tier(n, CONFIG['lora_t2_modules']):
+            t2_params.append(p)
+        elif _matches_tier(n, CONFIG['lora_t1_modules']):
+            t1_params.append(p)
+        else:
+            unclassified.append(n)
+
+    total_trainable = len(t1_params) + len(t2_params) + len(t3_params)
+    print(f"  Tier 1 (LM):         {len(t1_params)} params  @ lr={CONFIG['lr_tier1_lm']:.2e} → {CONFIG['min_lr_tier1']:.2e}")
+    print(f"  Tier 2 (Vision):     {len(t2_params)} params  @ lr={CONFIG['lr_tier2_vision']:.2e} → {CONFIG['min_lr_tier2']:.2e}")
+    print(f"  Tier 3 (Embed/Head): {len(t3_params)} params  @ lr={CONFIG['lr_tier3_embed_head']:.2e} → {CONFIG['min_lr_tier3']:.2e}")
+    if unclassified:
+        raise RuntimeError(
+            f"{len(unclassified)} trainable param(s) unclassified by LoRA tier matcher. "
+            f"Examples: {unclassified[:5]}"
+        )
+
+    param_groups = [
+        {"params": t1_params, "lr": CONFIG['lr_tier1_lm'],         "initial_lr": CONFIG['lr_tier1_lm'],         "tier": 1},
+        {"params": t2_params, "lr": CONFIG['lr_tier2_vision'],     "initial_lr": CONFIG['lr_tier2_vision'],     "tier": 2},
+        {"params": t3_params, "lr": CONFIG['lr_tier3_embed_head'], "initial_lr": CONFIG['lr_tier3_embed_head'], "tier": 3},
+    ]
 
     if CONFIG['use_8bit_adam'] and _BNB_AVAILABLE:
         optimizer = bnb.optim.PagedAdamW8bit(
-            trainable_params,
-            lr=CONFIG['learning_rate'],
+            param_groups,
             betas=CONFIG['adam_betas'],
             weight_decay=CONFIG['weight_decay'],
         )
         print("  ✓ Using Paged 8-bit AdamW (bitsandbytes) — optimizer states page to CPU under VRAM pressure")
     else:
         optimizer = torch.optim.AdamW(
-            trainable_params,
-            lr=CONFIG['learning_rate'],
+            param_groups,
             betas=CONFIG['adam_betas'],
             weight_decay=CONFIG['weight_decay'],
         )
         print("  Using standard AdamW")
-    del trainable_params  # optimizer holds its own references to param groups
+    del t1_params, t2_params, t3_params, param_groups
 
-    # ── Scheduler: Linear warmup + Cosine annealing ──
+    # ── Scheduler: per-group linear warmup + cosine to per-group eta_min ──
     if CONFIG['warmup_steps'] is not None:
         warmup_steps = CONFIG['warmup_steps']
     else:
@@ -2274,21 +2614,32 @@ def main():
 
     cosine_steps = max(total_optimizer_steps - warmup_steps, 1)
 
-    warmup_scheduler = LinearLR(
-        optimizer, start_factor=1e-8 / CONFIG['learning_rate'],
-        end_factor=1.0, total_iters=warmup_steps
-    )
-    cosine_scheduler = CosineAnnealingLR(
-        optimizer, T_max=cosine_steps, eta_min=CONFIG['min_lr']
-    )
-    scheduler = SequentialLR(
-        optimizer, schedulers=[warmup_scheduler, cosine_scheduler],
-        milestones=[warmup_steps]
+    tier_min_ratios = [
+        CONFIG['min_lr_tier1'] / CONFIG['lr_tier1_lm'],
+        CONFIG['min_lr_tier2'] / CONFIG['lr_tier2_vision'],
+        CONFIG['min_lr_tier3'] / CONFIG['lr_tier3_embed_head'],
+    ]
+
+    def _make_lambda(min_ratio: float):
+        def _fn(step: int) -> float:
+            if step < warmup_steps:
+                # Match prior linear warmup (from ~0 to 1.0 of base lr)
+                return max(1e-8, (step + 1) / max(warmup_steps, 1))
+            progress = (step - warmup_steps) / cosine_steps
+            progress = min(max(progress, 0.0), 1.0)
+            cos = 0.5 * (1.0 + math.cos(math.pi * progress))
+            return min_ratio + (1.0 - min_ratio) * cos
+        return _fn
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer, lr_lambda=[_make_lambda(r) for r in tier_min_ratios]
     )
 
-    print(f"\n📈 LR Schedule:")
+    print(f"\n📈 LR Schedule (per-group cosine with linear warmup):")
     print(f"  Warmup: {warmup_steps} steps | Cosine: {cosine_steps} steps")
-    print(f"  LR: {CONFIG['learning_rate']:.2e} -> {CONFIG['min_lr']:.2e}")
+    print(f"  T1 LM:         {CONFIG['lr_tier1_lm']:.2e} → {CONFIG['min_lr_tier1']:.2e}")
+    print(f"  T2 Vision:     {CONFIG['lr_tier2_vision']:.2e} → {CONFIG['min_lr_tier2']:.2e}")
+    print(f"  T3 Embed/Head: {CONFIG['lr_tier3_embed_head']:.2e} → {CONFIG['min_lr_tier3']:.2e}")
 
     # ── Resume optimizer/scheduler state ──
     if training_state is not None:
@@ -2319,24 +2670,44 @@ def main():
     # ── Mid-Training LR Override ──
     lr_override = CONFIG.get('lr_override', {})
     if lr_override.get('enabled', False):
-        override_lr = lr_override['lr']
-        override_eta_min = lr_override['eta_min']
         remaining_steps = total_optimizer_steps - start_global_step
 
-        # Reset optimizer LR
-        for param_group in optimizer.param_groups:
-            param_group['lr'] = override_lr
+        # Per-tier peak and floor LRs — fall back to CONFIG defaults if not set
+        override_lrs = [
+            lr_override.get('lr_tier1_lm',         CONFIG['lr_tier1_lm']),
+            lr_override.get('lr_tier2_vision',      CONFIG['lr_tier2_vision']),
+            lr_override.get('lr_tier3_embed_head',  CONFIG['lr_tier3_embed_head']),
+        ]
+        override_min_lrs = [
+            lr_override.get('min_lr_tier1', CONFIG['min_lr_tier1']),
+            lr_override.get('min_lr_tier2', CONFIG['min_lr_tier2']),
+            lr_override.get('min_lr_tier3', CONFIG['min_lr_tier3']),
+        ]
 
-        # Build a fresh cosine scheduler from the override LR
-        fresh_cosine = CosineAnnealingLR(
-            optimizer, T_max=max(remaining_steps, 1), eta_min=override_eta_min
+        # Reset each param group's base LR independently
+        for pg, peak_lr in zip(optimizer.param_groups, override_lrs):
+            pg['lr']         = peak_lr
+            pg['initial_lr'] = peak_lr
+
+        # Rebuild per-tier cosine LambdaLR (no warmup — straight cosine from override peak)
+        def _override_lambda(min_ratio: float):
+            def _fn(step: int) -> float:
+                progress = min(max(step / max(remaining_steps, 1), 0.0), 1.0)
+                cos = 0.5 * (1.0 + math.cos(math.pi * progress))
+                return min_ratio + (1.0 - min_ratio) * cos
+            return _fn
+
+        override_min_ratios = [
+            mn / pk for pk, mn in zip(override_lrs, override_min_lrs)
+        ]
+        scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, lr_lambda=[_override_lambda(r) for r in override_min_ratios]
         )
-        # Replace the current scheduler with a simple wrapper
-        scheduler = fresh_cosine
 
-        print(f"\n⚠️  LR OVERRIDE APPLIED:")
-        print(f"    New LR: {override_lr:.2e} -> {override_eta_min:.2e}")
-        print(f"    Cosine T_max: {remaining_steps} remaining steps")
+        _tier_names = ['T1 LM', 'T2 Vision', 'T3 Embed/Head']
+        print(f"\n⚠️  LR OVERRIDE APPLIED  (per-tier, {remaining_steps} remaining steps):")
+        for name, pk, mn in zip(_tier_names, override_lrs, override_min_lrs):
+            print(f"    {name:16s}: {pk:.2e} → {mn:.2e}")
         print(f"    ⚠️  WARNING: Set lr_override.enabled = False after this run!\n")
 
     # ── Checkpoint Manager ──
@@ -2345,16 +2716,21 @@ def main():
     # ── CSV Loggers ──
     train_csv_logger = CSVLogger(CONFIG['train_log_file'], [
         'timestamp', 'global_step', 'epoch', 'train_loss', 'train_ppl',
-        'lr', 'grad_norm', 'cuda_mem_gb', 'cuda_peak_gb',
+        'lr', 'lr_t1', 'lr_t2', 'lr_t3',
+        'grad_norm', 'cuda_mem_gb', 'cuda_peak_gb',
         'steps_per_sec', 'elapsed_sec', 'eta_sec',
     ])
     val_csv_logger = CSVLogger(CONFIG['val_log_file'], [
         'timestamp', 'global_step', 'epoch', 'val_loss', 'val_ppl',
         'bleu1', 'bleu2', 'bleu4', 'rouge_l', 'wer', 'meteor',
+        'bleu1_how2sign', 'bleu2_how2sign', 'bleu4_how2sign',
+        'rouge_l_how2sign', 'wer_how2sign', 'meteor_how2sign', 'n_how2sign',
+        'bleu1_openasl', 'bleu2_openasl', 'bleu4_openasl',
+        'rouge_l_openasl', 'wer_openasl', 'meteor_openasl', 'n_openasl',
         'num_eval_batches', 'num_gen_samples',
     ])
     gen_samples_csv_logger = CSVLogger(CONFIG['gen_samples_log_file'], [
-        'timestamp', 'global_step', 'epoch', 'reference', 'hypothesis',
+        'timestamp', 'global_step', 'epoch', 'source', 'reference', 'hypothesis',
     ])
 
     # ── TensorBoard ──

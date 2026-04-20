@@ -14,6 +14,7 @@ data/openasl_keypoints/
 data/openasl_keypoints_preprocessed/
 full_dataset_keypoints/
 full_dataset_keypoints_preprocessed/
+train_config/
 
 .virtual_documents/
 
