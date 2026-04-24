@@ -85,9 +85,9 @@ MAX_PPL_CAP = 20  # math.exp(20) ~ 485M — cap for display
 
 CONFIG = {
     # ── Data Paths ──
-    'data_train_tsv': Path('..') / 'data' / '2_dataset_train.tsv',
-    'data_val_tsv': Path('..') / 'data' / '2_dataset_val.tsv',
-    'data_test_tsv': Path('..') / 'data' / '2_dataset_test.tsv',
+    'data_train_tsv': Path('..') / 'data' / '3_dataset_train.tsv',
+    'data_val_tsv': Path('..') / 'data' / '3_dataset_val.tsv',
+    'data_test_tsv': Path('..') / 'data' / '3_dataset_test.tsv',
     'tsv_sep': '\t',
 
     # ── Model ──
@@ -162,7 +162,7 @@ CONFIG = {
     # ── DataLoader Config ──
     'train_num_workers': 1,                       # 2 workers; lower count avoids Windows shared-memory exhaustion (error 1455)
     'train_prefetch_factor': 1,                   # Pre-load 2 batches ahead (safe now that pin_memory is permanently off)
-    'train_pin_memory': True,                 
+    'train_pin_memory': False,                     # Pinned memory for async CPU→GPU DMA during training (disabled to reduce RAM usage and fragmentation)
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
     'val_num_workers': 1,                          # 1 worker overlaps video decoding with GPU inference during validation
@@ -204,7 +204,7 @@ CONFIG = {
     'eval_warmup_threshold': 1000,                # Switch to normal eval freq after this step
     'max_eval_batches': 60,
     'num_print_samples': 5,
-    'val_gen_batch_size': 1,                      # Low — generation is VRAM-intensive
+    'val_gen_batch_size': 2,                
     'max_generate_samples': 100,
     'val_beam_size': 2,                             # 1 = greedy (faster validation); run beam=4 on final checkpoint
     'val_length_penalty': 1.0,                      # > 1.0 favors longer outputs (counters BLEU brevity penalty); < 1.0 favors shorter
@@ -226,7 +226,7 @@ CONFIG = {
     # rank (4 → 32) or the new signer-crop data path.
     'resume_training': True,                   # Set to True to resume from checkpoint
     'load_best_model': False,
-    'resume_checkpoint_step': 10,             # None = latest, or specific step number
+    'resume_checkpoint_step': 330,             # None = latest, or specific step number
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -1242,13 +1242,13 @@ class CSVLogger:
         self.log_file.parent.mkdir(parents=True, exist_ok=True)
 
         if not self.log_file.exists():
-            with open(self.log_file, 'w', newline='') as f:
+            with open(self.log_file, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.DictWriter(f, fieldnames=self.fieldnames)
                 writer.writeheader()
 
     def log(self, row_dict):
         row_dict['timestamp'] = time.strftime('%Y-%m-%d %H:%M:%S')
-        with open(self.log_file, 'a', newline='') as f:
+        with open(self.log_file, 'a', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=self.fieldnames)
             writer.writerow({k: row_dict.get(k, '') for k in self.fieldnames})
 
@@ -1395,6 +1395,16 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
             del all_texts, all_images, all_videos, all_video_metadatas, all_video_kwargs
             inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v
                       for k, v in inputs.items()}
+
+            # Qwen3-VL uses per-frame timestamps, so _expand_inputs_for_generation
+            # (called by beam search) splits video_grid_thw by video_nums which equals
+            # the number of frames T. Pre-convert from [[T,H,W]] to T×[[1,H,W]] so
+            # the split matches and beam search works correctly.
+            if inputs.get('video_grid_thw') is not None and config['val_beam_size'] > 1:
+                vgt = inputs['video_grid_thw']
+                vgt = torch.repeat_interleave(vgt, vgt[:, 0], dim=0).clone()
+                vgt[:, 0] = 1
+                inputs['video_grid_thw'] = vgt
 
             with torch.amp.autocast('cuda', dtype=torch.bfloat16):
                 generated_ids = model.generate(
@@ -1996,11 +2006,30 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                             print(f"    [{i}] ({src}) REF: \"{ref}\"")
                             print(f"            HYP: \"{hyp}\"")
 
-                    # Per-source summary line
+                    # Per-source breakdown
                     ps = val_results['per_source']
-                    print(f"\n  Per-source BLEU-4:  "
-                          f"how2sign={ps['how2sign']['bleu4']:.3f}% (n={ps['how2sign']['n']})  |  "
-                          f"openasl={ps['openasl']['bleu4']:.3f}% (n={ps['openasl']['n']})")
+                    _w = 60
+                    print(f"\n{'─' * _w}")
+                    print(f"  {'METRIC':<12}  {'COMBINED':>10}  {'HOW2SIGN':>10}  {'OPENASL':>10}")
+                    print(f"  {'─'*12}  {'─'*10}  {'─'*10}  {'─'*10}")
+                    _overall = {k: val_results[k] for k in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor')}
+                    _rows = [
+                        ('BLEU-1',   'bleu1',   '{:.2f}'),
+                        ('BLEU-2',   'bleu2',   '{:.2f}'),
+                        ('BLEU-4',   'bleu4',   '{:.2f}'),
+                        ('ROUGE-L',  'rouge_l', '{:.2f}%'),
+                        ('WER',      'wer',     '{:.2f}%'),
+                        ('METEOR',   'meteor',  '{:.2f}%'),
+                    ]
+                    for _label, _key, _fmt in _rows:
+                        _ov  = _fmt.format(_overall[_key])
+                        _h2s = _fmt.format(ps['how2sign'][_key]) if ps['how2sign']['n'] > 0 else '   —'
+                        _osl = _fmt.format(ps['openasl'][_key])  if ps['openasl']['n']  > 0 else '   —'
+                        print(f"  {_label:<12}  {_ov:>10}  {_h2s:>10}  {_osl:>10}")
+                    print(f"  {'─'*12}  {'─'*10}  {'─'*10}  {'─'*10}")
+                    print(f"  {'Samples':<12}  {val_results['num_gen_samples']:>10}  "
+                          f"{ps['how2sign']['n']:>10}  {ps['openasl']['n']:>10}")
+                    print(f"{'─' * _w}")
 
                     # Log to CSV
                     val_row = {
@@ -2336,6 +2365,7 @@ def main():
         model = prepare_model_for_kbit_training(model)
 
     processor = AutoProcessor.from_pretrained(CONFIG['model_name'], local_files_only=True)
+    processor.tokenizer.padding_side = 'left'
 
     load_time = time.time() - load_start
     model_vram = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
@@ -2489,7 +2519,7 @@ def main():
     # ── torch.compile ──
     if CONFIG['use_torch_compile']:
         print(f"  ⚙️  Compiling model with mode='{CONFIG['torch_compile_mode']}'...")
-        model = torch.compile(model, mode=CONFIG['torch_compile_mode'])
+        model = torch.compile(model, mode=CONFIG['torch_compile_mode'], dynamic=True)
 
     lora_vram = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
     print(f"  VRAM after LoRA: {lora_vram:.2f} GB")

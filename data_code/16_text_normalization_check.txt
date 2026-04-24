@@ -1,0 +1,404 @@
+Text Normalisation Check Report — generated 2026-04-23 20:18:56
+========================================================================
+  Input  : data/4_dataset_{train,val,test}.tsv
+  Log    : C:\My Projects\sign-language-bridge\data_code\16_text_normalization_check.txt
+  Mode   : analysis only — no files modified
+========================================================================
+
+========================================================================
+  0. LOADING DATA
+========================================================================
+  train:  48,869 rows
+  val  :   1,193 rows
+  test :   1,441 rows
+
+  Total rows: 51,503
+
+========================================================================
+  CHECK 1 — NON-ASCII CHARACTERS  (codepoint > 127)
+========================================================================
+  Total affected rows: 46  (0.09%)  |  train=6  |  val=18  |  test=22
+
+  Distinct non-ASCII characters found  (12 unique):
+  Char    U+         Count  Category  Unicode Name
+  ──────  ────────  ──────  ────  ────────────────────────────────────────
+  '’'     U+2019      38  Pf    RIGHT SINGLE QUOTATION MARK
+  'â'     U+00E2       3  Ll    LATIN SMALL LETTER A WITH CIRCUMFLEX
+  '\x80'  U+0080       3  Cc    UNKNOWN
+  'Â'     U+00C2       2  Lu    LATIN CAPITAL LETTER A WITH CIRCUMFLEX
+  '\x9c'  U+009C       2  Cc    UNKNOWN
+  '“'     U+201C       2  Pi    LEFT DOUBLE QUOTATION MARK
+  '½'     U+00BD       1  No    VULGAR FRACTION ONE HALF
+  '¦'     U+00A6       1  So    BROKEN BAR
+  'Ã'     U+00C3       1  Lu    LATIN CAPITAL LETTER A WITH TILDE
+  '©'     U+00A9       1  So    COPYRIGHT SIGN
+  '´'     U+00B4       1  Sk    ACUTE ACCENT
+  '–'     U+2013       1  Pd    EN DASH
+
+      #  Split   Source      Detail                          Text (first 90 chars)
+  ─────  ──────  ──────────  ──────────────────────────────  ──────────────────────────────────────────────────
+      1  train   how2sign    U+00C2 LATIN CAPITAL LETTER  U  'So here for example this is a 7 Â½ foot knotless 3X leader.'
+         vid: 1NdnCBn6-F4_7-3-rgb_front
+      2  train   how2sign    U+00E2 LATIN SMALL LETTER A  U  "Often times, I have people coming up to meâ\x80¦oh, I'm too fat to do yoga, I can't do yoga b"
+         vid: 1d1uWUUHJZQ_3-3-rgb_front
+      3  train   how2sign    U+00C3 LATIN CAPITAL LETTER  U  'We are going to need a sautÃ© pan or a frying pan.'
+         vid: 20eFgtWq9-I_1-8-rgb_front
+      4  train   how2sign    U+00E2 LATIN SMALL LETTER A  U  'You say, "So a guy goes for a walk," not â\x80\x9cA guy was going for a walk", and that way, eve'
+         vid: EN_Lv4gfL_A_8-8-rgb_front
+      5  train   how2sign    U+00E2 LATIN SMALL LETTER A  U  'â\x80\x9cYes or we could drive a bus."'
+         vid: fCk8Md58LK4_15-4-rgb_front
+      6  train   how2sign    U+00C2 LATIN CAPITAL LETTER  U  'And when she first created the she didnÂ´t even know what they were for.'
+         vid: fFoY25BAiec_2-8-rgb_front
+      7  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'It’s not their normal, so personally, I’ve learned that education is key.'
+         vid: 5dttR4Yq-2k-00:03:40.166-00:03:46.400
+      8  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'Especially in the field with a lot of writing and reading, I feel like that’s a perfect jo'
+         vid: NJQ7M-rFtFQ-00:03:23.666-00:03:29.433
+      9  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'It can be a staff or someone you’ve worked with before.'
+         vid: tAB9G6QcXDU-00:01:22.633-00:01:28.166
+     10  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'During this six-month period, Sydnei’s parents stayed by her side day and night.'
+         vid: 9SdgcJ3CItw-00:01:21.000-00:01:24.666
+     11  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'The resume and cover letter aren’t enough to convince that you’re the right fit.'
+         vid: NGry3ZtyTyE-00:00:07.166-00:00:14.200
+     12  val     openasl     U+2019 RIGHT SINGLE QUOTATI  U  "If you’re nervous – it's okay."
+         vid: NGry3ZtyTyE-00:01:01.366-00:01:03.766
+     13  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'There are so many different intelligence levels, and ... science is what I’m good at.'
+         vid: 6vmtT8VJus8-00:00:18.433-00:00:23.000
+     14  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'I’m from here, San Francisco, born and raised.'
+         vid: VvpFqAynbOc-00:00:42.333-00:00:45.700
+     15  val     openasl     U+201C LEFT DOUBLE QUOTATIO     'Title II is important for deaf individuals because of the “effective communication."'
+         vid: qKu3yLfhNps-00:02:09.533-00:02:13.766
+     16  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'It is important that you’re not the same person as when you were hired.'
+         vid: cQ8Dl52X1u0-00:05:14.600-00:05:17.766
+     17  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'Last Thursday afternoon, we had a presentation on Hawai’i culture, history, and traditions'
+         vid: ODbu_B4p0Go-00:00:22.200-00:00:29.600
+     18  val     openasl     U+2019 RIGHT SINGLE QUOTATI     "If you’re uncertain, contact us at NAD. We can help figure out if it's good or bad."
+         vid: Fb-fHA2ykDA-00:00:44.600-00:00:49.633
+     19  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'That’s where you can really get a step in.'
+         vid: N29DdjIj5rw-00:05:12.066-00:05:14.400
+     20  val     openasl     U+2019 RIGHT SINGLE QUOTATI     "Now with that aside, I'll share what I do while I’m here in the office, when not traveling"
+         vid: zpKzb1SBN3Y-00:01:50.033-00:01:55.333
+     21  val     openasl     U+201C LEFT DOUBLE QUOTATIO     'Some people said, “You left a state government job?'
+         vid: ixq65EiuJ_c-00:03:33.533-00:03:35.633
+     22  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'That’s another challenge I have this week.'
+         vid: viB8JR7fVxE-00:02:16.466-00:02:18.733
+     23  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'There’s been a lot of impact on our school for the deaf because a lot of our students live'
+         vid: daTPNSQet08-00:02:07.700-00:02:14.500
+     24  val     openasl     U+2019 RIGHT SINGLE QUOTATI     'Never really closes even though there’s a lot of snow or bad storm.'
+         vid: daTPNSQet08-00:05:14.700-00:05:20.600
+     25  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'The community isn’t used to something different.'
+         vid: 5dttR4Yq-2k-00:03:32.033-00:03:37.233
+     26  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'NLTC is incredible because without this opportunity, we can’t learn.'
+         vid: IsEzvnueFQk-00:00:33.000-00:00:39.366
+     27  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'The House of Representatives has a different number of representatives per state, dependin'
+         vid: rgE2ZZ9bHKA-00:00:32.066-00:00:37.366
+     28  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'They might think that lipreading or writing is effective when it isn’t.'
+         vid: 1-bCws7TnBs-00:00:29.000-00:00:33.533
+     29  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'Hello, I’m Alicia and I’ve been working with the Outreach committee.'
+         vid: 2MnvFrB5ljQ-00:01:53.066-00:01:58.233
+     30  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'I hope you all have been keeping track of my whereabouts and what I’ve been doing as Miss '
+         vid: ITBFiwzJ-u8-00:00:19.366-00:00:24.300
+     31  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'I’ve always loved reading and writing.'
+         vid: NJQ7M-rFtFQ-00:00:04.633-00:00:08.366
+     32  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'It’s required for them to meet my needs as a deaf  individual.'
+         vid: mdRh7UiZjQM-00:00:24.000-00:00:27.533
+     33  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'Eventually, I changed my course and technically, I’m still a scientist -- I’m a Language S'
+         vid: n8wMXAjy-xA-00:00:36.533-00:00:41.633
+     34  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'Eventually, I started working there and I’m really grateful for that experience and that o'
+         vid: rK2cB6Trk68-00:00:21.000-00:00:26.266
+     35  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'Alzheimer’s disease is the sixth leading cause of death in the America.'
+         vid: nsjNUhF_s94-00:00:14.166-00:00:20.200
+     36  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'I met many deaf people who wouldn’t help me because I was a European immigrant.'
+         vid: r2AKKaGvFi8-00:00:19.700-00:00:27.400
+     37  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'It keeps things fresh for me, I mean -- I get bored easily, that’s why I love conference p'
+         vid: N29DdjIj5rw-00:00:11.400-00:00:19.200
+     38  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'We want to ensure that they recognize deaf children’s need for sign language, starting fro'
+         vid: zpKzb1SBN3Y-00:05:30.033-00:05:36.700
+     39  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'I appreciate being a part of the family’s grieving process.'
+         vid: sUg7i_wSn24-00:00:22.733-00:00:26.733
+     40  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'Not to worry, we’ll take good care of them and have fun!'
+         vid: tTeiyqt1GCY-00:00:49.166-00:00:54.066
+     41  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'If you’ve got questions, concerns, thoughts, opinions or comments about this situation com'
+         vid: yH_kzYMc0dE-00:11:56.466-00:12:00.666
+     42  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'Competitions tend to announce information, but they haven’t said anything yet.'
+         vid: 7JF1onKatVI-00:04:40.433-00:04:44.033
+     43  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'Taylor’s family has filed a wrongful death lawsuit against the three officers.'
+         vid: ZifTpiq77vI-00:09:18.100-00:09:25.700
+     44  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'It’s really nice here!'
+         vid: pimixabgzlc-00:04:30.033-00:04:31.666
+     45  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'Let’s stop this and have Deaf take the lead.'
+         vid: pimixabgzlc-00:05:07.666-00:05:10.033
+     46  test    openasl     U+2019 RIGHT SINGLE QUOTATI     'But I have a feeling it’s because some weeks ago, I talked with Peta and I said some "The '
+         vid: r8phb11nrS0-00:00:20.000-00:00:26.766
+
+========================================================================
+  CHECK 2 — HTML ENTITIES  (&amp; &#39; &nbsp; etc.)
+========================================================================
+  Total affected rows: 26  (0.05%)  |  train=26  |  val=0  |  test=0
+
+      #  Split   Source      Detail                          Text (first 90 chars)
+  ─────  ──────  ──────────  ──────────────────────────────  ──────────────────────────────────────────────────
+      1  train   how2sign    &amp;                           'So, this is by Clean &amp; Clear and you can get this in the drugstore for about $4.99.'
+         vid: 0-bR2rq-qps_6-5-rgb_front
+      2  train   how2sign    &amp;                           "All right, the drink we're about to make is called Lager &amp; Lime."
+         vid: 1EidpMNIaJE_0-5-rgb_front
+      3  train   how2sign    &amp;                           "So today I am going to be making breve because I don't actually have a pitcher of Half &am"
+         vid: dh6-yhJ30pY_1-8-rgb_front
+      4  train   openasl     &amp;                           'Trump responded by saying Sharpton hated "Whites &amp; Cops".'
+         vid: BLVDbsj7Xo4-00:09:54.927-00:10:02.350
+      5  train   openasl     &amp;                           'PG&amp;E will pay a $3.5 million fine.'
+         vid: I1UDU-5qDXQ-00:06:10.536-00:06:16.810
+      6  train   openasl     &amp;                           'Johnson &amp; Johnson maintained it did nothing wrong.'
+         vid: hHxhQ-5ms18-00:10:18.139-00:10:25.980
+      7  train   openasl     &amp;                           'They have their own marketing/outreach &amp; network with hospitals and doctors.'
+         vid: zxTnvkq7UY0-00:06:56.822-00:07:01.259
+      8  train   openasl     &amp;                           'Johnson &amp; Johnson said they would appeal.'
+         vid: xUIEn487cTU-00:05:35.834-00:05:40.673
+      9  train   openasl     &amp;                           'Johnson &amp; Johnson plans to appeal the decision.'
+         vid: GpHLbbhxUoo-00:04:10.800-00:04:13.759
+     10  train   openasl     &amp;                           'The award is the largest ever against Johnson &amp; Johnson.'
+         vid: GpHLbbhxUoo-00:03:49.759-00:03:54.479
+  ... 16 more rows not shown (total affected: 26)
+
+========================================================================
+  CHECK 3 — MULTIPLE CONSECUTIVE SPACES
+========================================================================
+  Total affected rows: 583  (1.13%)  |  train=580  |  val=2  |  test=1
+
+      #  Split   Source      Detail                          Text (first 90 chars)
+  ─────  ──────  ──────────  ──────────────────────────────  ──────────────────────────────────────────────────
+      1  train   openasl     2 occurrence(s), max 2 spaces   'You place your phone to watch  The Daily Moth  news.'
+         vid: 8y54C5UiktI-00:03:00.560-00:03:04.159
+      2  train   openasl     1 occurrence(s), max 2 spaces   'Deaf Bing: You are signing and you  (knocks cup).'
+         vid: 8y54C5UiktI-00:04:04.139-00:04:07.419
+      3  train   openasl     2 occurrence(s), max 2 spaces   'I ve filmed 20 different  Deaf Bing  videos.'
+         vid: 8y54C5UiktI-00:00:12.220-00:00:17.362
+      4  train   openasl     1 occurrence(s), max 2 spaces   'We want to support students  experiences in life and allow it to be a part of our discover'
+         vid: zIAjjFnDhNg-00:03:00.080-00:03:07.939
+      5  train   openasl     1 occurrence(s), max 2 spaces   'Some have already predicted that  there would be an ugly battle on tabulating votes.'
+         vid: JsRzFgTC0r8-00:03:21.280-00:03:28.879
+      6  train   openasl     1 occurrence(s), max 2 spaces   'Trump wants those to stop being  counted, so what will the Supreme Court say?'
+         vid: JsRzFgTC0r8-00:03:15.560-00:03:19.879
+      7  train   openasl     2 occurrence(s), max 2 spaces   "Garrett: It s a professional BJJ  superfight.  I'm going to play against this opponent."
+         vid: ey3i9jNcat4-00:00:00.060-00:00:07.360
+      8  train   openasl     2 occurrence(s), max 2 spaces   'People in the Deaf community have asked me many times,  Why don t you join the UFC?  But w'
+         vid: ey3i9jNcat4-00:02:14.080-00:02:21.341
+      9  train   openasl     1 occurrence(s), max 2 spaces   'He asked us,  Why are you in BJJ?'
+         vid: ey3i9jNcat4-00:03:14.979-00:03:17.066
+     10  train   openasl     1 occurrence(s), max 2 spaces   'U.S. stocks had a much better day  today.'
+         vid: 81CrZCgo5ck-00:03:59.599-00:04:03.599
+  ... 573 more rows not shown (total affected: 583)
+
+========================================================================
+  CHECK 4 — LEADING / TRAILING WHITESPACE
+========================================================================
+  Total affected rows: 0  (0.00%)  |  train=0  |  val=0  |  test=0
+
+  No issues found.
+
+========================================================================
+  CHECK 5 — NON-BREAKING SPACE  (\xa0 / &nbsp;)
+========================================================================
+  Total affected rows: 0  (0.00%)  |  train=0  |  val=0  |  test=0
+
+  No issues found.
+
+========================================================================
+  CHECK 6 — ZERO-WIDTH / INVISIBLE CHARACTERS
+========================================================================
+  Total affected rows: 0  (0.00%)  |  train=0  |  val=0  |  test=0
+
+  No issues found.
+
+========================================================================
+  CHECK 7 — CONTROL CHARACTERS  (\t \n \r or non-printable)
+========================================================================
+  Total affected rows: 0  (0.00%)  |  train=0  |  val=0  |  test=0
+
+  No issues found.
+
+========================================================================
+  CHECK 8 — CURLY / SMART QUOTES  (' ' " ")
+========================================================================
+  Total affected rows: 40  (0.08%)  |  train=0  |  val=18  |  test=22
+
+      #  Split   Source      Detail                          Text (first 90 chars)
+  ─────  ──────  ──────────  ──────────────────────────────  ──────────────────────────────────────────────────
+      1  val     openasl     '’' (RIGHT SINGLE QU)           'It’s not their normal, so personally, I’ve learned that education is key.'
+         vid: 5dttR4Yq-2k-00:03:40.166-00:03:46.400
+      2  val     openasl     '’' (RIGHT SINGLE QU)           'Especially in the field with a lot of writing and reading, I feel like that’s a perfect jo'
+         vid: NJQ7M-rFtFQ-00:03:23.666-00:03:29.433
+      3  val     openasl     '’' (RIGHT SINGLE QU)           'It can be a staff or someone you’ve worked with before.'
+         vid: tAB9G6QcXDU-00:01:22.633-00:01:28.166
+      4  val     openasl     '’' (RIGHT SINGLE QU)           'During this six-month period, Sydnei’s parents stayed by her side day and night.'
+         vid: 9SdgcJ3CItw-00:01:21.000-00:01:24.666
+      5  val     openasl     '’' (RIGHT SINGLE QU)           'The resume and cover letter aren’t enough to convince that you’re the right fit.'
+         vid: NGry3ZtyTyE-00:00:07.166-00:00:14.200
+      6  val     openasl     '’' (RIGHT SINGLE QU)           "If you’re nervous – it's okay."
+         vid: NGry3ZtyTyE-00:01:01.366-00:01:03.766
+      7  val     openasl     '’' (RIGHT SINGLE QU)           'There are so many different intelligence levels, and ... science is what I’m good at.'
+         vid: 6vmtT8VJus8-00:00:18.433-00:00:23.000
+      8  val     openasl     '’' (RIGHT SINGLE QU)           'I’m from here, San Francisco, born and raised.'
+         vid: VvpFqAynbOc-00:00:42.333-00:00:45.700
+      9  val     openasl     '“' (LEFT DOUBLE QUO)           'Title II is important for deaf individuals because of the “effective communication."'
+         vid: qKu3yLfhNps-00:02:09.533-00:02:13.766
+     10  val     openasl     '’' (RIGHT SINGLE QU)           'It is important that you’re not the same person as when you were hired.'
+         vid: cQ8Dl52X1u0-00:05:14.600-00:05:17.766
+  ... 30 more rows not shown (total affected: 40)
+
+========================================================================
+  CHECK 9 — EM DASH / EN DASH  (— –)
+========================================================================
+  Total affected rows: 1  (0.00%)  |  train=0  |  val=1  |  test=0
+
+      #  Split   Source      Detail                          Text (first 90 chars)
+  ─────  ──────  ──────────  ──────────────────────────────  ──────────────────────────────────────────────────
+      1  val     openasl     EN DASH ×1                      "If you’re nervous – it's okay."
+         vid: NGry3ZtyTyE-00:01:01.366-00:01:03.766
+
+========================================================================
+  CHECK 10 — ELLIPSIS CHARACTER  (… U+2026 vs literal ...)
+========================================================================
+  Total affected rows: 0  (0.00%)  |  train=0  |  val=0  |  test=0
+
+  No issues found.
+
+========================================================================
+  CHECK 11 — REPEATED PUNCTUATION  (!! ?? .. -- appearing 2+ times in a row)
+========================================================================
+  Total affected rows: 448  (0.87%)  |  train=428  |  val=10  |  test=10
+
+      #  Split   Source      Detail                          Text (first 90 chars)
+  ─────  ──────  ──────────  ──────────────────────────────  ──────────────────────────────────────────────────
+      1  train   how2sign    ...                             "So I...I continued to fight through it, fight through it...didn't feel real great."
+         vid: -06_nJnhORg_14-5-rgb_front
+      2  train   how2sign    ....                            "Again, we're talking about cross stitch....cross stitch craft kits."
+         vid: -0N0jbyBW6g_9-5-rgb_front
+      3  train   how2sign    --                              "That's an old--that was a long time ago, and I still remember it."
+         vid: -1fUFbij2s0_6-5-rgb_front
+      4  train   how2sign    --                              'A hungry chameleon will often have--will often be trying to blend in with its environment.'
+         vid: -8XxBfXAzyo_14-8-rgb_front
+      5  train   how2sign    --                              "Now, an angry chameleon such as her--she's displaying right now."
+         vid: -8XxBfXAzyo_17-8-rgb_front
+      6  train   how2sign    --                              "Now, if she's cold, she's gonna--her whole body is going to turn more of a black color."
+         vid: -8XxBfXAzyo_6-8-rgb_front
+      7  train   how2sign    --                              "So, just--we'll give it one more shake, stir it once more properly."
+         vid: -9Kic0QsCYs_6-8-rgb_front
+      8  train   how2sign    --                              "They're--they differ in thickness and size."
+         vid: -Bz0BNwqAE4_11-5-rgb_front
+      9  train   how2sign    --                              "You'll hear people--as you work your glove you want to create a deep, nice pocket and cush"
+         vid: -EsVrbRTMU4_8-8-rgb_front
+     10  train   how2sign    --                              'You wanna--line control is always very important.'
+         vid: -ayXzLtkpQU_1-8-rgb_front
+  ... 438 more rows not shown (total affected: 448)
+
+========================================================================
+  CHECK 12 — ALL-CAPS TEXT  (entire text is uppercase, >= 4 letters)
+========================================================================
+  Total affected rows: 45  (0.09%)  |  train=44  |  val=0  |  test=1
+
+      #  Split   Source      Detail                          Text (first 90 chars)
+  ─────  ──────  ──────────  ──────────────────────────────  ──────────────────────────────────────────────────
+      1  train   how2sign    22 uppercase letters            'I AM GOING TO DO A MONOLOGUE!!!'
+         vid: cEmmjObvNZE_26-5-rgb_front
+      2  train   openasl     16 uppercase letters            '"LIBERATE MICHIGAN!"'
+         vid: eyuQSdSbbp8-00:00:42.509-00:00:44.945
+      3  train   openasl     4 uppercase letters             'DANG.'
+         vid: gdVQKVcjBO8-00:07:17.160-00:07:18.466
+      4  train   openasl     31 uppercase letters            'THANK YOU FOR WATCHING SIGN1NEWS LIVE.'
+         vid: xHq-TBEeblU-00:15:50.419-00:15:52.600
+      5  train   openasl     25 uppercase letters            'AND THOSE ARE YOUR TOP STORIES.'
+         vid: xHq-TBEeblU-00:15:45.980-00:15:49.200
+      6  train   openasl     55 uppercase letters            'AND IN TIMES LIKE THESE, SOMETHING AS SIMPLE AS A HUG, CAN MEAN SO MUCH.'
+         vid: xHq-TBEeblU-00:15:36.559-00:15:41.919
+      7  train   openasl     54 uppercase letters            "SHE SAID HER CHILDREN HADN'T HUGGED THEIR GRANDPARENTS IN MONTHS."
+         vid: xHq-TBEeblU-00:15:30.220-00:15:36.559
+      8  train   openasl     41 uppercase letters            "THE WOMAN SAY SHE MADE IT FOR HER MOTHER'S BIRTHDAY."
+         vid: xHq-TBEeblU-00:15:22.679-00:15:30.220
+      9  train   openasl     32 uppercase letters            'WHEN WAS THE LAST TIME YOU HAD A GOOD HUG?'
+         vid: xHq-TBEeblU-00:14:59.259-00:15:03.039
+     10  train   openasl     69 uppercase letters            "AND THE CAMERA ALLOWS USERS TO HAVE A BUG'S EYE VIEW OF THE WORLD ON THEIR SMARTPHONES."
+         vid: xHq-TBEeblU-00:14:35.559-00:14:42.200
+  ... 35 more rows not shown (total affected: 45)
+
+========================================================================
+  CHECK 13 — NO ALPHABETIC CONTENT  (text contains no letters)
+========================================================================
+  Total affected rows: 4  (0.01%)  |  train=4  |  val=0  |  test=0
+
+      #  Split   Source      Detail                          Text (first 90 chars)
+  ─────  ──────  ──────────  ──────────────────────────────  ──────────────────────────────────────────────────
+      1  train   how2sign    len=20 chars                    '1, 2, 3, 4, 5, 6, 7.'
+         vid: 1nN1DqwS0q4_12-11-rgb_front
+      2  train   how2sign    len=5 chars                     '7, 8.'
+         vid: bP8YvikdELg_11-5-rgb_front
+      3  train   openasl     len=7 chars                     '$1,290.'
+         vid: 3Vg-kKfUHzI-00:08:47.740-00:08:50.200
+      4  train   openasl     len=8 chars                     '$25,000.'
+         vid: t8AD-WroGuA-00:12:44.513-00:12:46.085
+
+========================================================================
+  CHECK 14 — SUSPICIOUSLY LONG TEXT  (character length > 500)
+========================================================================
+  Total affected rows: 0  (0.00%)  |  train=0  |  val=0  |  test=0
+
+  No issues found.
+
+========================================================================
+  CHECK 15 — UNPAIRED / MISMATCHED BRACKETS AND QUOTES
+========================================================================
+  Total affected rows: 410  (0.80%)  |  train=408  |  val=1  |  test=1
+
+      #  Split   Source      Detail                          Text (first 90 chars)
+  ─────  ──────  ──────────  ──────────────────────────────  ──────────────────────────────────────────────────
+      1  train   how2sign    odd " count (1)                 'I know a lot of ladies out there are wondering, "How do I get my skin clean?'
+         vid: -6PULg1jlpc_1-5-rgb_front
+      2  train   how2sign    odd " count (1)                 'How do I get rid of this makeup?"'
+         vid: -6PULg1jlpc_2-5-rgb_front
+      3  train   how2sign    odd " count (1)                 'I\'ll make sure that he gets the message."'
+         vid: 00m1mQFF5zo_10-3-rgb_front
+      4  train   how2sign    odd " count (1)                 'What if my guy is still standing out there?"'
+         vid: 04DtdCu2kfg_10-5-rgb_front
+      5  train   how2sign    odd " count (1)                 'A lot of people are concerned, "What happens to my guy?'
+         vid: 04DtdCu2kfg_9-5-rgb_front
+      6  train   how2sign    odd " count (1)                 'Also Rob could say, "No!'
+         vid: 0v5btE6B2xQ_10-8-rgb_front
+      7  train   how2sign    odd " count (1)                 'Rob can say, "No!'
+         vid: 0v5btE6B2xQ_5-8-rgb_front
+      8  train   how2sign    odd " count (1)                 'I was at home watching TV."'
+         vid: 0v5btE6B2xQ_8-8-rgb_front
+      9  train   how2sign    odd " count (1)                 'When I got to the lake this morning I immediately looked around and said, "This looks like'
+         vid: 11MdTWBChk0_1-8-rgb_front
+     10  train   how2sign    odd " count (1)                 'ALEX BOYE: He looks at him, Michael Jackson, "Oh, you\'re bad, brother.'
+         vid: 14309WSFpWg_27-8-rgb_front
+  ... 400 more rows not shown (total affected: 410)
+
+========================================================================
+  OVERALL SUMMARY
+========================================================================
+
+  Check                                Affected       %  train | val | test
+  ───────────────────────────────────  ────────  ──────  ──────────────────────────────
+  1  Non-ASCII characters                    46   0.09%  train=   6  val=  18  test=  22  ← action needed
+  2  HTML entities                           26   0.05%  train=  26  val=   0  test=   0  ← action needed
+  3  Multiple consecutive spaces            583   1.13%  train= 580  val=   2  test=   1  ← action needed
+  4  Leading/trailing whitespace              0   0.00%  train=   0  val=   0  test=   0
+  5  Non-breaking space (\xa0)                0   0.00%  train=   0  val=   0  test=   0
+  6  Zero-width characters                    0   0.00%  train=   0  val=   0  test=   0
+  7  Control characters                       0   0.00%  train=   0  val=   0  test=   0
+  8  Curly/smart quotes                      40   0.08%  train=   0  val=  18  test=  22  ← action needed
+  9  Em/en dash                               1   0.00%  train=   0  val=   1  test=   0  ← action needed
+  10 Ellipsis character (…)                   0   0.00%  train=   0  val=   0  test=   0
+  11 Repeated punctuation                   448   0.87%  train= 428  val=  10  test=  10  ← action needed
+  12 All-caps text                           45   0.09%  train=  44  val=   0  test=   1  ← action needed
+  13 No alphabetic content                    4   0.01%  train=   4  val=   0  test=   0  ← action needed
+  14 Suspiciously long text (>500c)           0   0.00%  train=   0  val=   0  test=   0
+  15 Unpaired brackets/quotes               410   0.80%  train= 408  val=   1  test=   1  ← action needed
+
+  Total rows with at least one issue : 1,535  (2.98%)
+  Total rows clean (no issues found) : 49,968  (97.02%)
+
+========================================================================
+  Analysis complete — 2026-04-23 20:19:08
+  Report saved to: C:\My Projects\sign-language-bridge\data_code\16_text_normalization_check.txt
+========================================================================
+

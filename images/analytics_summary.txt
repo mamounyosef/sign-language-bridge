@@ -1,30 +1,30 @@
 TRAINING SPLIT ANALYTICS SUMMARY
 ==================================================
-Total clips                : 57,347
-Total video hours          : 69.40 h
+Total clips                : 46,349
+Total video hours          : 59.74 h
 
 By source:
-  how2sign     : 18,040 clips  (20.78 h)
-  openasl      : 39,307 clips  (48.61 h)
+  openasl      : 29,366 clips  (39.84 h)
+  how2sign     : 16,983 clips  (19.90 h)
 
 Clip duration (seconds):
   Min    : 1.3000
   Max    : 8.0000
-  Mean   : 4.3564
-  Median : 4.2000
-  Std    : 1.8914
+  Mean   : 4.6400
+  Median : 4.6000
+  Std    : 1.8322
 
 Word count per clip:
   Min    : 1
-  Max    : 46
-  Mean   : 10.84
-  Median : 10.00
-  Std    : 5.60
+  Max    : 38
+  Mean   : 11.55
+  Median : 11.00
+  Std    : 5.28
 
 Words per second:
-  Mean   : 2.61
-  Median : 2.47
-  Std    : 1.13
+  Mean   : 2.62
+  Median : 2.53
+  Std    : 0.96
 
-Total vocabulary size      : 20,373
-Total word tokens          : 613,723
+Total vocabulary size      : 19,856
+Total word tokens          : 527,403

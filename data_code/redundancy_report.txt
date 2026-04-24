@@ -1,0 +1,279 @@
+Redundancy Analysis Report — generated 2026-04-22 22:16:11
+========================================================================
+
+========================================================================
+  1. LOADING DATA
+========================================================================
+  train:  57,305 rows | columns: ['vid', 'text', 'duration_sec', 'word_count', 'file_path', 'source']
+  val  :   1,397 rows | columns: ['vid', 'text', 'duration_sec', 'word_count', 'file_path', 'source']
+  test :   1,741 rows | columns: ['vid', 'text', 'duration_sec', 'word_count', 'file_path', 'source']
+
+  Total rows across all splits: 60,443
+
+------------------------------------------------------------------------
+  Null / Empty Values
+------------------------------------------------------------------------
+  [train] No nulls or empty strings.
+  [val] No nulls or empty strings.
+  [test] No nulls or empty strings.
+
+========================================================================
+  2. EXACT DUPLICATE vid IDs
+========================================================================
+
+------------------------------------------------------------------------
+  Within-split duplicates
+------------------------------------------------------------------------
+  [train] 0 distinct vid(s) duplicated → 0 rows affected
+  [val] 0 distinct vid(s) duplicated → 0 rows affected
+  [test] 0 distinct vid(s) duplicated → 0 rows affected
+
+------------------------------------------------------------------------
+  Cross-split vid overlap (data leakage)
+------------------------------------------------------------------------
+  train ∩ val: 0 shared vid(s)
+  train ∩ test: 0 shared vid(s)
+  val ∩ test: 0 shared vid(s)
+
+========================================================================
+  3. EXACT DUPLICATE file_path
+========================================================================
+
+------------------------------------------------------------------------
+  Within-split duplicates
+------------------------------------------------------------------------
+  [train] 0 distinct path(s) duplicated → 0 rows affected
+  [val] 0 distinct path(s) duplicated → 0 rows affected
+  [test] 0 distinct path(s) duplicated → 0 rows affected
+
+------------------------------------------------------------------------
+  Cross-split file_path overlap
+------------------------------------------------------------------------
+  train ∩ val: 0 shared path(s)
+  train ∩ test: 0 shared path(s)
+  val ∩ test: 0 shared path(s)
+
+========================================================================
+  4. EXACT DUPLICATE text
+========================================================================
+
+------------------------------------------------------------------------
+  Within-split duplicates
+------------------------------------------------------------------------
+  [train] 674 distinct text(s) duplicated → 7508 rows (13.1%)
+  [val] 103 distinct text(s) duplicated → 214 rows (15.3%)
+  [test] 165 distinct text(s) duplicated → 359 rows (20.6%)
+
+------------------------------------------------------------------------
+  Top 20 most-repeated texts (across all splits combined)
+------------------------------------------------------------------------
+   Count  Sources                         Text (first 80 chars)
+     610  openasl                         'And those are your top stories for today.'
+     601  openasl                         'Here are your top stories for today.'
+     589  openasl                         'Your language.'
+     508  openasl                         'Sign1News.'
+     504  openasl                         'Your life.'
+     438  openasl                         'Hello everyone.'
+     332  openasl                         'Welcome to Sign1News.'
+     291  openasl                         'Remember to like us on Facebook and follow us on Twitter.'
+     273  openasl                         'Thank you for watching Sign1News.'
+     272  openasl                         "I'm Crystal Cousineau."
+     177  openasl                         'Welcome to Sign1News live.'
+     163  openasl                         "I'm Jethro Wooddall."
+     123  openasl                         'That is all for today.'
+     115  openasl                         'Thank you for watching Sign1News live.'
+     111  openasl                         'Captioned by aslcaptions.com'
+     101  openasl                         'See you tomorrow and stay with the light!'
+      94  openasl                         'Hello, welcome to The Daily Moth!'
+      91  openasl                         "I'm Candace Jones."
+      57  openasl                         'Captioned by www.aslcaptions.com'
+      47  openasl                         'Hello, welcome to the Daily Moth.'
+
+------------------------------------------------------------------------
+  Cross-split exact text overlap (leakage)
+------------------------------------------------------------------------
+  train ∩ val: 29 shared exact text(s)
+    'May your fantasies of today be your realities of tomorrow.'
+    'If you need to go to the hospital, you need to be prepared.'
+    'You have the right to decide your care.'
+  train ∩ test: 30 shared exact text(s)
+    "Here are today's top news briefs."
+    'One, two, three.'
+    'Here are your top stories for the day.'
+  val ∩ test: 10 shared exact text(s)
+    'Thank you for watching Sign1News live.'
+    'Remember to like us on Facebook and follow us on Twitter.'
+    'That is all for today.'
+
+========================================================================
+  5. NEAR-DUPLICATE TEXT
+========================================================================
+
+------------------------------------------------------------------------
+  Normalised text duplicates (case/punctuation collapsed)
+------------------------------------------------------------------------
+  [train] 703 distinct normalised text(s) duplicated → 7682 rows (13.4%)
+  [val] 104 distinct normalised text(s) duplicated → 216 rows (15.5%)
+  [test] 165 distinct normalised text(s) duplicated → 360 rows (20.7%)
+
+------------------------------------------------------------------------
+  Cross-split normalised text overlap
+------------------------------------------------------------------------
+  train ∩ val: 32 shared normalised text(s)
+    'remember to follow us on all of our social media platforms'
+    'hello welcome to the daily moth'
+    'actually they decided to assign it to me'
+  train ∩ test: 31 shared normalised text(s)
+    'here are todays top news briefs'
+    'see you tomorrow and stay with the light'
+    'remember to follow us on all of our social media platforms'
+  val ∩ test: 11 shared normalised text(s)
+    'remember to follow us on all of our social media platforms'
+    'today were going to be learning how to play portal a game by valve software'
+    'and those are your top stories for today'
+
+------------------------------------------------------------------------
+  Fuzzy similarity clustering (≥90% ratio) — using difflib
+------------------------------------------------------------------------
+  [train] 0 near-duplicate pairs at ≥90% similarity (sampled 500 of 50326 unique normalised texts)
+  [val] 0 near-duplicate pairs at ≥90% similarity (sampled 500 of 1285 unique normalised texts)
+  [test] 2 near-duplicate pairs at ≥90% similarity (sampled 500 of 1546 unique normalised texts)
+
+========================================================================
+  6. SHORT / GENERIC TEXT (word_count ≤ 3)
+========================================================================
+  [train] 3,860 rows (6.7%) have word_count ≤ 3
+    (×584) 'Your language.'
+    (×506) 'Sign1News.'
+    (×501) 'Your life.'
+    (×438) 'Hello everyone.'
+    (×327) 'Welcome to Sign1News.'
+  [val] 28 rows (2.0%) have word_count ≤ 3
+    (×5) 'Your language.'
+    (×2) 'Welcome to Sign1News.'
+    (×1) 'Is it 1912?'
+    (×1) 'Inhale, exhale.'
+    (×1) 'Has many features.'
+  [test] 35 rows (2.0%) have word_count ≤ 3
+    (×3) 'Down and up.'
+    (×3) 'Welcome to Sign1News.'
+    (×3) 'Your life.'
+    (×2) 'Right, step, touch.'
+    (×2) 'Sign1News.'
+
+------------------------------------------------------------------------
+  Top 50 most-repeated texts (combined, ≥2 occurrences)
+------------------------------------------------------------------------
+  Rank   Count  Text (first 80 chars)
+     1     610  'And those are your top stories for today.'
+     2     601  'Here are your top stories for today.'
+     3     589  'Your language.'
+     4     508  'Sign1News.'
+     5     504  'Your life.'
+     6     438  'Hello everyone.'
+     7     332  'Welcome to Sign1News.'
+     8     291  'Remember to like us on Facebook and follow us on Twitter.'
+     9     273  'Thank you for watching Sign1News.'
+    10     272  "I'm Crystal Cousineau."
+    11     177  'Welcome to Sign1News live.'
+    12     163  "I'm Jethro Wooddall."
+    13     123  'That is all for today.'
+    14     115  'Thank you for watching Sign1News live.'
+    15     111  'Captioned by aslcaptions.com'
+    16     101  'See you tomorrow and stay with the light!'
+    17      94  'Hello, welcome to The Daily Moth!'
+    18      91  "I'm Candace Jones."
+    19      57  'Captioned by www.aslcaptions.com'
+    20      47  'Hello, welcome to the Daily Moth.'
+    21      45  'Ready for news?'
+    22      39  'Take a look.'
+    23      34  'Ready for the news?'
+    24      34  'Here are your top stories for the day.'
+    25      31  "Here are today's top news briefs."
+    26      25  'That is all the top news briefs for today.'
+    27      24  'Hello, welcome to The Daily Moth.'
+    28      22  'That is all for today!'
+    29      22  'Welcome to Sign1News Live.'
+    30      21  'Here are top news briefs.'
+    31      19  'Remember to follow us on all of our social media platforms and be sure to downlo'
+    32      18  'Here are three top news briefs.'
+    33      18  'Thank you.'
+    34      18  'And remember to like us on Facebook and follow us on Twitter.'
+    35      17  'One, two, three, four.'
+    36      17  'Have a wonderful weekend and stay with the light!'
+    37      17  'Thank you for watching Sign1News Live.'
+    38      16  "I'm Jethro Woodall."
+    39      15  'Hope your weekend was good.'
+    40      15  'Hello everyone!'
+    41      14  "That's all for now."
+    42      14  'New York Gov.'
+    43      13  'Thank you for sharing.'
+    44      13  'That is all for this week.'
+    45      13  'Thank you!'
+    46      13  'Check it out.'
+    47      11  'Here are two top news briefs.'
+    48      11  'Stay with the light!'
+    49      11  'One and two and three and four.'
+    50       9  'I will see you next time.'
+
+========================================================================
+  7. SAME TEXT IN BOTH SOURCES (how2sign vs openasl)
+========================================================================
+  [train] 'how2sign' ∩ 'openasl': 4 shared text(s)
+    'Hi!'
+    'Nothing.'
+    'Has this ever happened to you?'
+  [val] 'how2sign' ∩ 'openasl': 0 shared text(s)
+  [test] 'how2sign' ∩ 'openasl': 0 shared text(s)
+
+========================================================================
+  8. WEAK FINGERPRINT DUPLICATES (duration_sec, word_count, source)
+========================================================================
+  [train] 7329 distinct fingerprints duplicated → 50470 rows (88.1%)
+    dur=1.60s  wc=4  src=openasl  → 76 rows
+    dur=1.50s  wc=2  src=openasl  → 74 rows
+    dur=1.40s  wc=2  src=openasl  → 69 rows
+    dur=1.60s  wc=2  src=openasl  → 69 rows
+    dur=1.90s  wc=6  src=how2sign  → 62 rows
+  [val] 226 distinct fingerprints duplicated → 534 rows (38.2%)
+    dur=1.40s  wc=6  src=how2sign  → 5 rows
+    dur=4.70s  wc=15  src=how2sign  → 5 rows
+    dur=2.75s  wc=11  src=how2sign  → 4 rows
+    dur=2.00s  wc=8  src=how2sign  → 4 rows
+    dur=1.80s  wc=7  src=how2sign  → 4 rows
+  [test] 320 distinct fingerprints duplicated → 820 rows (47.1%)
+    dur=3.15s  wc=11  src=how2sign  → 10 rows
+    dur=2.85s  wc=8  src=how2sign  → 7 rows
+    dur=1.95s  wc=5  src=how2sign  → 6 rows
+    dur=2.05s  wc=7  src=how2sign  → 6 rows
+    dur=1.65s  wc=8  src=how2sign  → 6 rows
+
+========================================================================
+  9. CROSS-SPLIT LEAKAGE SUMMARY TABLE
+========================================================================
+
+  Pair              Exact vid  Exact text  Norm text
+  ---------------- ---------- ----------- ----------
+  train ∩ val               0          29         32
+  train ∩ test              0          30         31
+  val ∩ test                0          10         11
+
+========================================================================
+  10. OVERALL REDUNDANCY SCORE
+========================================================================
+
+  Split      Rows  Dup vid  Dup text  Norm dup  Est. % redund.
+  ------ -------- -------- --------- --------- ---------------
+  train    57,305        0     6,834     6,979           12.2%
+  val       1,397        0       111       112            8.0%
+  test      1,741        0       194       195           11.2%
+
+  Note: 'Est. % redund.' = max(dup_vid, dup_text, norm_dup) / total rows.
+  Fuzzy duplicates (Section 5) may reveal additional near-duplicates.
+  Using difflib (install rapidfuzz for speed).
+
+========================================================================
+  Report complete — 2026-04-22 22:17:06
+  Saved to: C:\My Projects\sign-language-bridge\data_code\redundancy_report.txt
+========================================================================
+

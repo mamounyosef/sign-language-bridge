@@ -1,0 +1,65 @@
+Re-stratify Splits — generated 2026-04-23 21:57:11
+========================================================================
+  Input  : data/5_dataset_{train,val,test}.tsv
+  Output : data/6_dataset_{train,val,test}.tsv
+  Ratios : train=90%  val=5%  test=5%
+  Seed   : 42
+  Log    : C:\My Projects\sign-language-bridge\data_code\19_restratify_splits.txt
+========================================================================
+
+========================================================================
+  1. LOADING & COMBINING
+========================================================================
+  train:  48,865 rows loaded
+  val  :   1,193 rows loaded
+  test :   1,441 rows loaded
+
+  Combined pool: 51,499 rows
+
+  Source breakdown of full pool:
+    openasl       :  32,628 (63.4%)
+    how2sign      :  18,871 (36.6%)
+
+========================================================================
+  2. STRATIFIED SPLIT  (by source)
+========================================================================
+
+  Source: how2sign  (total 18,871)
+    train : 16,983  (90.0%)
+    val   :    944  (5.0%)
+    test  :    944  (5.0%)
+
+  Source: openasl  (total 32,628)
+    train : 29,366  (90.0%)
+    val   :  1,631  (5.0%)
+    test  :  1,631  (5.0%)
+
+========================================================================
+  3. WRITING OUTPUT FILES
+========================================================================
+  Wrote train:  46,349 rows  →  6_dataset_train.tsv
+  Wrote val  :   2,575 rows  →  6_dataset_val.tsv
+  Wrote test :   2,575 rows  →  6_dataset_test.tsv
+
+========================================================================
+  4. VERIFICATION SUMMARY
+========================================================================
+
+  Split      Clips    %Total      how2sign       openasl    ΔRatio
+  ──────  ────────  ────────  ────────────  ────────────  ────────
+  train     46,349     90.0%  16,983 (36.6%)  29,366 (63.4%)    0.0000
+  val        2,575      5.0%     944 (36.7%)   1,631 (63.3%)    0.0002
+  test       2,575      5.0%     944 (36.7%)   1,631 (63.3%)    0.0002
+
+  (ΔRatio = mean absolute source ratio difference vs overall pool)
+  (< 0.005 = excellent stratification)
+
+  Total rows in output: 51,499
+  Total rows in input : 51,499
+  Row count check     : PASSED
+
+========================================================================
+  Re-stratification complete — 2026-04-23 21:57:11
+  Report saved to: C:\My Projects\sign-language-bridge\data_code\19_restratify_splits.txt
+========================================================================
+

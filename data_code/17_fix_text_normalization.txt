@@ -1,0 +1,254 @@
+Text Normalisation Fix Report — generated 2026-04-23 21:10:08
+========================================================================
+  Input  : data/4_dataset_{train,val,test}.tsv
+  Output : data/5_dataset_{train,val,test}.tsv
+  Log    : C:\My Projects\sign-language-bridge\data_code\17_fix_text_normalization.txt
+  All-caps threshold : > 18 uppercase letters
+========================================================================
+
+========================================================================
+  0. LOADING INPUT FILES
+========================================================================
+  train:  48,869 rows  —  4_dataset_train.tsv
+  val  :   1,193 rows  —  4_dataset_val.tsv
+  test :   1,441 rows  —  4_dataset_test.tsv
+
+  Total input rows: 51,503
+
+========================================================================
+  APPLYING FIXES
+========================================================================
+
+------------------------------------------------------------------------
+  Split: train  (48,869 rows)
+------------------------------------------------------------------------
+
+  [train]  1,473 rows had text modified  |  4 rows removed (F8 no-alpha)
+    F1  Non-ASCII removed                    6 rows affected
+      vid   : 1NdnCBn6-F4_7-3-rgb_front
+      before: 'So here for example this is a 7 Â½ foot knotless 3X leader.'
+      after : 'So here for example this is a 7 foot knotless 3X leader.'
+      vid   : 1d1uWUUHJZQ_3-3-rgb_front
+      before: "Often times, I have people coming up to meâ\x80¦oh, I'm too fat to do yoga, I can't do yoga because I'm too heavy."
+      after : "Often times, I have people coming up to meoh, I'm too fat to do yoga, I can't do yoga because I'm too heavy."
+      vid   : 20eFgtWq9-I_1-8-rgb_front
+      before: 'We are going to need a sautÃ© pan or a frying pan.'
+      after : 'We are going to need a saut pan or a frying pan.'
+      vid   : EN_Lv4gfL_A_8-8-rgb_front
+      before: 'You say, "So a guy goes for a walk," not â\x80\x9cA guy was going for a walk", and that way, everything is more consistent ove'
+      after : 'You say, So a guy goes for a walk, not A guy was going for a walk, and that way, everything is more consistent overall.'
+      vid   : fCk8Md58LK4_15-4-rgb_front
+      before: 'â\x80\x9cYes or we could drive a bus."'
+      after : 'Yes or we could drive a bus.'
+      ... 1 more rows changed by this fix
+    F2  HTML entities decoded               26 rows affected
+      vid   : 0-bR2rq-qps_6-5-rgb_front
+      before: 'So, this is by Clean &amp; Clear and you can get this in the drugstore for about $4.99.'
+      after : 'So, this is by Clean & Clear and you can get this in the drugstore for about $4.99.'
+      vid   : 1EidpMNIaJE_0-5-rgb_front
+      before: "All right, the drink we're about to make is called Lager &amp; Lime."
+      after : "All right, the drink we're about to make is called Lager & Lime."
+      vid   : dh6-yhJ30pY_1-8-rgb_front
+      before: "So today I am going to be making breve because I don't actually have a pitcher of Half &amp; Half and that's all the bre"
+      after : "So today I am going to be making breve because I don't actually have a pitcher of Half & Half and that's all the breve i"
+      vid   : BLVDbsj7Xo4-00:09:54.927-00:10:02.350
+      before: 'Trump responded by saying Sharpton hated "Whites &amp; Cops".'
+      after : 'Trump responded by saying Sharpton hated "Whites & Cops".'
+      vid   : I1UDU-5qDXQ-00:06:10.536-00:06:16.810
+      before: 'PG&amp;E will pay a $3.5 million fine.'
+      after : 'PG&E will pay a $3.5 million fine.'
+      ... 21 more rows changed by this fix
+    F3  Curly quotes straightened            0 rows affected
+    F3b Escaped apostrophe \' → '            0 rows affected
+    F4  Em/en dash → hyphen                  0 rows affected
+    F5  Repeated punct collapsed           428 rows affected
+      vid   : -06_nJnhORg_14-5-rgb_front
+      before: "So I...I continued to fight through it, fight through it...didn't feel real great."
+      after : "So I.I continued to fight through it, fight through it.didn't feel real great."
+      vid   : -0N0jbyBW6g_9-5-rgb_front
+      before: "Again, we're talking about cross stitch....cross stitch craft kits."
+      after : "Again, we're talking about cross stitch.cross stitch craft kits."
+      vid   : -1fUFbij2s0_6-5-rgb_front
+      before: "That's an old--that was a long time ago, and I still remember it."
+      after : "That's an old-that was a long time ago, and I still remember it."
+      vid   : -8XxBfXAzyo_14-8-rgb_front
+      before: 'A hungry chameleon will often have--will often be trying to blend in with its environment.'
+      after : 'A hungry chameleon will often have-will often be trying to blend in with its environment.'
+      vid   : -8XxBfXAzyo_17-8-rgb_front
+      before: "Now, an angry chameleon such as her--she's displaying right now."
+      after : "Now, an angry chameleon such as her-she's displaying right now."
+      ... 423 more rows changed by this fix
+    F6  All-caps → sentence case            47 rows affected
+      vid   : 18NasCihOMs_3-8-rgb_front
+      before: "LES MCGEHEE: [MAKES NOISE] and we're back."
+      after : "Les mcgehee: [makes noise] and we're back."
+      vid   : 1HVI7U22egg_0-5-rgb_front
+      before: 'RICHARD BUCCOLA: Hi, this is Rich Buccola of New York City.'
+      after : 'Richard buccola: hi, this is rich buccola of new york city.'
+      vid   : 3mjTbgSBlhE_0-5-rgb_front
+      before: 'ALLISON KLINGER: Hello, my name is Allison at Western Art Glass in Salt Lake City.'
+      after : 'Allison klinger: hello, my name is allison at western art glass in salt lake city.'
+      vid   : cEmmjObvNZE_26-5-rgb_front
+      before: 'I AM GOING TO DO A MONOLOGUE!!!'
+      after : 'I am going to do a monologue!'
+      vid   : xHq-TBEeblU-00:15:50.419-00:15:52.600
+      before: 'THANK YOU FOR WATCHING SIGN1NEWS LIVE.'
+      after : 'Thank you for watching sign1news live.'
+      ... 42 more rows changed by this fix
+    F7  Unpaired chars removed             408 rows affected
+      vid   : -6PULg1jlpc_1-5-rgb_front
+      before: 'I know a lot of ladies out there are wondering, "How do I get my skin clean?'
+      after : 'I know a lot of ladies out there are wondering, How do I get my skin clean?'
+      vid   : -6PULg1jlpc_2-5-rgb_front
+      before: 'How do I get rid of this makeup?"'
+      after : 'How do I get rid of this makeup?'
+      vid   : 00m1mQFF5zo_10-3-rgb_front
+      before: 'I\'ll make sure that he gets the message."'
+      after : "I'll make sure that he gets the message."
+      vid   : 04DtdCu2kfg_10-5-rgb_front
+      before: 'What if my guy is still standing out there?"'
+      after : 'What if my guy is still standing out there?'
+      vid   : 04DtdCu2kfg_9-5-rgb_front
+      before: 'A lot of people are concerned, "What happens to my guy?'
+      after : 'A lot of people are concerned, What happens to my guy?'
+      ... 403 more rows changed by this fix
+
+------------------------------------------------------------------------
+  Split: val  (1,193 rows)
+------------------------------------------------------------------------
+
+  [val]  30 rows had text modified  |  0 rows removed (F8 no-alpha)
+    F1  Non-ASCII removed                   18 rows affected
+      vid   : 5dttR4Yq-2k-00:03:40.166-00:03:46.400
+      before: 'It’s not their normal, so personally, I’ve learned that education is key.'
+      after : 'Its not their normal, so personally, Ive learned that education is key.'
+      vid   : NJQ7M-rFtFQ-00:03:23.666-00:03:29.433
+      before: 'Especially in the field with a lot of writing and reading, I feel like that’s a perfect job for Deaf people.'
+      after : 'Especially in the field with a lot of writing and reading, I feel like thats a perfect job for Deaf people.'
+      vid   : tAB9G6QcXDU-00:01:22.633-00:01:28.166
+      before: 'It can be a staff or someone you’ve worked with before.'
+      after : 'It can be a staff or someone youve worked with before.'
+      vid   : 9SdgcJ3CItw-00:01:21.000-00:01:24.666
+      before: 'During this six-month period, Sydnei’s parents stayed by her side day and night.'
+      after : 'During this six-month period, Sydneis parents stayed by her side day and night.'
+      vid   : NGry3ZtyTyE-00:00:07.166-00:00:14.200
+      before: 'The resume and cover letter aren’t enough to convince that you’re the right fit.'
+      after : 'The resume and cover letter arent enough to convince that youre the right fit.'
+      ... 13 more rows changed by this fix
+    F2  HTML entities decoded                0 rows affected
+    F3  Curly quotes straightened            0 rows affected
+    F3b Escaped apostrophe \' → '            0 rows affected
+    F4  Em/en dash → hyphen                  0 rows affected
+    F5  Repeated punct collapsed            10 rows affected
+      vid   : 0zvsqf23tmw_3-1-rgb_front
+      before: 'You want to do your background before you get all your objects and those are--it should always be last.'
+      after : 'You want to do your background before you get all your objects and those are-it should always be last.'
+      vid   : 1aJwX9nRlmk_6-2-rgb_front
+      before: "Notice how my shoulders don't creep up--[SOUNDS LIKE] errk--as I drop the ear down, right?"
+      after : "Notice how my shoulders don't creep up-[SOUNDS LIKE] errk-as I drop the ear down, right?"
+      vid   : 4XlVMRXLydg_15-5-rgb_front
+      before: 'Right -- first one, always stand in the Wu Chi posture.'
+      after : 'Right - first one, always stand in the Wu Chi posture.'
+      vid   : DdzxfgB4W2c_15-5-rgb_front
+      before: 'We just need a little bit of water in here at the bottom -- just a little bit of water.'
+      after : 'We just need a little bit of water in here at the bottom - just a little bit of water.'
+      vid   : EQWFrWeRVjQ_16-3-rgb_front
+      before: "You might wanna--it looks like it's a little [INDISCERNIBLE]."
+      after : "You might wanna-it looks like it's a little [INDISCERNIBLE]."
+      ... 5 more rows changed by this fix
+    F6  All-caps → sentence case             1 rows affected
+      vid   : frHPSdr6rIM-00:00:40.633-00:00:47.466
+      before: 'A demonstrator walked up in front with a large banner that said, "HOMELESS CAN\'T STAY HOME."'
+      after : 'A demonstrator walked up in front with a large banner that said, "homeless can\'t stay home."'
+    F7  Unpaired chars removed               1 rows affected
+      vid   : qKu3yLfhNps-00:02:09.533-00:02:13.766
+      before: 'Title II is important for deaf individuals because of the “effective communication."'
+      after : 'Title II is important for deaf individuals because of the effective communication.'
+
+------------------------------------------------------------------------
+  Split: test  (1,441 rows)
+------------------------------------------------------------------------
+
+  [test]  31 rows had text modified  |  0 rows removed (F8 no-alpha)
+    F1  Non-ASCII removed                   22 rows affected
+      vid   : 5dttR4Yq-2k-00:03:32.033-00:03:37.233
+      before: 'The community isn’t used to something different.'
+      after : 'The community isnt used to something different.'
+      vid   : IsEzvnueFQk-00:00:33.000-00:00:39.366
+      before: 'NLTC is incredible because without this opportunity, we can’t learn.'
+      after : 'NLTC is incredible because without this opportunity, we cant learn.'
+      vid   : rgE2ZZ9bHKA-00:00:32.066-00:00:37.366
+      before: 'The House of Representatives has a different number of representatives per state, depending on the size of your state’s '
+      after : 'The House of Representatives has a different number of representatives per state, depending on the size of your states p'
+      vid   : 1-bCws7TnBs-00:00:29.000-00:00:33.533
+      before: 'They might think that lipreading or writing is effective when it isn’t.'
+      after : 'They might think that lipreading or writing is effective when it isnt.'
+      vid   : 2MnvFrB5ljQ-00:01:53.066-00:01:58.233
+      before: 'Hello, I’m Alicia and I’ve been working with the Outreach committee.'
+      after : 'Hello, Im Alicia and Ive been working with the Outreach committee.'
+      ... 17 more rows changed by this fix
+    F2  HTML entities decoded                0 rows affected
+    F3  Curly quotes straightened            0 rows affected
+    F3b Escaped apostrophe \' → '            0 rows affected
+    F4  Em/en dash → hyphen                  0 rows affected
+    F5  Repeated punct collapsed            10 rows affected
+      vid   : FZCF7kPIyOk_14-1-rgb_front
+      before: 'Also--yeah, this is good to have, the visual, you can see through it.'
+      after : 'Also-yeah, this is good to have, the visual, you can see through it.'
+      vid   : FZCF7kPIyOk_5-1-rgb_front
+      before: "You have the back right there and you have your pages inside--they're securely bound."
+      after : "You have the back right there and you have your pages inside-they're securely bound."
+      vid   : G3GcPpidwxk_12-5-rgb_front
+      before: "That's just not..that won't look good."
+      after : "That's just not.that won't look good."
+      vid   : G3bMqicS4bQ_18-5-rgb_front
+      before: 'So that--make sure that your modifications are allowed.'
+      after : 'So that-make sure that your modifications are allowed.'
+      vid   : g2ur4BIuN0Q_11-3-rgb_front
+      before: "People won't be saying, is he saying ball or is he saying dall--it'll kind of flow naturally."
+      after : "People won't be saying, is he saying ball or is he saying dall-it'll kind of flow naturally."
+      ... 5 more rows changed by this fix
+    F6  All-caps → sentence case             0 rows affected
+    F7  Unpaired chars removed               1 rows affected
+      vid   : -g0iPSnQt6w_5-1-rgb_front
+      before: 'You can\'t get into the middle of the dive and just decide, "You know what?'
+      after : "You can't get into the middle of the dive and just decide, You know what?"
+
+========================================================================
+  WRITING OUTPUT FILES
+========================================================================
+  Wrote train:  48,865 rows  →  5_dataset_train.tsv
+  Wrote val  :   1,193 rows  →  5_dataset_val.tsv
+  Wrote test :   1,441 rows  →  5_dataset_test.tsv
+
+========================================================================
+  FINAL SUMMARY
+========================================================================
+
+  Per-fix totals across all splits:
+  Fix                                   Rows affected
+  ───────────────────────────────────  ──────────────
+  F1  Non-ASCII removed                            46
+  F2  HTML entities decoded                        26
+  F3  Curly quotes straightened                     0
+  F3b Escaped apostrophe \' → '                     0
+  F4  Em/en dash → hyphen                           0
+  F5  Repeated punct collapsed                    448
+  F6  All-caps → sentence case                     48
+  F7  Unpaired chars removed                      410
+  F8 No-alpha rows removed                          4
+
+  Per-split results:
+  Split    Original   Modified   Removed     Final   % changed
+  ──────  ─────────  ─────────  ────────  ────────  ──────────
+  train      48,869      1,473         4    48,865       3.02%
+  val         1,193         30         0     1,193       2.51%
+  test        1,441         31         0     1,441       2.15%
+  ──────  ─────────  ─────────  ────────  ────────  ──────────
+  TOTAL      51,503                         51,499
+
+========================================================================
+  Normalisation complete — 2026-04-23 21:10:13
+  Report saved to: C:\My Projects\sign-language-bridge\data_code\17_fix_text_normalization.txt
+========================================================================
+

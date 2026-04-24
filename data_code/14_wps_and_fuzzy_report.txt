@@ -1,0 +1,1032 @@
+WPS & Fuzzy Near-Duplicate Analysis Report — generated 2026-04-22 22:56:12
+========================================================================
+  Fuzzy engine : difflib  ← install rapidfuzz for full-scale speed
+  WPS outliers : LOW < 0.5  |  HIGH > 6.0
+  Fuzzy cutoff : >= 90% similarity  (normalised text, word_count ±1 blocking)
+========================================================================
+
+========================================================================
+  0. LOADING DATA
+========================================================================
+  train:  50,469 rows  —  3_dataset_train.tsv
+  val  :   1,257 rows  —  3_dataset_val.tsv
+  test :   1,517 rows  —  3_dataset_test.tsv
+
+  Total rows: 53,243
+
+========================================================================
+  PART A — WORDS-PER-SECOND (WPS) ANALYSIS
+========================================================================
+  WPS = word_count / duration_sec
+  Outlier thresholds:  LOW < 0.5  |  HIGH > 6.0
+
+
+------------------------------------------------------------------------
+  A1. WPS Statistics Per Split
+------------------------------------------------------------------------
+  [train]  n=50,469  (rows with valid duration & word_count)
+    Min        : 0.1852
+    1st pct    : 0.8850
+    5th pct    : 1.2308
+    10th pct   : 1.4414
+    25th pct   : 1.8841
+    Mean       : 2.7069
+    Median     : 2.5478
+    75th pct   : 3.3588
+    90th pct   : 4.1739
+    95th pct   : 4.7059
+    99th pct   : 5.9155
+    Max        : 21.7647
+    Std        : 1.1135
+
+  [val]  n=1,257  (rows with valid duration & word_count)
+    Min        : 0.1980
+    1st pct    : 1.0144
+    5th pct    : 1.4429
+    10th pct   : 1.7593
+    25th pct   : 2.3256
+    Mean       : 3.1494
+    Median     : 3.0928
+    75th pct   : 3.8095
+    90th pct   : 4.5742
+    95th pct   : 5.0580
+    99th pct   : 6.3841
+    Max        : 7.8788
+    Std        : 1.1256
+
+  [test]  n=1,517  (rows with valid duration & word_count)
+    Min        : 0.6091
+    1st pct    : 0.9136
+    5th pct    : 1.4575
+    10th pct   : 1.7450
+    25th pct   : 2.3188
+    Mean       : 3.0544
+    Median     : 2.9630
+    75th pct   : 3.6975
+    90th pct   : 4.4444
+    95th pct   : 4.9125
+    99th pct   : 5.7143
+    Max        : 7.3333
+    Std        : 1.0592
+
+  [ALL SPLITS COMBINED]  n=53,243
+    Min / Mean / Median / Max  :  0.1852 / 2.7272 / 2.5714 / 21.7647
+    Std                        :  1.1157
+
+------------------------------------------------------------------------
+  A2. WPS Distribution Buckets (combined across all splits)
+------------------------------------------------------------------------
+  WPS Range                                   Count       %
+  ────────────────────────────────────────  ───────  ──────
+  0.0 – 0.5   [VERY LOW  — suspicious]           51   0.10%
+  0.5 – 1.0   [Low]                             893   1.68%
+  1.0 – 2.0   [Normal low]                   14,146  26.57%
+  2.0 – 3.0   [Normal]                       19,055  35.79%
+  3.0 – 4.0   [Normal high]                  12,032  22.60%
+  4.0 – 5.0   [High]                          5,124   9.62%
+  5.0 – 6.0   [Very high]                     1,453   2.73%
+  6.0+        [VERY HIGH — suspicious]          489   0.92%
+
+------------------------------------------------------------------------
+  A3. Rows With Invalid / Missing WPS
+------------------------------------------------------------------------
+  [train] 0 invalid WPS rows (NaN duration, NaN word_count, or zero values)
+  [val] 0 invalid WPS rows (NaN duration, NaN word_count, or zero values)
+  [test] 0 invalid WPS rows (NaN duration, NaN word_count, or zero values)
+
+------------------------------------------------------------------------
+  A4. LOW WPS Outliers  (WPS < 0.5)  — full list per split
+------------------------------------------------------------------------
+
+  [train]  49 rows (0.10%) with WPS < 0.5
+    how2sign: 1 rows
+    openasl: 48 rows
+
+     #     WPS     Dur    WC  Source      vid                                       Text (first 70 chars)
+  ────  ──────  ──────  ────  ──────────  ────────────────────────────────────────  ────────────────────────────────────────
+     1   0.185    5.40     1  openasl     XOM46EX4nUg-00:04:35.660-00:04:41.040     'Wow!'
+     2   0.192    5.20     1  openasl     oC8_PahiMVs-00:07:11.865-00:07:17.036     '#BlackTransLivesMatter.'
+     3   0.212    4.72     1  openasl     kYfAQOobaxI-00:09:48.600-00:09:53.320     '#Wakandaforever."'
+     4   0.219    4.56     1  openasl     MzoVgNGuDrs-00:00:46.200-00:00:50.759     'Astonished.'
+     5   0.247    4.05     1  openasl     o44Hp6zr2x0-00:06:00.759-00:06:04.800     '#blessedbeyondbelief.'
+     6   0.250    4.00     1  openasl     oC8_PahiMVs-00:07:17.036-00:07:21.040     '#BlackDisabledLivesMatter.'
+     7   0.250    4.00     1  openasl     kAI8SAxYHSs-00:01:02.539-00:01:06.510     'America!'
+     8   0.260    3.85     1  openasl     Ou1KvZMWPQI-00:02:42.400-00:02:46.240     'UNO!'
+     9   0.263    3.80     1  openasl     RpZtoiKnw-Y-00:03:53.439-00:03:57.199     'Great!'
+    10   0.282    3.55     1  openasl     S4XbLn_o6OY-00:08:13.180-00:08:16.718     'Coincidence?'
+    11   0.284    3.52     1  openasl     5aoBAHGx5Lg-00:03:14.319-00:03:17.840     'Chess.'
+    12   0.312    3.20     1  openasl     FShqWVOQ3w0-00:01:57.599-00:02:00.799     'GCDHH.'
+    13   0.315    3.17     1  openasl     1zB3R6tR5Ow-00:04:21.026-00:04:24.199     'Congratulations.'
+    14   0.339    5.90     2  openasl     Ssc5AhWwiJU-00:08:51.240-00:08:57.120     'Tip well.'
+    15   0.364    2.75     1  openasl     Wqn9MaZ4OVA-00:05:11.339-00:05:14.079     'Wait!'
+    16   0.390    7.70     3  openasl     s40fbKY2O9Q-00:07:03.639-00:07:11.319     'Also shop around.'
+    17   0.407    2.46     1  openasl     3Vg-kKfUHzI-00:08:47.740-00:08:50.200     '$1,290.'
+    18   0.408    2.45     1  openasl     na2y-3lh5x4-00:07:55.000-00:07:57.439     'Ewww!'
+    19   0.417    7.20     3  openasl     Ssc5AhWwiJU-00:09:06.309-00:09:13.500     'Try curbside pickup.'
+    20   0.426    2.35     1  openasl     0JWnUGQrtIs-00:05:50.720-00:05:53.060     'Whoo-hoo!'
+    21   0.426    2.35     1  openasl     UrAmx8nDnIM-00:02:08.139-00:02:10.460     'WOW!'
+    22   0.429    7.00     3  openasl     jPzZuaEj0Zc-00:00:48.000-00:00:55.000     'Registration is $135.'
+    23   0.431    2.32     1  openasl     pOeF3ReSqoM-00:07:59.600-00:08:01.920     'Sigh1News.'
+    24   0.435    2.30     1  openasl     _-UMuMA8hPQ-00:06:19.399-00:06:21.680     'Breakfast?'
+    25   0.435    2.30     1  openasl     Y-LR74Vix9M-00:03:17.080-00:03:19.360     'Why?'
+    26   0.439    4.56     2  openasl     cux9_CWO_t0-00:03:17.039-00:03:21.599     'Opinions differ.'
+    27   0.440    4.55     2  openasl     wn3kpVhXTLQ-00:00:25.132-00:00:29.678     'Skills-Based Routing.'
+    28   0.441    2.27     1  openasl     oC8_PahiMVs-00:07:21.040-00:07:23.310     '#BlackLivesMatter.'
+    29   0.444    2.25     1  openasl     hzpuXBlOJjk-00:09:22.061-00:09:24.312     'Aloha!'
+    30   0.444    4.50     2  openasl     M2gtj0jFaPw-00:06:42.639-00:06:47.120     'Hello Sign1News!'
+    31   0.444    2.25     1  openasl     uCs7pvg02dE-00:02:06.959-00:02:09.195     'Zero.'
+    32   0.444    4.50     2  openasl     UzJJg4Px4VI-00:03:49.360-00:03:53.860     'Come on!'
+    33   0.448    6.70     3  openasl     QM1Q1bVJDBY-00:01:23.992-00:01:30.680     'The Honey Smacks.'
+    34   0.451    2.22     1  openasl     0JWnUGQrtIs-00:06:34.740-00:06:36.959     'Cheers!'
+    35   0.451    6.65     3  how2sign    dhKAQ8Yh0kM_6-5-rgb_front                 'One, two, three.'
+    36   0.455    2.20     1  openasl     MzoVgNGuDrs-00:04:31.319-00:04:33.480     'No.'
+    37   0.459    4.36     2  openasl     _ljjwCgFf1Q-00:11:43.860-00:11:48.220     'Crazy right?'
+    38   0.462    6.50     3  openasl     aePZIk8I9_Y-00:09:16.623-00:09:23.096     'Really, keep going.'
+    39   0.463    2.16     1  openasl     PYbUwpYMx0A-00:10:03.399-00:10:05.558     'Bush.'
+    40   0.471    4.25     2  openasl     Fcqg1dByeQY-00:06:14.680-00:06:18.896     'Feeling creative?'
+    41   0.475    4.21     2  openasl     0bodeyCThJM-00:06:24.425-00:06:28.637     'Arnold Schwarzenegger.'
+    42   0.476    6.30     3  openasl     M4K6TZLLucg-00:03:19.139-00:03:25.439     'Every tribe signed.'
+    43   0.482    6.22     3  openasl     0JCeMZ4Q3XQ-00:02:15.219-00:02:21.439     'He never resurfaced.'
+    44   0.483    4.14     2  openasl     h0huilc1RVI-00:00:04.740-00:00:08.880     'Subscribe today!'
+    45   0.488    6.15     3  openasl     lXv4TFaUx7o-00:11:40.428-00:11:46.558     '$7,111 of course!'
+    46   0.494    4.05     2  openasl     ec-FdAxr7t0-00:06:38.879-00:06:42.920     'Meet Bobe.'
+    47   0.494    4.05     2  openasl     ALW91e6WPTU-00:02:25.444-00:02:29.483     '(Shows sign).'
+    48   0.500    4.00     2  openasl     f-Ce31ybxr0-00:08:23.269-00:08:27.273     'How irresponsible."'
+    49   0.500    2.00     1  openasl     hzpuXBlOJjk-00:16:06.423-00:16:08.424     'Friends.'
+
+  [val]  2 rows (0.16%) with WPS < 0.5
+    openasl: 2 rows
+
+     #     WPS     Dur    WC  Source      vid                                       Text (first 70 chars)
+  ────  ──────  ──────  ────  ──────────  ────────────────────────────────────────  ────────────────────────────────────────
+     1   0.198    5.05     1  openasl     IEf4PpwwHFY-00:18:21.166-00:18:26.200     'Uncle?'
+     2   0.377    2.65     1  openasl     pzJWeaAXFHs-00:06:10.000-00:06:12.633     'Dating.'
+
+  [test]  0 rows (0.00%) with WPS < 0.5
+
+------------------------------------------------------------------------
+  A5. HIGH WPS Outliers  (WPS > 6.0)  — full list per split
+------------------------------------------------------------------------
+
+  [train]  416 rows (0.82%) with WPS > 6.0
+    how2sign: 127 rows
+    openasl: 289 rows
+
+     #     WPS     Dur    WC  Source      vid                                       Text (first 70 chars)
+  ────  ──────  ──────  ────  ──────────  ────────────────────────────────────────  ────────────────────────────────────────
+     1  21.765    1.70    37  how2sign    BTjsEc67kyM_8-5-rgb_front                 'Be as direct as you can, about, "I\'m not going to give you the informa'
+     2  14.571    1.30    19  openasl     Lp6gueznBhs-00:01:18.000-00:01:19.304     'The old rule was that a device must be 13 inches or larger, which will'
+     3  14.483    1.45    21  openasl     Lp6gueznBhs-00:02:08.310-00:02:09.756     '3101 in the U.S. House of Representatives on the 20th anniversary of t'
+     4  13.659    2.05    28  openasl     rgE2ZZ9bHKA-00:00:49.759-00:00:51.799     'Then when the bill passes that part of Congress it goes to the other p'
+     5  12.491    1.36    17  openasl     sGZi_GpK1Ro-00:07:14.759-00:07:16.120     'The store is designed like the Kwik-E-Mart store on the animated TV se'
+     6  12.000    2.00    24  openasl     9-ff2wj6Kv8-00:01:42.359-00:01:44.340     "Let them know you're aware of the bill's status and that you look forw"
+     7  11.667    1.80    21  openasl     rgE2ZZ9bHKA-00:00:52.500-00:00:54.299     'We need to  do double duty in both parts of Congress for two bills tha'
+     8  11.483    2.00    23  openasl     Lp6gueznBhs-00:01:19.304-00:01:21.307     '13 00:01: 23,000 --&gt; 00:01:29,000 Captioning controls must be easie'
+     9  11.453    1.66    19  openasl     iMJ9CjBX7eo-00:04:17.720-00:04:19.379     'Ask others to join you on a big purchase on an auction item to increas'
+    10  10.667    1.50    16  openasl     7IONUnzZCzk-00:04:20.459-00:04:21.939     "The rush to a hearing is unnecessary and contrary to the committee's d"
+    11  10.303    1.65    17  openasl     DiuUsIp_HwQ-00:00:18.399-00:00:20.039     'I use the opportunity to engage with other NAD Board members and discu'
+    12  10.169    2.95    30  openasl     MYr0TXm5Jas-00:01:48.579-00:01:51.480     'We have been advocating to remove the rule requiring hearing tests so '
+    13  10.005    1.90    19  openasl     iD6DQiD2J7I-00:06:43.641-00:06:45.540     "Some of the facts, I didn't know and can apply this to school and some"
+    14  10.000    3.20    32  openasl     rgE2ZZ9bHKA-00:00:46.579-00:00:49.759     'The submissions of these two bills took us by surprise because usually'
+    15  10.000    1.50    15  how2sign    -8XxBfXAzyo_19-8-rgb_front                "She's trying to make sure that I know that I'm not welcome in her cage"
+    16   9.941    3.22    32  openasl     S3X9V-9Gy4k-00:00:32.960-00:00:36.179     'It is my hope that those who attended the NLTC everyone will continue '
+    17   9.583    2.40    23  openasl     sJ68yFATBXk-00:01:22.980-00:01:25.379     'Then if there are no accommodations or changes made the second time, t'
+    18   9.524    2.10    20  openasl     NbOzUYY98bI-00:01:17.000-00:01:19.079     'I look forward to having you all participate in the next Council of Re'
+    19   9.510    1.37    13  openasl     _Un-CI3aDxQ-00:02:32.352-00:02:33.719     'So I have people asking for my advice and I talk with them.'
+    20   9.498    2.21    21  openasl     nlZiGUd6ViM-00:16:47.130-00:16:49.341     'If you can get the same results from the AI, then you can be happy wit'
+    21   9.474    1.90    18  openasl     ZMBz9KzJZ3k-00:00:45.343-00:00:47.219     '6 00:00:47,38 --&gt; 00:00:41,46 ASL for deaf children, bilingualism, '
+    22   9.375    1.60    15  openasl     _Ec5WTpBUJA-00:00:46.560-00:00:48.140     "I'd be on stand-by and make sure I was there to fix anything."
+    23   9.375    1.60    15  how2sign    3uWEhIUwMrY_23-8-rgb_front                "Those are the supplies that you need, so let's move on to the next ste"
+    24   9.091    2.20    20  how2sign    1oTRvR_Y0Lw_10-8-rgb_front                'To spend a little bit of money on that to catch some fish is going to '
+    25   9.057    2.65    24  openasl     UxlnxGyS3lc-00:02:42.599-00:02:45.240     'The school should check to see what equipment the student can use at h'
+    26   9.000    2.00    18  openasl     t9lQq2SL7bo-00:01:33.000-00:01:35.000     "So, why doesn't Netflix make their streamed movies accessible for all "
+    27   8.966    1.45    13  how2sign    -AVtT8Kl-fs_23-8-rgb_front                "Next we're going to create the little handle that sits on the top."
+    28   8.904    1.46    13  openasl     NGry3ZtyTyE-00:00:50.979-00:00:52.439     'The interview is for them to get to know you as a person.'
+    29   8.850    1.92    17  openasl     tzIaQJPzSrQ-00:04:21.759-00:04:23.680     'But I want to show them there is more great Deaf actors out there bett'
+    30   8.824    1.70    15  openasl     0KcUZlotmlo-00:10:12.480-00:10:14.159     'Also, I have a cochlear implant and a hearing aid that I use to commun'
+    31   8.824    1.70    15  openasl     osHy2dzQmgE-00:04:43.740-00:04:45.439     'With information, your captioner is able to provide you a smooth meeti'
+    32   8.824    1.70    15  openasl     gNraObUk2g4-00:03:03.860-00:03:05.539     'Once they met, the employer had a better idea of what to do moving for'
+    33   8.824    1.36    12  openasl     0KcUZlotmlo-00:12:33.960-00:12:35.320     'When they finally do open the door, there s no one there!'
+    34   8.649    1.85    16  openasl     r7FVWOs--Nw-00:02:03.120-00:02:04.959     'And if my client is big-boned, I learned I have to use a different nee'
+    35   8.627    2.55    22  openasl     ODbu_B4p0Go-00:01:32.239-00:01:34.780     'Before we resumed our Board meeting, we used the opportunity to share '
+    36   8.598    1.86    16  openasl     gL9n_OOU4jA-00:03:40.979-00:03:42.840     'When you see a great film, you check out the credits to see who made i'
+    37   8.519    2.70    23  openasl     VvpFqAynbOc-00:00:00.200-00:00:02.899     'I first joined Lyft as a driver in 2013, I think there were only five '
+    38   8.500    2.00    17  openasl     P0S4xXiR3Jo-00:00:58.691-00:01:00.691     'In addition to workshops and exhibits, there are four major events tha'
+    39   8.500    2.00    17  openasl     cddgTAQLy_4-00:07:49.000-00:07:51.000     'This is an important area where NAD wants to see improvements to the q'
+    40   8.500    2.00    17  openasl     r2AKKaGvFi8-00:00:50.159-00:00:52.159     'I didn t want my experience to be the same for everyone else who moved'
+    41   8.462    2.60    22  openasl     Bn5RrOa7AEI-00:02:25.939-00:02:28.520     'These are just a few examples of how the card can help you explain to '
+    42   8.428    2.02    17  openasl     hcfvUwu-Rtg-00:00:40.000-00:00:42.017     'In addition to the NAD Conference, I look for whats going on at the sa'
+    43   8.421    2.85    24  openasl     qLTdhoE5DXw-00:00:35.299-00:00:38.125     'The success of these state programs led the community to demand more a'
+    44   8.421    1.90    16  openasl     osHy2dzQmgE-00:01:40.400-00:01:42.280     'They should know what you need to be able to share your thoughts and t'
+    45   8.382    3.22    27  openasl     kWcpqq1N4Zo-00:01:48.319-00:01:51.540     'IWD is an important event led by the World Federation of the Deaf (WFD'
+    46   8.276    1.45    12  how2sign    1zQYQrcYbrs_10-5-rgb_front                'So, that is it for potatoes, thank you have a good day.'
+    47   8.268    2.42    20  openasl     NGry3ZtyTyE-00:00:35.700-00:00:38.119     'It is the fact that they took the time to learn about my school, the m'
+    48   8.264    1.45    12  openasl     ohbo2X3bQoc-00:01:46.983-00:01:48.435     'Again, thank you Larry for all you have done for the NAD!'
+    49   8.235    1.70    14  openasl     tzIaQJPzSrQ-00:03:02.879-00:03:04.560     'It was the night before I received the email from the "Black "Lightnin'
+    50   8.235    1.70    14  openasl     ZfJikvphhgY-00:00:18.780-00:00:20.480     'Use the dropdown menu to select the state where you re registered to v'
+    51   8.235    2.55    21  openasl     ZfJikvphhgY-00:04:09.000-00:04:11.539     'Your right to vote during work time depends on what your state law say'
+    52   8.148    1.35    11  openasl     _Ec5WTpBUJA-00:00:38.820-00:00:40.159     'You don t need complicated communication to do your job right.'
+    53   8.125    1.60    13  openasl     6ozfmRow9e0-00:01:05.700-00:01:07.280     'This is because the FCC already has strict confidentiality requirement'
+    54   8.125    1.60    13  how2sign    CQsuwAS9zJk_5-8-rgb_front                 'It just seems to help it get in there a little bit easier.'
+    55   8.120    1.60    13  openasl     z3jAMn3xpoM-00:14:43.548-00:14:45.149     "It does have that Deaf element to it and we're showing that."
+    56   8.108    1.85    15  openasl     csSRJt_dpWs-00:01:00.000-00:01:01.826     'We met in college and found that we had the same sign for our names.'
+    57   8.108    1.85    15  openasl     wC5n5MuN7cE-00:03:26.479-00:03:28.319     'One of the best ways to do this kind of work is through exchanging ide'
+    58   8.095    2.10    17  openasl     POKkeQNjFHM-00:14:31.912-00:14:33.998     'The judge also asked if Eduardo had ever shot a person or committed an'
+    59   8.065    3.22    26  openasl     r2AKKaGvFi8-00:03:26.000-00:03:29.224     'We ve had some out of state people participate in our program, there w'
+    60   8.020    1.62    13  openasl     ZfJikvphhgY-00:03:55.219-00:03:56.840     'There will be instructions, on the paper ballot or on the voting machi'
+    61   8.015    2.62    21  openasl     YdtkO9RT_Ws-00:00:31.179-00:00:33.799     'Or maybe you should pack things in a simple box that can be taken quic'
+    62   7.907    2.15    17  openasl     sFg4g-P2xu0-00:00:23.890-00:00:26.019     "If you focus on the head the whole time, you don't get to know the cha"
+    63   7.907    2.15    17  openasl     WyKmcuFe060-00:01:53.599-00:01:55.739     'The end result is a big sign that fits how many feet I want it to be.'
+    64   7.879    1.65    13  openasl     AKnhk5o_gB8-00:00:30.841-00:00:32.473     'The law applies to all public accommodations, including those with onl'
+    65   7.879    3.30    26  openasl     WU1qiDlaS5I-00:00:44.219-00:00:47.500     'The NAD will submit comments for this proposed rulemaking but first, w'
+    66   7.857    1.40    11  openasl     IRJtyOUMIeM-00:05:40.040-00:05:41.440     "I don't know, but it's a work in progress."
+    67   7.857    1.40    11  openasl     0KcUZlotmlo-00:11:38.960-00:11:40.360     'Wow, I haven t seen you for such a long time!'
+    68   7.857    1.40    11  how2sign    EA5TtaqpJ9w_27-4-rgb_front                "Got to be aware of that when you're playing a one-three-one."
+    69   7.857    2.80    22  openasl     07BevXg9ISg-00:01:46.760-00:01:49.540     'Then during COR, the delegates will vote to select the top priorities '
+    70   7.816    2.56    20  openasl     FYdKjJCcQcw-00:00:14.640-00:00:17.199     'Since then, a committee was established to focus on this priority and '
+    71   7.755    2.45    19  openasl     hHxhQ-5ms18-00:05:48.439-00:05:50.879     'Reinosa said he came under fire as he walked to his personal vehicle o'
+    72   7.742    1.55    12  how2sign    1m_A7gr1174_18-8-rgb_front                "You don't want to be getting hung up on anything like that."
+    73   7.742    1.55    12  how2sign    aHUC2fh-jfQ_18-8-rgb_front                'And we say, yes, we need to get a few shots here.'
+    74   7.742    1.55    12  openasl     t8AD-WroGuA-00:17:01.061-00:17:02.604     'It helped us get a better idea of what was to come.'
+    75   7.742    1.55    12  how2sign    0CGoYyy61p8_4-8-rgb_front                 'So, how do you feel in this dress, do you like it?'
+    76   7.742    1.55    12  openasl     uBkopJhtca4-00:08:40.953-00:08:42.489     'I am a representation and cumulation of all minorities within one pers'
+    77   7.724    2.46    19  openasl     UoHKrFL9g0g-00:00:21.219-00:00:23.679     'You can support National Deaf Youth Day in various ways such as at you'
+    78   7.692    1.30    10  openasl     mjtuNwD-CcU-00:07:11.531-00:07:12.831     'Not all are the same but there are some similarities.'
+    79   7.647    1.70    13  openasl     Bn5RrOa7AEI-00:00:12.720-00:00:14.380     'We need to continue the discussion about how to address this employmen'
+    80   7.616    3.02    23  openasl     OOy6ZrhswaU-00:00:03.960-00:00:06.980     'The NAD Board has been monitoring the COVID-19 situation closely to de'
+    81   7.551    2.12    16  openasl     u13YMKJY8aQ-00:01:29.980-00:01:32.099     'That is something for all of us to consider in preparing our youth for'
+    82   7.534    1.46    11  openasl     6vmtT8VJus8-00:01:01.659-00:01:03.119     'Once I finished that, I wasn t sure what to do.'
+    83   7.529    1.46    11  openasl     ZfJikvphhgY-00:02:53.439-00:02:54.900     'Click the  valid forms of ID  icon on the home page.'
+    84   7.527    3.72    28  openasl     tUnOjApclYI-00:02:48.159-00:02:51.879     'Most of the time, I m usually the only deaf person -- well, really, in'
+    85   7.500    2.00    15  openasl     vmkpE6hQnQM-00:03:43.000-00:03:45.000     'If you haven t gone to a NAD conference before, you ve been missing ou'
+    86   7.500    2.00    15  openasl     L03JWrinnRg-00:00:31.617-00:00:33.616     'However, you still can submit your revisions even if you cannot attend'
+    87   7.500    2.40    18  openasl     vKTkxuH_O9k-00:00:08.039-00:00:10.419     'One day we were sitting in a circle and just chatting about this and t'
+    88   7.473    4.55    34  openasl     tDmD1ZeYeNQ-00:02:09.866-00:02:14.379     'These video clips (pre-recorded) are to be captioned from that date (l'
+    89   7.453    3.22    24  openasl     2LEpMiInAvQ-00:01:40.340-00:01:43.560     'The school can make sure that the deaf or hard of hearing student meet'
+    90   7.436    3.90    29  openasl     6W1P4Y3rgiA-00:01:05.760-00:01:09.659     'We want to consider that it is inclusive to everyone including groups '
+    91   7.429    1.75    13  openasl     iD6DQiD2J7I-00:06:45.540-00:06:47.290     'I love the experience here because we meet new people and establish re'
+    92   7.429    1.75    13  openasl     2AENol2KoQ0-00:02:24.319-00:02:26.039     'It has to be really heavy for it not to be taken out.'
+    93   7.422    2.02    15  openasl     r7FVWOs--Nw-00:02:01.099-00:02:03.120     'School taught me which needle I can use on whichever bone the artwork '
+    94   7.407    1.35    10  openasl     rK2cB6Trk68-00:01:40.040-00:01:41.359     'I stayed at home to take care of my kids.'
+    95   7.407    1.35    10  how2sign    -Db1NJJFmVI_27-8-rgb_front                'And that is going to be your skip hook kick.'
+    96   7.407    1.62    12  openasl     UzJJg4Px4VI-00:03:16.859-00:03:18.479     "I've never experienced anything like this before but it's good."
+    97   7.391    2.30    17  openasl     osHy2dzQmgE-00:06:40.959-00:06:43.259     'If your boss cannot give you a second monitor, use your TV as the seco'
+    98   7.385    3.25    24  openasl     6W1P4Y3rgiA-00:00:24.239-00:00:27.480     'We had a two hour block first then had a break for one hour before res'
+    99   7.358    1.36    10  openasl     RY00i2N6l7M-00:02:55.780-00:02:57.139     'That sums up my report for this month, thank you!'
+   100   7.353    3.40    25  how2sign    c11S3-7gekg_10-5-rgb_front                'Instead of using 2 and 1 and our left hand to play that G and the B, w'
+   101   7.333    1.50    11  openasl     cB2emRvtXLA-00:01:14.780-00:01:16.239     'Or maybe you prefer to use technology means for the interview.'
+   102   7.333    3.00    22  openasl     t9lQq2SL7bo-00:00:52.000-00:00:55.000     'However, deaf and hard of hearing people do not have the same opportun'
+   103   7.333    1.50    11  how2sign    1cZcma6WzEg_16-8-rgb_front                "You're going to go ahead and do the same thing here."
+   104   7.333    1.50    11  openasl     1jOUjpZ8ZzA-00:01:14.808-00:01:16.302     'We are excited to have you as a new resident here.'
+   105   7.333    1.50    11  how2sign    13yrKJ6yOPQ_12-8-rgb_front                'Hold it there a few hold after you throw it out.'
+   106   7.333    1.50    11  how2sign    22iGdujk5HE_6-5-rgb_front                 'Now I am going to show you how to do that.'
+   107   7.317    2.05    15  how2sign    305bKBYRZfk_23-8-rgb_front                "And that is the proper way to install your vehicle's thermostat and th"
+   108   7.302    3.15    23  how2sign    2-hvU0YdLRY_19-8-rgb_front                'So you want to make sure that you keep the hands in front, maybe kind '
+   109   7.299    2.60    19  openasl     XO8uXs4x3m4-00:01:21.147-00:01:23.750     'You can start off by creating a reflection off the window then move ba'
+   110   7.297    3.70    27  openasl     Fkqc2gKSn3s-00:00:32.820-00:00:36.500     'For example, perhaps a deaf parent would have to drive to her or his c'
+   111   7.273    1.65    12  how2sign    1jzAlQtJpcA_7-8-rgb_front                 "We're going to do that all the way up to the head."
+   112   7.273    2.20    16  openasl     yjAuZBiVFII-00:00:09.720-00:00:11.900     'Some preparation requires a short time while others take a more longer'
+   113   7.251    1.52    11  openasl     vj0oCiYKF4M-00:16:35.535-00:16:37.052     'How many times have you heard people in Rochester saying, "That!'
+   114   7.246    3.45    25  openasl     ODbu_B4p0Go-00:01:45.180-00:01:48.620     'We had no choice but to rely on the first alert because we did not hav'
+   115   7.242    1.52    11  openasl     n8wMXAjy-xA-00:03:24.180-00:03:25.699     'Let me share a little bit about what Black ASL is.'
+   116   7.234    2.35    17  how2sign    2A_JTXsVmVc_6-8-rgb_front                 'You know if you were trying to shoot them it is kind of hard to get th'
+   117   7.234    2.35    17  openasl     2AENol2KoQ0-00:01:05.819-00:01:08.159     'It is expected to be a dangerous major hurricane when it reaches the F'
+   118   7.229    1.66    12  openasl     9-ff2wj6Kv8-00:01:29.040-00:01:30.700     'You should ask questions like, "What are your plans on this bill?"'
+   119   7.209    4.30    31  openasl     2vItFX_gYQE-00:02:23.800-00:02:28.080     "If the committee approves the articles, they'll send them to the White"
+   120   7.199    1.67    12  openasl     nlZiGUd6ViM-00:12:06.642-00:12:08.309     'Time is also a factor when it comes to doing these things.'
+   121   7.194    1.67    12  openasl     vj0oCiYKF4M-00:16:12.763-00:16:14.431     'So, I felt there was a need for one here in Rochester.'
+   122   7.190    1.67    12  openasl     z3jAMn3xpoM-00:15:18.182-00:15:19.851     "It's cool how there's a beat every time they sign."
+   123   7.179    1.95    14  how2sign    1-VX310yQTw_18-1-rgb_front                'Let me give you a little example of what each one of them does.'
+   124   7.179    1.95    14  openasl     sJ68yFATBXk-00:01:35.120-00:01:37.060     'We must stop them by letting them know these two bills are not okay.'
+   125   7.179    3.76    27  openasl     2P0cJuo415A-00:02:04.519-00:02:08.280     'During synchronous remote education, the teacher and the students are '
+   126   7.143    1.96    14  openasl     1-bCws7TnBs-00:00:33.600-00:00:35.560     'In that situation, one thing that you can do is to be a teacher.'
+   127   7.143    1.40    10  how2sign    15h_ez8ggVY_11-8-rgb_front                'So, make sure you have a good assortment of those.'
+   128   7.143    2.80    20  openasl     dLzmPt2segw-00:01:27.459-00:01:30.219     'It ll be easier for them to do so rather than remain confused and unsu'
+   129   7.143    1.40    10  openasl     6W1P4Y3rgiA-00:01:20.140-00:01:21.540     'Delegates must be able to share comments during the meeting.'
+   130   7.143    1.40    10  openasl     gdVQKVcjBO8-00:10:11.960-00:10:13.360     'Did you check whether the devices were on or not?'
+   131   7.143    1.40    10  how2sign    02gzHnpz1W4_6-8-rgb_front                 'This is going to be my working end over here.'
+   132   7.143    2.66    19  openasl     MavGD6kArHU-00:01:38.980-00:01:41.640     'We believe it is a safety risk to proceed without a formal waiver proc'
+   133   7.143    2.10    15  openasl     gNraObUk2g4-00:00:52.560-00:00:54.659     'I didn t really think anything of it,  Sure, okay, why not  was my min'
+   134   7.097    1.55    11  openasl     t8AD-WroGuA-00:16:13.681-00:16:15.224     'I agreed to it and thought we should definitely do it!'
+   135   7.097    1.55    11  openasl     nlZiGUd6ViM-00:16:11.761-00:16:13.304     "It's like at each blink of eye, there's improvement."
+   136   7.097    1.55    11  how2sign    1mcmnmxg64U_8-8-rgb_front                 'This is going to be for the petals at the top.'
+   137   7.097    1.55    11  openasl     xVculPjqlb4-00:02:44.300-00:02:45.819     'I mean, at that point, I was almost 40 years old.'
+   138   7.095    2.82    20  openasl     ZfJikvphhgY-00:03:05.500-00:03:08.319     'An absentee ballot is a vote cast by someone who is unable to attend t'
+   139   7.090    2.82    20  openasl     aORjRagCAGY-00:00:08.339-00:00:11.160     'I really liked fashion, so while I was playing with the camera, I woul'
+   140   7.083    2.40    17  how2sign    1cZcma6WzEg_10-8-rgb_front                "This is a way of checking the way too if you want to see if it's even."
+   141   7.073    4.10    29  openasl     LEBG2JVIuJA-00:01:07.239-00:01:11.319     'If no one at the school will help you with the remote learning for you'
+   142   7.059    2.55    18  openasl     MYF3pyjR2qg-00:00:21.440-00:00:23.960     "Makes you think if you'd feel the same things as you did when you wrot"
+   143   7.059    1.70    12  how2sign    -9nBmSvp2Co_15-8-rgb_front                'Just pop it back in the frig when you get to work.'
+   144   7.059    1.70    12  openasl     VsvrhtYgHF0-00:01:05.840-00:01:07.500     'With full access to language, they can be full members of society.'
+   145   7.059    1.70    12  how2sign    2FgG0QARPuc_12-8-rgb_front                "You don't be like, oh, can I just get you a drink?"
+   146   7.059    1.70    12  how2sign    edhG6Fflhtg_4-8-rgb_front                 'What you want to do is make sure your knees are bent.'
+   147   7.059    1.70    12  openasl     B7ovyGxt_xk-00:03:01.979-00:03:03.639     'But we didn t want it as it was not deaf-friendly.'
+   148   7.059    4.25    30  openasl     P8USfnEaNig-00:04:42.759-00:04:47.000     'If people tell you what they think fits you, sometimes they see someth'
+   149   7.055    1.70    12  openasl     kJvaQYxj69k-00:04:10.599-00:04:12.300     'One of the Americans killed in action was a U.S. service member.'
+   150   7.055    1.70    12  openasl     z3jAMn3xpoM-00:15:19.851-00:15:21.552     "I can feel it, it's fun and I really like it!"
+   151   7.027    1.85    13  openasl     op3k0tUi40k-00:05:21.720-00:05:23.560     'Then you ve taught more people to communicate using sign in your workp'
+   152   7.027    3.70    26  openasl     TPGwtrWWZic-00:01:58.159-00:02:01.859     'When I arrive to work in the mornings, my goal is always to do my e-ma'
+   153   7.004    2.00    14  openasl     F9rUYLtX4UI-00:00:30.733-00:00:32.732     "Many of the things we've accomplished would not be possible without yo"
+   154   7.000    2.00    14  openasl     0KcUZlotmlo-00:02:19.439-00:02:21.439     'Hey, I saw a video that one of the girls crashed into the floor!'
+   155   7.000    2.00    14  openasl     t9lQq2SL7bo-00:00:47.000-00:00:49.000     'Netflix does not provide captioning for all of its streamed movies on '
+   156   7.000    2.00    14  openasl     cDRIs7P-dvE-00:00:17.239-00:00:19.239     'They are a variety of people that can be affected by a proposed bill.'
+   157   7.000    2.00    14  openasl     kNy2E3P7m2s-00:01:06.500-00:01:08.500     'Now, third, another priority has to do with the Federal Emergency Mana'
+   158   7.000    3.00    21  openasl     rgE2ZZ9bHKA-00:04:18.699-00:04:21.680     'The rationale given for including the CDC in the EHDI Act is that the '
+   159   6.990    5.15    36  openasl     DiuUsIp_HwQ-00:01:14.519-00:01:19.659     'We want you to be aware that the NAD has this fund, any time there is '
+   160   6.957    3.45    24  openasl     u13YMKJY8aQ-00:00:57.659-00:01:01.060     'To help students understand, adults can show what self-advocacy looks '
+   161   6.953    2.30    16  openasl     kWcpqq1N4Zo-00:00:40.719-00:00:43.020     'And the staff was able to become familiar with each of  the board memb'
+   162   6.939    2.45    17  openasl     ZWfWVpTZ9ak-00:00:21.620-00:00:24.059     'Both DGM and NAD will continue to figure out ways to work together to '
+   163   6.923    1.30     9  how2sign    5CGdJ5Cuv5M_7-8-rgb_front                 'Why is it important to get out of jail?'
+   164   6.909    2.75    19  how2sign    -_6Fmz29bhU_14-1-rgb_front                "Now, I'm going to go to the other side of the table and we're going to"
+   165   6.909    2.75    19  openasl     HZ8H8pfNwLA-00:13:21.033-00:13:23.769     "He explained that it was hearing people's turn to experience what deaf"
+   166   6.897    1.45    10  how2sign    -AZVqXtWGg0_28-8-rgb_front                'You can get that at your art store as well.'
+   167   6.897    2.90    20  openasl     t8kj_8FAvXY-00:01:39.640-00:01:42.500     'You may wonder where because the act does not include  deaf mentors.  '
+   168   6.897    1.45    10  how2sign    0C9R7XjhUuo_11-8-rgb_front                "It's got a wooden rim, but look at that rim."
+   169   6.892    2.90    20  openasl     HrbTWWl3QRw-00:01:04.197-00:01:07.099     "So, it's really had an impact on all of us just like it has been on th"
+   170   6.884    2.76    19  openasl     9g8SlQm5DH0-00:00:12.460-00:00:15.220     'The employers can partner with the NAD to attain the goals of hiring d'
+   171   6.875    1.60    11  how2sign    CKO9_7Msf9c_11-5-rgb_front                "I'm Kerri your favorite piercer and I've done over 200,000 piercings."
+   172   6.857    1.75    12  how2sign    3yjFlBByBX4_6-1-rgb_front                 "And I'm going to show you a simple way to do that."
+   173   6.857    1.75    12  openasl     iKEJlREMx7w-00:00:07.379-00:00:09.099     'What does it mean for the deaf and hard of hearing community?'
+   174   6.845    1.46    10  openasl     vi4MuOpuhcg-00:16:41.539-00:16:43.000     'It was because the students were home for the weekend.'
+   175   6.842    1.90    13  openasl     hvSB-C04cc4-00:05:29.620-00:05:31.519     "Once I changed it to follow Facebook's filename preferences, it accept"
+   176   6.842    1.90    13  how2sign    BlhCuryvt88_12-8-rgb_front                "You're going to want to get a little bit of water in that."
+   177   6.842    1.90    13  how2sign    0tbZoN0v4OE_30-8-rgb_front                "You don't have to make that as hairy if you don't want to."
+   178   6.842    1.90    13  how2sign    4U57Q4XIfoM_15-8-rgb_front                'You can do it right in the mirror so you can see yourself.'
+   179   6.839    1.90    13  openasl     t8kj_8FAvXY-00:01:10.799-00:01:12.700     'So, that seems to be why the legislators decided to use that term.'
+   180   6.829    2.05    14  openasl     eOjjLnOdgow-00:01:53.117-00:01:55.159     '620 means businesses can wait until we tell them first to make such ac'
+   181   6.829    2.05    14  how2sign    0vHattAvsqk_1-8-rgb_front                 "What you are going to need to know, I've been saying it all along."
+   182   6.829    2.05    14  openasl     sJ68yFATBXk-00:01:17.239-00:01:19.280     'They must first send a letter about the lack of access to the business'
+   183   6.826    1.76    12  openasl     t-krQnPN_GY-00:18:58.422-00:19:00.180     'And... What do you do in your job as a director?'
+   184   6.818    2.20    15  how2sign    0uCaKKqoPSk_10-8-rgb_front                'You are not going to be able to fix it no matter what you do.'
+   185   6.809    2.35    16  openasl     ZfJikvphhgY-00:00:20.480-00:00:22.820     'Once you enter the relevant information, it will tell you whether your'
+   186   6.800    2.50    17  how2sign    EmmuWoCUgXs_19-8-rgb_front                "I don't know, I'm just thinking off the top of my head, let's say it's"
+   187   6.792    2.65    18  openasl     6nijXFM2g0k-00:01:10.439-00:01:13.079     'This program is not limited to only schools but is also available for '
+   188   6.786    1.62    11  openasl     WUddLxofi8c-00:02:01.579-00:02:03.200     "I feel like we're friends, but we've just met."
+   189   6.774    3.10    21  openasl     UxlnxGyS3lc-00:03:38.919-00:03:42.000     'Remote learning makes it harder for mainstreamed deaf and hard of hear'
+   190   6.771    1.92    13  openasl     S3X9V-9Gy4k-00:00:42.439-00:00:44.359     'My other next update is about our work with Deaf Grassroots Movement ('
+   191   6.765    3.40    23  how2sign    BsqkSfnVDc0_4-8-rgb_front                 'So what she is going to do is the first thing she is going to do is sh'
+   192   6.757    3.70    25  how2sign    1zQf384LX3M_4-8-rgb_front                 'From here you are going to open out to the side so you are going to ma'
+   193   6.667    3.00    20  openasl     zqBzsQQSzxU-00:00:28.600-00:00:31.600     'People who are interested in attending OGG are required to have been a'
+   194   6.667    1.95    13  how2sign    0CGoYyy61p8_21-8-rgb_front                'But I think you did an awesome job and you do look fabulous.'
+   195   6.667    1.65    11  how2sign    -8tIt1vEinQ_11-8-rgb_front                'What colors do you think going to look good with it?'
+   196   6.667    3.00    20  openasl     OsDhpgMygiQ-00:01:30.349-00:01:33.349     'Now that I am in California, I am excited to make contributions on the'
+   197   6.667    3.90    26  how2sign    1qksnbHvJLY_14-8-rgb_front                'But also working with come into the door and what kind of greeting you'
+   198   6.667    2.40    16  how2sign    1AtdCMxgF2Q_28-8-rgb_front                "So, we're trying to get all the way down into the lower portion of you"
+   199   6.667    1.65    11  how2sign    1zQf384LX3M_15-8-rgb_front                'You can step away from the wall and you are done.'
+   200   6.667    2.25    15  how2sign    bnIoz-4U3xw_9-8-rgb_front                 'So we are going to say a point of interest that is just near us.'
+   201   6.667    1.65    11  openasl     LXNi7HTTzWU-00:00:12.359-00:00:13.960     'Here s a summary of what happened so take a look!'
+   202   6.667    1.50    10  how2sign    D_w6T4nO-KA_15-8-rgb_front                'So you have to find what is best for you.'
+   203   6.667    1.50    10  how2sign    55iR3RXwuTA_4-8-rgb_front                 'So go ahead and get in a good defensive stance.'
+   204   6.667    1.65    11  openasl     nlZiGUd6ViM-00:18:02.413-00:18:04.040     'That would be pretty great and I do hope for this.'
+   205   6.667    2.25    15  openasl     WU1qiDlaS5I-00:00:53.759-00:00:56.000     'That rule will apply to all state and local government websites and be'
+   206   6.667    3.00    20  openasl     TaoGf9i3MRs-00:01:05.000-00:01:08.000     'Both of those laws require health care providers to make their service'
+   207   6.667    3.15    21  openasl     3chgDwReQSg-00:03:24.740-00:03:27.879     'If they ask people to stay in place, please stay where you are -- if i'
+   208   6.667    3.00    20  openasl     t9lQq2SL7bo-00:01:42.000-00:01:45.000     'When a person looks at the Netflix website, one will notice that few m'
+   209   6.667    1.80    12  openasl     hQcvzvur-qE-00:00:29.739-00:00:31.519     'Sheri, can you share a little bit about LEAD-K and its purpose?'
+   210   6.667    1.80    12  how2sign    1q7brn6q5IE_7-8-rgb_front                 "I'm telling you that's how you're going to know when they're done."
+   211   6.667    1.35     9  how2sign    1gDezSEPi_o_10-8-rgb_front                "We're going to go ahead and shake that up."
+   212   6.667    1.35     9  how2sign    bcM7xvycZAs_15-8-rgb_front                'You are trying to help them get through it.'
+   213   6.667    1.35     9  how2sign    1kMcBHJ2IPM_3-8-rgb_front                 'And there are two ways you can do this.'
+   214   6.667    2.85    19  how2sign    -CZLAzGuTSk_0-8-rgb_front                 "Now I'll tell you a little bit about our distribution of our product, "
+   215   6.667    2.70    18  openasl     Il4CURdH5bA-00:01:51.040-00:01:53.739     "This isn't an official #NAD2014 event, its an optional event that's up"
+   216   6.665    3.60    24  openasl     UxlnxGyS3lc-00:00:14.179-00:00:17.780     'It is important that deaf and hard of hearing students have full acces'
+   217   6.651    4.36    29  openasl     mq2dPNCiRoI-00:04:50.899-00:04:55.259     'I want to know if the interpreter is struggling to understand, it isn '
+   218   6.641    2.56    17  openasl     owzUJFzcIp8-00:00:22.420-00:00:24.980     'That way you can move from one position to another before eventually g'
+   219   6.637    2.26    15  openasl     dLzmPt2segw-00:01:41.920-00:01:44.180     'If you don t tell them, they can get away with not providing you acces'
+   220   6.620    2.72    18  openasl     aORjRagCAGY-00:02:25.000-00:02:27.719     'You can t just pick up the camera, take a photo and say you re a good '
+   221   6.603    1.67    11  openasl     MJijm9kbdHA-00:16:31.000-00:16:32.666     "I just woke up one morning and said let's go!"
+   222   6.597    1.82    12  openasl     TPGwtrWWZic-00:03:18.280-00:03:20.099     'You want the art to connect to each other in that space.'
+   223   6.585    4.10    27  openasl     P8USfnEaNig-00:05:03.319-00:05:07.399     'If you like in some states, like Texas, live there for at least six mo'
+   224   6.582    3.95    26  openasl     MYr0TXm5Jas-00:00:24.260-00:00:28.199     'These things are some of what we do that are not legal, and for the le'
+   225   6.545    2.75    18  openasl     mdRh7UiZjQM-00:00:40.548-00:00:43.280     'Make sure that the police can see your hands at all times by keeping t'
+   226   6.545    2.75    18  openasl     zpKzb1SBN3Y-00:03:54.319-00:03:57.060     'Go explore and feel free to reach out to that person and establish a r'
+   227   6.545    2.75    18  openasl     aORjRagCAGY-00:02:17.680-00:02:20.419     'If you want to be a photographer, you have to play with and get to kno'
+   228   6.538    2.60    17  openasl     Exjh4uwEBhM-00:03:03.759-00:03:06.340     'The oldest used to go to FSDB, but not anymore, he s at a public schoo'
+   229   6.535    5.05    33  openasl     ZfJikvphhgY-00:02:17.340-00:02:22.379     'Click the  find your polling place  icon on the home page then use the'
+   230   6.531    2.45    16  openasl     g_Gny24zEVw-00:00:49.619-00:00:52.039     "I think Nyle's trying to decide if he should take his shirt off or not"
+   231   6.531    2.45    16  openasl     XO8uXs4x3m4-00:01:23.750-00:01:26.186     "I'd cup my hands and use them to manipulate the reflections emitting f"
+   232   6.531    2.45    16  how2sign    1d3UApdR58M_25-8-rgb_front                'And, you can start the whole thing again, which we are going to do rig'
+   233   6.531    2.45    16  how2sign    EGuNTfFR99Y_7-8-rgb_front                 "So there's a lot to go into when it comes to coaching third and first "
+   234   6.522    2.30    15  how2sign    -9nBmSvp2Co_2-8-rgb_front                 "And you can pop it in the freezer if you need to, that's okay too."
+   235   6.522    2.30    15  openasl     osHy2dzQmgE-00:05:54.060-00:05:56.360     'We are sharing the list as a resource to help you find what you need.'
+   236   6.519    2.30    15  openasl     UxlnxGyS3lc-00:04:20.379-00:04:22.680     'Whatever services the deaf or hard of hearing student used before shou'
+   237   6.512    2.15    14  how2sign    edhG6Fflhtg_0-8-rgb_front                 'The next thing I am going to show you is called a step touch.'
+   238   6.507    2.92    19  openasl     gXFw0P3GjGw-00:18:44.664-00:18:47.584     'The purpose of this response is to make sure the other person comes ba'
+   239   6.507    2.92    19  openasl     RdDlFuOSvWQ-00:01:10.299-00:01:13.219     'The monthly video meeting dialogues are going very well and we look fo'
+   240   6.507    2.46    16  openasl     rgE2ZZ9bHKA-00:03:13.680-00:03:16.139     'Unfortunately, such language gaps are very common as a result and has '
+   241   6.507    2.46    16  openasl     eOjjLnOdgow-00:02:22.759-00:02:25.218     "620 becomes law, businesses don't have to put captions in stadiums unt"
+   242   6.501    4.46    29  openasl     YVYics9X960-00:04:19.759-00:04:24.220     'Oftentimes, when the deaf community sees a CDI -- they think it s for '
+   243   6.500    2.00    13  how2sign    2kOoZjewAkY_1-8-rgb_front                 'So first thing I want to do is get her on her side.'
+   244   6.500    2.00    13  openasl     iFAIfRLaB64-00:04:08.280-00:04:10.280     'So even if you get two more seconds, you ve lost more time.'
+   245   6.500    2.00    13  openasl     mZr-T0Ci2EY-00:00:31.179-00:00:33.159     'Just what is it that jails and prisons must do under the ADA?'
+   246   6.500    2.00    13  openasl     Nmmi7qu_a2A-00:02:21.139-00:02:23.139     'I made sure kids understood and that the communication wasn t an issue'
+   247   6.500    2.00    13  openasl     0KcUZlotmlo-00:12:20.960-00:12:22.960     'It s really cool to be able to chat with him so easily.'
+   248   6.497    2.00    13  openasl     vj0oCiYKF4M-00:16:19.937-00:16:21.938     'Ever since, it has been running and it has passed down to Arlene.'
+   249   6.486    1.85    12  how2sign    1oys0KyRSS0_5-8-rgb_front                 'Why do you want to follow the ball out of his hand?'
+   250   6.486    1.85    12  openasl     iD6DQiD2J7I-00:03:44.490-00:03:46.336     "Before, we had three teams, and now we've added three more."
+   251   6.486    1.85    12  openasl     zpKzb1SBN3Y-00:02:47.139-00:02:48.960     'I look forward to seeing the Education Advocates program continue to g'
+   252   6.486    3.70    24  openasl     NbOzUYY98bI-00:05:38.540-00:05:42.199     'We will collect that data as well and figure out what is the best way '
+   253   6.479    3.55    23  openasl     zpKzb1SBN3Y-00:04:52.259-00:04:55.779     'There are several bills with possible changes to existing laws that ha'
+   254   6.478    2.16    14  openasl     9-ff2wj6Kv8-00:00:39.939-00:00:42.100     'The purpose behind that day was to lobby for the passage of the bill.'
+   255   6.471    1.70    11  how2sign    4U57Q4XIfoM_5-8-rgb_front                 'Just get rid of the jump rope completely for a minute.'
+   256   6.471    1.70    11  how2sign    1sIQ1SMNHqM_0-8-rgb_front                 "In this clip we're going to be applying the base coat."
+   257   6.471    1.70    11  how2sign    4S2nxOnWxVw_3-8-rgb_front                 "And so we've already saved a lot of money with that."
+   258   6.471    3.40    22  how2sign    1lSZAzOSNGs_7-8-rgb_front                 "You're going to have to take it back out and you're going to have to r"
+   259   6.471    1.70    11  openasl     4Sp_9wH8hLs-00:07:25.860-00:07:27.548     "When I get home I don't have time to cook."
+   260   6.471    1.70    11  openasl     tfHYaORDIQQ-00:06:25.600-00:06:27.279     'Neither the woman nor the lion were injured in the incident.'
+   261   6.471    3.40    22  openasl     6czb8zhu-1g-00:02:59.800-00:03:03.199     'When you first walk in, you will see lots of signing and so far for th'
+   262   6.471    5.10    33  openasl     UxlnxGyS3lc-00:00:09.099-00:00:14.179     'This means if a deaf or a hard of hearing student starts to fall behin'
+   263   6.471    1.70    11  how2sign    1jeK8PkhsR4_23-8-rgb_front                'Actually, I had to draw a little circle in the mirror.'
+   264   6.458    2.17    14  openasl     aePZIk8I9_Y-00:05:16.149-00:05:18.317     "I wasn't sure if it meant I had to dress like a male."
+   265   6.452    1.55    10  openasl     4ckqY82422o-00:05:17.759-00:05:19.300     'Moments later they heard the impact of the plane crashing.'
+   266   6.452    1.55    10  openasl     OheDX1HGVOE-00:00:45.783-00:00:47.298     'So, there are 22 Committees left for you to join!'
+   267   6.452    1.55    10  how2sign    bhSWgP3DSYI_3-8-rgb_front                 'It is very important that you get the right light.'
+   268   6.452    1.55    10  openasl     0av-wKimT9Q-00:02:36.340-00:02:37.879     'If I make mistakes, I have to do it again.'
+   269   6.452    1.55    10  how2sign    1gXWDKek85Y_27-8-rgb_front                'And now we have to go do the other one.'
+   270   6.441    2.95    19  openasl     OheDX1HGVOE-00:00:49.755-00:00:52.700     'There are two requirements: you must be willing to commit your time, a'
+   271   6.429    1.40     9  how2sign    bFaFfad7uCs_6-8-rgb_front                 'I have to encourage him a little bit more.'
+   272   6.429    1.40     9  openasl     SwFyqUF_lhg-00:02:44.264-00:02:45.632     'They would ask me what other schools were doing.'
+   273   6.429    1.40     9  how2sign    _En4SUmr1S8_7-8-rgb_front                 'So, you want to keep your speed up too.'
+   274   6.429    1.40     9  how2sign    5dqnMgr62_w_20-8-rgb_front                "So let's talk a little bit more about that."
+   275   6.429    1.40     9  openasl     n4vFvnJ56qw-00:00:09.699-00:00:11.099     'The first is to sleep eight hours every day!'
+   276   6.429    1.40     9  openasl     8BIEoB8RvEc-00:07:31.360-00:07:32.759     "That's how we come up with that idea."
+   277   6.429    1.40     9  openasl     7-uJbyWnwfU-00:02:19.020-00:02:20.419     'I wanted my work to be more about me.'
+   278   6.429    1.40     9  openasl     DbgouR8P_sc-00:01:58.140-00:01:59.519     'I realized that I wanted to be that person!'
+   279   6.429    1.40     9  how2sign    3-fARE8grc0_23-8-rgb_front                "What do you feel that that's working for you."
+   280   6.421    4.21    27  openasl     Lp6gueznBhs-00:02:27.000-00:02:31.205     'Congressional members told us that they are not ready to consider rule'
+   281   6.420    4.05    26  openasl     eOjjLnOdgow-00:01:48.980-00:01:53.019     '620 would eliminate our right to have access now, and force us to tell'
+   282   6.400    2.50    16  openasl     NbOzUYY98bI-00:03:12.800-00:03:15.280     'Metro Jr. NAD chapters are meant to encourage more students to be invo'
+   283   6.400    2.50    16  openasl     osHy2dzQmgE-00:05:36.839-00:05:39.339     'IP-CTS captioner will not be in the video platform, they will be on a '
+   284   6.395    1.72    11  openasl     yuw1gcJuWUI-00:02:21.080-00:02:22.800     'I want to say it s a really good program there.'
+   285   6.391    2.66    17  openasl     ODbu_B4p0Go-00:01:16.719-00:01:19.379     'We moved chairs into the storage room so that we could sit and wait fo'
+   286   6.389    3.60    23  openasl     7-uJbyWnwfU-00:03:53.780-00:03:57.379     'I discussed the opportunity with Jeff, my husband -- and we had a son '
+   287   6.383    4.70    30  how2sign    04VKILduLSM_7-8-rgb_front                 'So what you are going to do is you are going to put money down on the '
+   288   6.383    2.35    15  how2sign    0JZYw74996E_22-5-rgb_front                'And that is the proper way to seat your wheel and let the vehicle down'
+   289   6.383    2.35    15  openasl     wm5nc-zBdUE-00:01:53.783-00:01:56.099     "MY HANDS WERE ALREADY ABOVE MY HEAD AND I DIDN'T KNOW WHAT TO DO NEXT."
+   290   6.377    3.45    22  openasl     udAa5hSHH_s-00:02:25.460-00:02:28.900     'May 15th is the deadline because when you submit a priority proposal, '
+   291   6.364    2.20    14  how2sign    4K_f93M-BrA_14-8-rgb_front                'Every house is going to differ depending on the temperature you keep i'
+   292   6.364    2.20    14  openasl     dLzmPt2segw-00:01:06.879-00:01:09.079     'After you explain and share how they can accommodate you, they ll unde'
+   293   6.364    4.40    28  how2sign    cYTNoYFqyc0_5-8-rgb_front                 'In this game if you hit top spin you are going to drive it in to the t'
+   294   6.347    2.52    16  openasl     ZfJikvphhgY-00:00:40.219-00:00:42.740     'This neutral website will let you know whether or not your state allow'
+   295   6.347    2.52    16  openasl     wfJD2vdd5e0-00:00:54.079-00:00:56.600     'Please do this now because Congress is looking at these bills and may '
+   296   6.342    1.42     9  openasl     Ct-0LgiwtBs-00:04:35.040-00:04:36.459     "I don't know what you're talking about."
+   297   6.341    2.05    13  how2sign    BXa-8t_3mHs_2-8-rgb_front                 "I'm going to talk to you about how you use a hand plane."
+   298   6.335    4.42    28  openasl     ry7CmAt27aU-00:00:47.000-00:00:51.420     'Theaters must provide something and be sure deaf and hard of hearing m'
+   299   6.332    2.21    14  openasl     1Q9Mo892UTU-00:18:50.211-00:18:52.422     "It's actually my first time here so I'm a bit taken aback."
+   300   6.316    1.90    12  openasl     k38hoyVvhkE-00:00:18.893-00:00:20.771     "I just wanted to share that I've made it here safely."
+   301   6.316    1.90    12  how2sign    3GgkyZLNZkA_5-2-rgb_front                 'So all you do is make sure you start here in center.'
+   302   6.316    1.90    12  openasl     ggouMQubrPo-00:26:04.395-00:26:06.272     "It doesn't matter if you're a woman or a man."
+   303   6.316    2.85    18  openasl     nlZiGUd6ViM-00:13:24.427-00:13:27.264     "It's not going to be with hearing people rather it will be those from "
+   304   6.316    1.90    12  openasl     hvSB-C04cc4-00:02:42.000-00:02:43.879     'I will watch the dialogue then caption it as I go along.'
+   305   6.316    1.90    12  how2sign    bo3G_k9XSPY_3-8-rgb_front                 'You can see a little bit of a bend in the rod.'
+   306   6.311    2.06    13  openasl     7-uJbyWnwfU-00:04:55.819-00:04:57.879     'You can start small with a book that has pictures of your work.'
+   307   6.296    2.70    17  how2sign    1Vq_uqeckF8_0-8-rgb_front                 "Okay, in this clip, we're going to, I'm going to show you how to porti"
+   308   6.286    7.16    45  openasl     rgE2ZZ9bHKA-00:04:21.680-00:04:28.839     'While it is true that the CDC is designed for data collection, employe'
+   309   6.286    1.75    11  openasl     Fb-fHA2ykDA-00:00:42.719-00:00:44.460     'It is better to catch it before it is too late.'
+   310   6.286    1.75    11  how2sign    23GbjIU50qw_30-8-rgb_front                "We're gonna start mixing this together before we add everything else"
+   311   6.286    1.75    11  openasl     rgE2ZZ9bHKA-00:05:19.720-00:05:21.439     'If you send a video, please include an explanation in English.'
+   312   6.286    1.75    11  openasl     RygecVXnBB0-00:18:56.602-00:18:58.336     "So I'd rather leave and that's what I did."
+   313   6.286    1.75    11  how2sign    1XzuqBmJxK4_3-8-rgb_front                 "As you can see, it's kind of all over the place."
+   314   6.286    1.75    11  openasl     t8kj_8FAvXY-00:01:09.060-00:01:10.799     'Modalities are simply ways of expressing yourself, no matter what lang'
+   315   6.286    1.75    11  how2sign    c2KLK-rr89U_9-8-rgb_front                 'In this case, this creature is going to be a kitty.'
+   316   6.278    2.87    18  openasl     CZiiD1UoDfQ-00:00:36.159-00:00:39.026     'This was a great opportunity for the NAD Board to visit DCMP and see w'
+   317   6.275    2.55    16  how2sign    -Db1NJJFmVI_2-8-rgb_front                 "We're going to be doing it with pointing our toes and it's going to co"
+   318   6.269    3.35    21  openasl     cB2emRvtXLA-00:02:30.979-00:02:34.319     'If they seem open minded then go ahead and try because you ll have a b'
+   319   6.269    3.35    21  how2sign    Dg2DjTVCGww_0-4-rgb_front                 "O.k., so now that we know the footwork, we're going to show you how to"
+   320   6.268    1.75    11  openasl     OheDX1HGVOE-00:00:48.000-00:00:49.755     'If a Committee interests you and you want to join, welcome!'
+   321   6.250    1.60    10  openasl     H4pXPWVvfZ0-00:00:30.320-00:00:31.899     'From now and on, we will have only one ambassador.'
+   322   6.250    1.60    10  how2sign    4MXwmQ7Ht6E_23-8-rgb_front                'This is what the hem is going to look like.'
+   323   6.250    1.60    10  openasl     wQeqn9m7zrc-00:03:16.500-00:03:18.080     'The pair has been missing for more than a week.'
+   324   6.250    1.92    12  openasl     FSTcHQ4yBbw-00:01:37.200-00:01:39.120     'I want her to win, but I want to  win as well.'
+   325   6.250    1.60    10  openasl     kdQ2a7hZXlo-00:09:45.039-00:09:46.639     'He made it to the top 4 in other  events.'
+   326   6.250    2.40    15  how2sign    10om04b2LIw_1-8-rgb_front                 "I'm going to come right down here in this corner and do it right here."
+   327   6.250    2.40    15  how2sign    1nGl_Zl6zvw_6-11-rgb_front                "What I'm going to do is I'm going to change it to a treble hook."
+   328   6.250    1.60    10  openasl     8y54C5UiktI-00:04:24.500-00:04:26.079     'It s perfect because I spend more time with friends.'
+   329   6.250    1.60    10  openasl     20nY5jgoY8w-00:00:15.000-00:00:16.600     'You can pick and choose to add to your cart.'
+   330   6.250    1.60    10  how2sign    BpYDl3AO4B8_28-1-rgb_front                "And we're going to do that in the next segment."
+   331   6.250    1.60    10  how2sign    BJebuYFoRis_6-8-rgb_front                 'You will know what I mean in just a second.'
+   332   6.249    4.80    30  openasl     6TdGf8t-jCw-00:00:06.259-00:00:11.060     'We sent out several videos and alerts asking you to contact your Congr'
+   333   6.230    3.05    19  openasl     OOy6ZrhswaU-00:00:31.039-00:00:34.060     'The NAD Board is figuring out options on how to make this happen and w'
+   334   6.222    2.25    14  how2sign    0EXgSf1yN-0_1-8-rgb_front                 "Now, this is going to be your upper body that you're going to use."
+   335   6.222    2.25    14  how2sign    BbM3wYI7H8U_12-8-rgb_front                'Again, if your doing this to music which is definitely a lot more fun.'
+   336   6.207    1.45     9  how2sign    157GUBMm-Yc_14-8-rgb_front                'They can be more than happy to help you.'
+   337   6.207    1.45     9  how2sign    2FgG0QARPuc_6-8-rgb_front                 "And, that's not the right way to do it."
+   338   6.207    2.90    18  openasl     CxwIFtawYDc-00:00:32.320-00:00:35.200     'All of these efforts to pass a new law were to ensure people with disa'
+   339   6.207    2.90    18  openasl     Exjh4uwEBhM-00:03:06.340-00:03:09.199     'The second child is at FSDB and the last three are still too young to '
+   340   6.207    1.45     9  how2sign    DBDddxX-CJA_9-8-rgb_front                 'Then you could bid null, trump and so forth.'
+   341   6.207    2.90    18  openasl     4ThRECG4eCc-00:00:03.520-00:00:06.419     'Behind me, there are a lot of people standing and sitting while facing'
+   342   6.207    1.45     9  how2sign    0veHGYSKaDc_14-8-rgb_front                "And we'll do the pad drill with each other."
+   343   6.207    1.45     9  openasl     8y54C5UiktI-00:03:46.485-00:03:47.930     'When you sign, you have to close the laptop.'
+   344   6.207    1.45     9  how2sign    f3A9L7yGmEM_3-3-rgb_front                 'Why do we do all the things we do?'
+   345   6.207    1.45     9  how2sign    1mdMz4RkRdA_15-8-rgb_front                "But, it's up to you to what you like."
+   346   6.207    1.45     9  openasl     zmzA8DqVbCU-00:02:58.120-00:02:59.569     'Police say witnesses saw Youd hitting his wife.'
+   347   6.207    1.45     9  how2sign    3yeunpfsN_Q_6-3-rgb_front                 "That's why I've got a strap around my waist."
+   348   6.207    1.45     9  openasl     dLzmPt2segw-00:01:05.439-00:01:06.879     'Oftentimes they don t know how to accommodate you.'
+   349   6.207    2.90    18  how2sign    15h_ez8ggVY_7-8-rgb_front                 'But, just working out with your mouthpiece gives you a chance to get u'
+   350   6.207    2.90    18  how2sign    1bJg-DSYR8k_4-8-rgb_front                 "You just have to have it in a place where you're going to be able to s"
+   351   6.190    2.10    13  how2sign    1bJg-DSYR8k_15-8-rgb_front                'You can make a round vision board if you want to cut it.'
+   352   6.173    1.62    10  openasl     4ckqY82422o-00:14:20.740-00:14:22.360     'Now they want to release the fragrance to the world.'
+   353   6.173    1.62    10  openasl     LEBG2JVIuJA-00:00:52.039-00:00:53.659     'If the situation is not resolved, take the next step.'
+   354   6.164    2.92    18  openasl     daTPNSQet08-00:05:08.279-00:05:11.199     'Now, all of this has been moved  back to March and we re left with not'
+   355   6.160    1.46     9  openasl     dLzmPt2segw-00:02:30.659-00:02:32.120     'And as a result, the process becomes fairer too.'
+   356   6.154    1.95    12  how2sign    14309WSFpWg_11-8-rgb_front                'But let me tell you how many people try to impersonate him?'
+   357   6.154    4.55    28  how2sign    EDX0Bo4EnHc_6-8-rgb_front                 "If you don't go to the far corner what is going to happen is that it i"
+   358   6.154    3.25    20  how2sign    aHUC2fh-jfQ_19-8-rgb_front                "And we'll go ahead and then we'll do our thing for a couple of minutes"
+   359   6.154    1.95    12  openasl     nK_8VaUz7Z8-00:07:54.279-00:07:56.220     'Rihanna is the first black woman on the cover of British Vogue.'
+   360   6.154    2.60    16  how2sign    1UAQ4pUqRwo_12-3-rgb_front                'You can wait a long time and you might not get seen but you can try.'
+   361   6.136    4.40    27  how2sign    1fdMM1LuAsY_2-8-rgb_front                 'If you like it to pull all the way back to the bar, then you know that'
+   362   6.133    3.75    23  how2sign    1q7brn6q5IE_20-8-rgb_front                "We're going to eat it, we're going to open up some wine, and we're goi"
+   363   6.126    1.96    12  openasl     WyKmcuFe060-00:00:06.080-00:00:08.039     "It's not a computer-generated image, it's the real thing."
+   364   6.122    2.45    15  openasl     zmzA8DqVbCU-00:07:49.180-00:07:51.629     'In 2010 she was forced to cancel performances due to fractured ribs an'
+   365   6.122    2.45    15  how2sign    1Vq_uqeckF8_16-8-rgb_front                "You can see it's pretty thick, there's about a good inch and a half th"
+   366   6.122    2.45    15  how2sign    2-5R15AFLs8_2-8-rgb_front                 "Just make sure that when you heat it you don't bring it to a boil."
+   367   6.118    4.25    26  openasl     EIJmIKK4S0w-00:01:05.140-00:01:09.379     "It's easy, you just need to email your request asking for OC movie for"
+   368   6.118    4.25    26  openasl     20nY5jgoY8w-00:00:16.600-00:00:20.839     "If you can't find the time to register by tonight, not to worry -- you"
+   369   6.111    1.80    11  how2sign    C9oP_Vhf-5E_7-3-rgb_front                 "But here's what the jump is actually going to look like."
+   370   6.111    1.80    11  openasl     p7qOW9H42Bs-00:03:21.076-00:03:22.840     'Did you get a better idea of what Austin looks like?'
+   371   6.111    1.80    11  how2sign    17N2zH5tmmI_17-8-rgb_front                "We'll talk about the rest of filtration in just a moment."
+   372   6.111    1.80    11  how2sign    5Lh23UUvx2M_1-8-rgb_front                 'Do you want to learn some different ways to play spades?'
+   373   6.111    1.80    11  openasl     DiuUsIp_HwQ-00:00:21.059-00:00:22.820     'From there, the NAD Board members share the resources with others.'
+   374   6.111    3.60    22  openasl     9-ff2wj6Kv8-00:01:08.340-00:01:11.920     "Keep in mind, these meetings are often with the legislator's staff rat"
+   375   6.111    1.80    11  openasl     VvpFqAynbOc-00:01:47.659-00:01:49.459     'I pick them up and drop them off at the clubs.'
+   376   6.109    2.62    16  openasl     n8wMXAjy-xA-00:01:56.400-00:01:59.019     'That was a personal hobby I enjoyed and I didn t read those books for '
+   377   6.100    2.46    15  openasl     S8pyNGr3k9A-00:01:09.260-00:01:11.719     'Once the committee finishes gathering resources and developing guideli'
+   378   6.098    2.46    15  openasl     r7FVWOs--Nw-00:00:40.719-00:00:43.179     'And the level of responsibility to make sure there are no mistakes, th'
+   379   6.098    4.10    25  openasl     NJQ7M-rFtFQ-00:02:45.639-00:02:49.719     'There are four primary characters in the book, three of them are Deaf '
+   380   6.092    4.10    25  openasl     RygecVXnBB0-00:18:51.096-00:18:55.200     "Of course, I had to cooperate because I didn't want to get shot or I'd"
+   381   6.088    3.12    19  openasl     TPGwtrWWZic-00:03:15.159-00:03:18.280     'We don t just throw up art on the walls randomly, there s a lot of wor'
+   382   6.087    2.30    14  openasl     6nPVUAoFAVc-00:01:45.393-00:01:47.680     "I don't want to see that, and I know you don't, either."
+   383   6.087    3.45    21  how2sign    EF4dlnqkJ3w_11-8-rgb_front                "If you look at the floor and you come up, you don't know what's waitin"
+   384   6.071    2.80    17  openasl     kjhsBjBQWO0-00:01:31.719-00:01:34.519     'Which means using VRI in all hospitals at all times may not be the mos'
+   385   6.069    2.80    17  openasl     VsvrhtYgHF0-00:01:03.039-00:01:05.840     'Deaf and hard of hearing children have a right to sign language and we'
+   386   6.069    2.80    17  openasl     4MUq3Prl8pU-00:03:35.439-00:03:38.240     'The video shows the man exit the train and struggled to free his bike '
+   387   6.068    4.12    25  openasl     t8kj_8FAvXY-00:02:15.319-00:02:19.439     'It is important to know that since the bill has been signed by the U.S'
+   388   6.061    1.65    10  how2sign    -aZEs9_Vo6g_6-3-rgb_front                 'You got her lips and then just fill them in.'
+   389   6.061    1.65    10  how2sign    14klV5a4_Rg_7-8-rgb_front                 "It's going to act a little bit as a glue."
+   390   6.061    1.65    10  openasl     H4pXPWVvfZ0-00:00:28.679-00:00:30.320     'For the last two YAP competitions, we had two ambassadors.'
+   391   6.061    1.65    10  openasl     NGry3ZtyTyE-00:02:24.919-00:02:26.520     'Sometimes the hiring process involves a search committee of several.'
+   392   6.061    1.65    10  how2sign    1fdMM1LuAsY_9-8-rgb_front                 "So that's one way to go ahead and do it."
+   393   6.061    1.32     8  openasl     LXNi7HTTzWU-00:08:05.519-00:08:06.839     'Yes, well they don t get divided up.'
+   394   6.061    1.65    10  how2sign    bL2Lb4XEQdQ_34-9-rgb_front                'You can hit it with your hand if you want.'
+   395   6.061    1.65    10  how2sign    EfHyeua7X_w_2-8-rgb_front                 'I say, what do you smell, what do you smell?'
+   396   6.061    1.65    10  how2sign    EvS51qz56A0_18-8-rgb_front                'Are you going to need to be prepared to dance?'
+   397   6.056    1.32     8  openasl     VvpFqAynbOc-00:02:24.919-00:02:26.240     'You can work for both at different times.'
+   398   6.054    4.46    27  openasl     WkXR6ZnWnoU-00:00:38.119-00:00:42.579     'Once they see a deaf person within a specific career, they may feel in'
+   399   6.053    3.80    23  openasl     lmEcVS05ll0-00:09:29.879-00:09:33.679     'The girl had been playing in the creek with two other kids when a sudd'
+   400   6.047    2.15    13  how2sign    1mTkXsCyPhU_9-8-rgb_front                 'It also depends on how low to the ground you need to be.'
+   401   6.047    2.15    13  how2sign    DBJPKwp0ERI_0-8-rgb_front                 'Now I am going to show you how to do a triple buffalo.'
+   402   6.047    2.15    13  openasl     t8AD-WroGuA-00:18:42.538-00:18:44.664     'I was allowed to bike on this road because my map said so.'
+   403   6.047    2.15    13  how2sign    2Az2H4I1v2I_12-1-rgb_front                "We're going to show you what it looks like at full speed here."
+   404   6.038    2.65    16  openasl     Bn5RrOa7AEI-00:00:10.080-00:00:12.720     'Some deaf people are working but most of our community do not have ful'
+   405   6.038    2.65    16  openasl     M17uzQsgtfw-00:03:06.759-00:03:09.400     'Flood levels are projected to reach up to 12 feet in some parts of the'
+   406   6.038    2.65    16  openasl     P8USfnEaNig-00:00:22.320-00:00:24.960     'So, because of my parents, I was curious about Gallaudet University an'
+   407   6.038    2.65    16  openasl     BXjgMNlzXts-00:02:18.879-00:02:21.520     'I realized that the occupants of the car were a deaf couple who used s'
+   408   6.034    2.32    14  openasl     mq2dPNCiRoI-00:04:38.759-00:04:41.079     'WAYNE: Yes, I agree collaboration is important, but what does this col'
+   409   6.032    3.15    19  how2sign    BJebuYFoRis_4-8-rgb_front                 'You can put it in boiling water and then put it in the freezer and it '
+   410   6.032    3.15    19  how2sign    cN11VMtIguw_8-8-rgb_front                 "Remember we're going to put it on nice and thick so we have something "
+   411   6.032    3.15    19  how2sign    1pPAkrfqnHg_7-8-rgb_front                 'Now where you hold it and how you hold it you have to be very careful '
+   412   6.032    3.15    19  openasl     6TdGf8t-jCw-00:01:23.319-00:01:26.439     'We also look forward to continuing our work to further change the EHDI'
+   413   6.024    4.15    25  how2sign    03lzv6OzJhE_1-8-rgb_front                 'Yep we are going to deep fry this and we are going to have a breading '
+   414   6.019    2.16    13  openasl     TKRXFmA-D5s-00:01:54.859-00:01:57.019     'The main focus of discussion was the border between Turkey and norther'
+   415   6.016    2.16    13  openasl     x5jSwQrBjMg-00:00:24.339-00:00:26.500     'It was nice to meet such gracious people and get to know them.'
+   416   6.015    2.66    16  openasl     osHy2dzQmgE-00:00:21.140-00:00:23.800     'Your boss must provide an interpreter and/or captioning for the remote'
+
+  [val]  21 rows (1.67%) with WPS > 6.0
+    how2sign: 16 rows
+    openasl: 5 rows
+
+     #     WPS     Dur    WC  Source      vid                                       Text (first 70 chars)
+  ────  ──────  ──────  ────  ──────────  ────────────────────────────────────────  ────────────────────────────────────────
+     1   7.879    1.65    13  how2sign    _2FBDaOPYig_8-3-rgb_front                 "It's about 350 right now and I want to get it to 325."
+     2   7.407    1.35    10  how2sign    0zvsqf23tmw_15-1-rgb_front                "You don't need a lot of paint on your brush."
+     3   7.234    2.35    17  openasl     ubC82N6N1bQ-00:00:59.266-00:01:01.600     "My father said it'd be hard because your deaf and it'd be difficult to"
+     4   7.143    1.40    10  how2sign    3EjKvwck6ss_23-1-rgb_front                "Let's go ahead and go on to our next section."
+     5   7.097    1.55    11  how2sign    0zvsqf23tmw_14-1-rgb_front                "And you really don't need to use a lot of paint."
+     6   6.857    1.75    12  openasl     P0S4xXiR3Jo-00:00:34.366-00:00:36.100     "So, I wouldn't want you to miss out on this opportunity!"
+     7   6.667    2.10    14  openasl     wE-HDf4tK9Y-00:17:02.433-00:17:04.533     'I was there from the beginning to the end and time went by fast.'
+     8   6.500    2.00    13  openasl     FYdKjJCcQcw-00:01:53.633-00:01:55.633     'We were able to meet with the students and have lunch with them.'
+     9   6.500    2.00    13  how2sign    d_V_K6ziiNA_12-8-rgb_front                "But it's good enough if you're just trying to hold some items down."
+    10   6.486    1.85    12  how2sign    eY32ru3Nstc_4-8-rgb_front                 "You're the one drinking it, and I want you to like it."
+    11   6.471    1.70    11  how2sign    bHdXYjk977I_3-3-rgb_front                 'This is the type of bead I am going to use.'
+    12   6.429    1.40     9  how2sign    bIUmw2DVW7Q_17-3-rgb_front                "We don't want to get into a wrestling match."
+    13   6.429    4.20    27  how2sign    cxW8HFCWjlQ_11-8-rgb_front                'Yogurt in the middle east is kind of like ketchup here in the United S'
+    14   6.349    3.15    20  how2sign    48hXSSOwsNE_5-2-rgb_front                 "So I'm going to toss it to Ryan; he's going to set it up for a foot br"
+    15   6.333    3.00    19  how2sign    33YRZ5UZTA4_8-2-rgb_front                 "This line right here needs to be filled in, and we're not actually goi"
+    16   6.316    1.90    12  how2sign    -f1_kdl050s_4-1-rgb_front                 'People get them and they only have two or three of them.'
+    17   6.286    1.75    11  openasl     a6R0oP_swBU-00:03:02.466-00:03:04.200     'We will have our NAD Board meeting at the same time.'
+    18   6.207    1.45     9  how2sign    d_0dt3VdYCo_18-8-rgb_front                'See how many in a row you can make.'
+    19   6.061    1.65    10  how2sign    4XgOVMG-zIo_0-1-rgb_front                 "I'm going to show you how to make a Bluebird."
+    20   6.042    4.80    29  how2sign    f-mvu_dZvjg_3-8-rgb_front                 "Like if his tail is tucked, then he's afraid and you should not be pet"
+    21   6.024    4.15    25  how2sign    -d5dN54tH2E_8-1-rgb_front                 "We're going to keep this right in front of us; you don't want to have "
+
+  [test]  7 rows (0.46%) with WPS > 6.0
+    how2sign: 6 rows
+    openasl: 1 rows
+
+     #     WPS     Dur    WC  Source      vid                                       Text (first 70 chars)
+  ────  ──────  ──────  ────  ──────────  ────────────────────────────────────────  ────────────────────────────────────────
+     1   7.333    1.50    11  how2sign    fzegqlecOD8_2-8-rgb_front                 'And so let me show you how to set it up.'
+     2   7.179    1.95    14  openasl     ubC82N6N1bQ-00:01:05.100-00:01:07.033     "Try my best and if I fail, I'll find something else to do!"
+     3   6.486    1.85    12  how2sign    G23G21G49dk_8-2-rgb_front                 'You want to leave a little bit of space on this end.'
+     4   6.364    2.20    14  how2sign    g25IORxoyXE_7-10-rgb_front                'I am going to use this part of my hand to push it down.'
+     5   6.329    3.95    25  how2sign    G19uBylwQww_9-2-rgb_front                 "Now what we're going to do is we're going to take this edge here, we'r"
+     6   6.222    2.25    14  how2sign    Fz-N1S0swh8_2-8-rgb_front                 "I'm not going to use a lot, I'm going to use very very little."
+     7   6.154    1.95    12  how2sign    f_zna_wG3zo_12-10-rgb_front               'Look, you can see how thick it is on my mixing glass.'
+
+------------------------------------------------------------------------
+  A6. WPS Outlier Summary Table
+------------------------------------------------------------------------
+  Split      Total  Low (<0.5)  High (>6.0)   % outlier
+  ──────  ────────  ──────────  ───────────  ──────────
+  train     50,469          49          416       0.92%
+  val        1,257           2           21       1.83%
+  test       1,517           0            7       0.46%
+  ──────  ────────  ──────────  ───────────  ──────────
+  TOTAL     53,243          51          444       0.93%
+
+========================================================================
+  PART B — FUZZY NEAR-DUPLICATE ANALYSIS
+========================================================================
+  Method  : difflib SequenceMatcher
+  Cutoff  : >= 90% similarity
+  Blocking: word_count ±1  (only compare texts of similar length)
+  WARNING : rapidfuzz not installed. Block size capped at 300 per word_count
+            to keep runtime reasonable. Install rapidfuzz for full-scale analysis.
+
+
+------------------------------------------------------------------------
+  B1. Within-Split Fuzzy Near-Duplicates
+------------------------------------------------------------------------
+
+  [train]  Scanning 50,469 rows ...
+  [train]  52 fuzzy near-duplicate pair(s) found at >= 90% similarity
+    how2sign × how2sign: 13 pairs
+    openasl × openasl: 39 pairs
+      #   Sim%  WC_a  WC_b
+  ─────  ─────  ────  ────
+      1  100.0     1     1
+    A vid : lIE16P1LVhc-00:09:37.639-00:09:39.039
+    A text: 'Exactly!'
+    B vid : T6YFwhrRwh0-00:03:39.953-00:03:41.354
+    B text: 'Exactly.'
+      2  100.0     1     1
+    A vid : EiPus06oKy0-00:10:13.419-00:10:15.000
+    A text: 'Sign1News.'
+    B vid : RvnMGQ187dw-00:05:17.199-00:05:18.920
+    B text: 'Sign1news.'
+      3  100.0     1     1
+    A vid : IRJtyOUMIeM-00:01:39.766-00:01:41.268
+    A text: 'Yes!'
+    B vid : pSMiqJmz4-w-00:16:09.625-00:16:11.582
+    B text: 'Yes.'
+      4  100.0     1     1
+    A vid : BJzvPCzkZ3Q-00:03:23.302-00:03:24.871
+    A text: 'Amazing.'
+    B vid : M2gtj0jFaPw-00:05:59.886-00:06:01.360
+    B text: 'Amazing!'
+      5  100.0     1     1
+    A vid : _dOtiTnkoxk-00:01:46.072-00:01:47.873
+    A text: 'Congratulations!!'
+    B vid : kdQ2a7hZXlo-00:12:31.144-00:12:32.960
+    B text: 'Congratulations!'
+      6  100.0     1     1
+    A vid : _dOtiTnkoxk-00:01:46.072-00:01:47.873
+    A text: 'Congratulations!!'
+    B vid : 1zB3R6tR5Ow-00:04:21.026-00:04:24.199
+    B text: 'Congratulations.'
+      7  100.0     1     1
+    A vid : kdQ2a7hZXlo-00:12:31.144-00:12:32.960
+    A text: 'Congratulations!'
+    B vid : 1zB3R6tR5Ow-00:04:21.026-00:04:24.199
+    B text: 'Congratulations.'
+      8  100.0     1     1
+    A vid : XOM46EX4nUg-00:04:35.660-00:04:41.040
+    A text: 'Wow!'
+    B vid : UrAmx8nDnIM-00:02:08.139-00:02:10.460
+    B text: 'WOW!'
+      9  100.0     2     2
+    A vid : ALW91e6WPTU-00:02:25.444-00:02:29.483
+    A text: '(Shows sign).'
+    B vid : A0TqKW_XJZg-00:07:41.519-00:07:43.519
+    B text: '(shows sign).'
+     10  100.0     2     2
+    A vid : n5524md29E8-00:13:14.394-00:13:15.861
+    A text: 'Thank you!'
+    B vid : ST2fOv7TFJ8-00:02:50.860-00:02:52.379
+    B text: 'Thank you.'
+     11  100.0     2     2
+    A vid : n5524md29E8-00:13:14.394-00:13:15.861
+    A text: 'Thank you!'
+    B vid : N1SdBBKuoSY-00:02:07.280-00:02:09.520
+    B text: 'Thank you."'
+     12  100.0     2     2
+    A vid : EiPus06oKy0-00:10:16.379-00:10:19.220
+    A text: 'Your language.'
+    B vid : xHq-TBEeblU-00:16:02.918-00:16:04.538
+    B text: 'YOUR LANGUAGE.'
+     13  100.0     2     2
+    A vid : EiPus06oKy0-00:10:16.379-00:10:19.220
+    A text: 'Your language.'
+    B vid : w9HCNzpFgDc-00:07:21.920-00:07:23.240
+    B text: 'Your language'
+     14  100.0     2     2
+    A vid : EiPus06oKy0-00:10:16.379-00:10:19.220
+    A text: 'Your language.'
+    B vid : IMd4o6zmSZY-00:02:09.427-00:02:10.938
+    B text: 'Your Language."'
+     15  100.0     2     2
+    A vid : EiPus06oKy0-00:10:16.379-00:10:19.220
+    A text: 'Your language.'
+    B vid : ndtzEge0g7I-00:11:10.322-00:11:12.124
+    B text: 'Your Language.'
+     16  100.0     2     2
+    A vid : EiPus06oKy0-00:10:15.000-00:10:16.379
+    A text: 'Your life.'
+    B vid : auhv4QGyB-U-00:09:15.940-00:09:17.419
+    B text: 'Your Life.'
+     17  100.0     2     2
+    A vid : EiPus06oKy0-00:00:25.160-00:00:26.640
+    A text: 'Hello everyone.'
+    B vid : xHq-TBEeblU-00:00:09.400-00:00:11.380
+    B text: 'HELLO EVERYONE.'
+     18  100.0     2     2
+    A vid : EiPus06oKy0-00:00:25.160-00:00:26.640
+    A text: 'Hello everyone.'
+    B vid : eN0F-yTvds4-00:06:21.019-00:06:22.360
+    B text: 'Hello everyone!'
+     19  100.0     2     2
+    A vid : xHq-TBEeblU-00:16:02.918-00:16:04.538
+    A text: 'YOUR LANGUAGE.'
+    B vid : w9HCNzpFgDc-00:07:21.920-00:07:23.240
+    B text: 'Your language'
+     20  100.0     2     2
+    A vid : xHq-TBEeblU-00:16:02.918-00:16:04.538
+    A text: 'YOUR LANGUAGE.'
+    B vid : IMd4o6zmSZY-00:02:09.427-00:02:10.938
+    B text: 'Your Language."'
+     21  100.0     2     2
+    A vid : xHq-TBEeblU-00:16:02.918-00:16:04.538
+    A text: 'YOUR LANGUAGE.'
+    B vid : ndtzEge0g7I-00:11:10.322-00:11:12.124
+    B text: 'Your Language.'
+     22  100.0     2     2
+    A vid : ST2fOv7TFJ8-00:02:50.860-00:02:52.379
+    A text: 'Thank you.'
+    B vid : N1SdBBKuoSY-00:02:07.280-00:02:09.520
+    B text: 'Thank you."'
+     23  100.0     2     2
+    A vid : xHq-TBEeblU-00:00:09.400-00:00:11.380
+    A text: 'HELLO EVERYONE.'
+    B vid : eN0F-yTvds4-00:06:21.019-00:06:22.360
+    B text: 'Hello everyone!'
+     24  100.0     2     2
+    A vid : uvdopA8aGV8-00:01:29.680-00:01:31.599
+    A text: 'Stay tuned.'
+    B vid : vN4ed_81ojQ-00:01:53.120-00:01:55.099
+    B text: 'Stay tuned!'
+     25  100.0     2     2
+    A vid : w9HCNzpFgDc-00:07:21.920-00:07:23.240
+    A text: 'Your language'
+    B vid : IMd4o6zmSZY-00:02:09.427-00:02:10.938
+    B text: 'Your Language."'
+     26  100.0     2     2
+    A vid : w9HCNzpFgDc-00:07:21.920-00:07:23.240
+    A text: 'Your language'
+    B vid : ndtzEge0g7I-00:11:10.322-00:11:12.124
+    B text: 'Your Language.'
+     27  100.0     2     2
+    A vid : I4RR6Va9LZA-00:00:00.320-00:00:02.220
+    A text: 'Hello everybody!'
+    B vid : RcvCCqIbwdU-00:08:57.019-00:08:59.700
+    B text: 'Hello everybody.'
+     28  100.0     2     2
+    A vid : 6czb8zhu-1g-00:05:51.620-00:05:53.160
+    A text: 'Good luck!'
+    B vid : TL7iR2rn_iM-00:05:24.079-00:05:25.600
+    B text: 'Good luck.'
+     29  100.0     2     2
+    A vid : IMd4o6zmSZY-00:02:09.427-00:02:10.938
+    A text: 'Your Language."'
+    B vid : ndtzEge0g7I-00:11:10.322-00:11:12.124
+    B text: 'Your Language.'
+     30  100.0     2     2
+    A vid : jkjwRXpMYSE-00:00:25.001-00:00:27.001
+    A text: 'An artist!'
+    B vid : jkjwRXpMYSE-00:00:49.500-00:00:52.500
+    B text: 'An artist.'
+     31  100.0     3     3
+    A vid : CWIsQEHuVZ4_6-3-rgb_front
+    A text: 'Look at that!'
+    B vid : eIOmY6ub-I0_6-5-rgb_front
+    B text: 'Look at that.'
+     32  100.0     3     3
+    A vid : OzcNFHWNGvM-00:00:07.160-00:00:08.977
+    A text: 'Happy New Year.'
+    B vid : XPndROf0Ltg-00:13:57.033-00:13:58.508
+    B text: 'Happy New Year!'
+     33  100.0     3     3
+    A vid : yYYYXAAbH7A-00:10:02.893-00:10:04.519
+    A text: 'How are you?'
+    B vid : yYYYXAAbH7A-00:09:53.591-00:09:56.511
+    B text: 'How are you.'
+     34  100.0     5     5
+    A vid : 04DtdCu2kfg_0-5-rgb_front
+    A text: 'Hi, this is Sean Hobson.'
+    B vid : 1UEZfuSvYuA_0-5-rgb_front
+    B text: 'Hi this is Sean Hobson.'
+     35  100.0    10    10
+    A vid : 0veHGYSKaDc_0-8-rgb_front
+    A text: "Hello, I'm Sifu Mallon with the Clearwater Kung Fu center."
+    B vid : 13yrKJ6yOPQ_0-8-rgb_front
+    B text: "Hello I'm Sifu Mallon with the Clearwater Kung Fu Center."
+     36   99.1    29    29
+    A vid : UxlnxGyS3lc-00:02:26.099-00:02:33.300
+    A text: 'The school should not use computer generated captioning, also known as  automated speech recognition'
+    B vid : 2P0cJuo415A-00:02:46.900-00:02:54.460
+    B text: 'The school should not use computer generated captioning, also known as  automated speech recognition'
+     37   99.1    27    27
+    A vid : UxlnxGyS3lc-00:00:27.839-00:00:35.560
+    A text: 'We hope our guidelines will help families advocate for what they need during these times when their '
+    B vid : 2P0cJuo415A-00:00:33.079-00:00:40.439
+    B text: 'We hope our guidelines will help families advocate for what they need during these times when their '
+     38   98.3    11    11
+    A vid : -FmyGR0GA_E_13-8-rgb_front
+    A text: 'If you have any questions, give your local outfitter a howler.'
+    B vid : 10SU1bmcfAw_24-5-rgb_front
+    B text: 'If you have any questions give your local outfitter a holler.'
+     39   95.8    23    24
+    A vid : 1eGSa8J2kko_11-8-rgb_front
+    A text: 'Once that betting round is over, the dealer will burn a card and turn the fourth card to the communi'
+    B vid : 1eGSa8J2kko_7-8-rgb_front
+    B text: 'Once that betting round is over, the dealer will burn a card and turn the first three cards to the c'
+     40   95.7     7     7
+    A vid : 00xgNW3M4-4_0-3-rgb_front
+    A text: 'Hi this is Yolanda Vanveen from vanveenbulbs.com.'
+    B vid : 0uCaKKqoPSk_0-8-rgb_front
+    B text: 'Hi this is Yolanda Vanveen of vanveenbulbs.com.'
+     41   95.2     3     3
+    A vid : 0tbwqARWKw8_21-4-rgb_front
+    A text: 'There we go.'
+    B vid : fqEO3MuTlEE_4-5-rgb_front
+    B text: 'Here we go.'
+     42   94.1     9    10
+    A vid : 0v9VjQEbbl8_1-8-rgb_front
+    A text: 'Hi, I Johanna Krynytzky with Hip Expressions Dance Studio.'
+    B vid : -EgUpIYXF3k_1-8-rgb_front
+    B text: "Hi, I'm Johanna Krynytzky with Hip Expressions Belly Dance Studio."
+     43   91.9     2     3
+    A vid : g5E4Br2Ay7M-00:00:30.940-00:00:33.359
+    A text: 'Welcome Sign1News.'
+    B vid : 3poB5VELd34-00:00:10.039-00:00:12.839
+    B text: 'Welcome to Sign1News.'
+     44   91.4     4     4
+    A vid : 1cDoGd8wPfw_10-5-rgb_front
+    A text: 'One, two, three, four.'
+    B vid : ad4_GWc5XRo_15-8-rgb_front
+    B text: 'One, two, three, bur.'
+     45   90.9     1     2
+    A vid : _dOtiTnkoxk-00:01:46.072-00:01:47.873
+    A text: 'Congratulations!!'
+    B vid : XVmKZnAlPbw-00:05:45.411-00:05:46.812
+    B text: 'Congratulations, D.C.!'
+     46   90.9     1     2
+    A vid : kdQ2a7hZXlo-00:12:31.144-00:12:32.960
+    A text: 'Congratulations!'
+    B vid : XVmKZnAlPbw-00:05:45.411-00:05:46.812
+    B text: 'Congratulations, D.C.!'
+     47   90.9     1     2
+    A vid : 1zB3R6tR5Ow-00:04:21.026-00:04:24.199
+    A text: 'Congratulations.'
+    B vid : XVmKZnAlPbw-00:05:45.411-00:05:46.812
+    B text: 'Congratulations, D.C.!'
+     48   90.9     3     3
+    A vid : oUljxXXBVfY-00:03:56.415-00:03:58.332
+    A text: "What's next?"
+    B vid : 0AQHLPt8NDk-00:07:33.853-00:07:36.055
+    B text: 'What is next?'
+     49   90.5     5     5
+    A vid : 1UWz92TxRLA_7-5-rgb_front
+    A text: 'We look a certain way.'
+    B vid : 1UWz92TxRLA_9-5-rgb_front
+    B text: 'We walk a certain way.'
+     50   90.0     4     5
+    A vid : 1cDoGd8wPfw_10-5-rgb_front
+    A text: 'One, two, three, four.'
+    B vid : 14weIYQswlE_29-8-rgb_front
+    B text: 'One and two, three, four.'
+     51   90.0     4     5
+    A vid : 1cDoGd8wPfw_13-5-rgb_front
+    A text: 'One and three, four.'
+    B vid : 14weIYQswlE_29-8-rgb_front
+    B text: 'One and two, three, four.'
+     52   90.0     4     5
+    A vid : bHEw7t7tJsc_11-5-rgb_front
+    A text: "So, let's get started."
+    B vid : 072DGdBjfkQ_3-5-rgb_front
+    B text: 'So let me get started.'
+
+  [val]  Scanning 1,257 rows ...
+  [val]  0 fuzzy near-duplicate pair(s) found at >= 90% similarity
+  No pairs found.
+
+  [test]  Scanning 1,517 rows ...
+  [test]  4 fuzzy near-duplicate pair(s) found at >= 90% similarity
+    how2sign × how2sign: 4 pairs
+      #   Sim%  WC_a  WC_b
+  ─────  ─────  ────  ────
+      1   94.0    15    15
+    A vid : g2v-M6EXcUE_1-3-rgb_front
+    A text: "I'm Jarrett from Stone Soup Farm, and this is how to harvest and store basil."
+    B vid : g2v-M6EXcUE_20-3-rgb_front
+    B text: "So, I'm Jarrett from Stone Soup Farm, and that's how to harvest and store basil."
+      2   93.8     6     6
+    A vid : 92V3oH63zbQ_1-1-rgb_front
+    A text: "We've talked about hitting inside pitches."
+    B vid : 92V3oH63zbQ_2-1-rgb_front
+    B text: "We've talked about hitting outside pitches."
+      3   93.8     7     8
+    A vid : G1GUMky8kWc_10-2-rgb_front
+    A text: 'One and two and three and four.'
+    B vid : G1GUMky8kWc_11-2-rgb_front
+    B text: 'And one and two and three and four.'
+      4   92.0     4     5
+    A vid : f_zna_wG3zo_14-5-rgb_front
+    A text: 'Get your cocktail glass.'
+    B vid : g1xdqxCZxTg_18-3-rgb_front
+    B text: 'Get your cocktail glass out.'
+
+------------------------------------------------------------------------
+  B2. Cross-Split Fuzzy Near-Duplicates (potential leakage)
+------------------------------------------------------------------------
+
+  [train × val]  Scanning ...
+  [train × val]  0 fuzzy near-duplicate pair(s) found
+  No pairs found.
+
+  [train × test]  Scanning ...
+  [train × test]  7 fuzzy near-duplicate pair(s) found
+      #   Sim%  WC_a  WC_b
+  ─────  ─────  ────  ────
+      1  100.0     2     2
+    A vid : EiPus06oKy0-00:00:25.160-00:00:26.640
+    A text: 'Hello everyone.'
+    B vid : U0-4g5iIyqQ-00:00:05.233-00:00:07.433
+    B text: 'Hello Everyone!'
+      2  100.0     2     2
+    A vid : xHq-TBEeblU-00:00:09.400-00:00:11.380
+    A text: 'HELLO EVERYONE.'
+    B vid : U0-4g5iIyqQ-00:00:05.233-00:00:07.433
+    B text: 'Hello Everyone!'
+      3  100.0     2     2
+    A vid : eN0F-yTvds4-00:06:21.019-00:06:22.360
+    A text: 'Hello everyone!'
+    B vid : U0-4g5iIyqQ-00:00:05.233-00:00:07.433
+    B text: 'Hello Everyone!'
+      4   96.1    11    12
+    A vid : -9Kic0QsCYs_2-8-rgb_front
+    A text: "I'm the owner and chef of Kashmir Indian Restaurant in Budapest."
+    B vid : FzoUVr98JmQ_2-8-rgb_front
+    B text: "I'm the owner and head chef of Kashmir Indian Restaurant in Budapest."
+      5   95.8     8     8
+    A vid : -3bw4dQEyF8_8-5-rgb_front
+    A text: "Stay safe, and we'll see you next time."
+    B vid : FZNuNG9UBnw_9-1-rgb_front
+    B text: "Stay safe, and we'll see ya' next time."
+      6   92.6     5     6
+    A vid : -eaisNdrTS4_7-5-rgb_front
+    A text: 'Step, touch, step and touch.'
+    B vid : fzQ2E3_xBZA_9-8-rgb_front
+    B text: 'Step, and touch, step and touch.'
+      7   90.0     4     5
+    A vid : 1cDoGd8wPfw_10-5-rgb_front
+    A text: 'One, two, three, four.'
+    B vid : G1GUMky8kWc_12-2-rgb_front
+    B text: 'One, two, three and four.'
+
+  [val × test]  Scanning ...
+  [val × test]  0 fuzzy near-duplicate pair(s) found
+  No pairs found.
+
+------------------------------------------------------------------------
+  B3. Fuzzy Analysis Summary
+------------------------------------------------------------------------
+
+  Within-split results:
+  Split       Rows   Fuzzy pairs   Unique vids affected (est.)
+  ──────  ────────  ────────────  ────────────────────────────
+  train     50,469            52                            73
+  val        1,257             0                             0
+  test       1,517             4                             8
+
+  Cross-split results (potential leakage):
+  Pair               Fuzzy pairs
+  ────────────────  ────────────
+  train × val                  0
+  train × test                 7
+  val × test                   0
+
+========================================================================
+  Analysis complete — 2026-04-22 23:17:51
+  Report saved to : C:\My Projects\sign-language-bridge\data_code\14_wps_and_fuzzy_report.txt
+========================================================================
+

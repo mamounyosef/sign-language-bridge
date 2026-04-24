@@ -1,0 +1,51 @@
+Dataset Analytics Report — generated 2026-04-23 22:53:46
+============================================================
+Loading C:\My Projects\sign-language-bridge\data\6_dataset_train.tsv ...
+  46,349 rows loaded.
+
+  Saved: 01_clip_duration_distribution.png
+  Saved: 02_word_count_distribution.png
+  Saved: 03_source_breakdown_pie.png
+  Saved: 04_duration_by_source.png
+  Saved: 05_words_per_second_distribution.png
+  Saved: 06_text_length_distribution.png
+  Saved: 07_word_count_vs_duration_scatter.png
+  Saved: 08_top50_words.png
+  Saved: 09_cumulative_hours_by_source.png
+  Saved: analytics_summary.txt
+
+TRAINING SPLIT ANALYTICS SUMMARY
+==================================================
+Total clips                : 46,349
+Total video hours          : 59.74 h
+
+By source:
+  openasl      : 29,366 clips  (39.84 h)
+  how2sign     : 16,983 clips  (19.90 h)
+
+Clip duration (seconds):
+  Min    : 1.3000
+  Max    : 8.0000
+  Mean   : 4.6400
+  Median : 4.6000
+  Std    : 1.8322
+
+Word count per clip:
+  Min    : 1
+  Max    : 38
+  Mean   : 11.55
+  Median : 11.00
+  Std    : 5.28
+
+Words per second:
+  Mean   : 2.62
+  Median : 2.53
+  Std    : 0.96
+
+Total vocabulary size      : 19,856
+Total word tokens          : 527,403
+
+============================================================
+Report complete — 2026-04-23 22:53:48
+Saved to: C:\My Projects\sign-language-bridge\data_code\analytics_report.txt
+============================================================

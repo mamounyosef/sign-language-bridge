@@ -1,0 +1,257 @@
+WPS & Fuzzy Filtering Report — generated 2026-04-23 20:06:28
+========================================================================
+  Input       : data/3_dataset_{train,val,test}.tsv
+  Output      : data/4_dataset_{train,val,test}.tsv
+  Log         : C:\My Projects\sign-language-bridge\data_code\15_filter_wps_and_fuzzy.txt
+  WPS cutoff  : remove rows where WPS > 5.0
+  Fuzzy cutoff: >= 90% similarity  (word_count ±1 blocking)
+  Fuzzy engine: difflib  (block cap=300, 11 parallel workers)
+  *** Install rapidfuzz for 20-50x speedup:  pip install rapidfuzz ***
+  CPU cores   : 12  (using 11 worker(s))
+========================================================================
+
+========================================================================
+  0. LOADING INPUT FILES
+========================================================================
+  train:  50,469 rows  —  3_dataset_train.tsv
+  val  :   1,257 rows  —  3_dataset_val.tsv
+  test :   1,517 rows  —  3_dataset_test.tsv
+
+  Total input rows: 53,243
+
+========================================================================
+  STEP 1 — WPS FILTER  (remove WPS > 5.0)
+========================================================================
+
+  [train]  50,469 → 48,910  (removed 1,559 rows, 3.09%)
+    how2sign: 771 rows removed
+    openasl: 788 rows removed
+
+     #      WPS     Dur    WC  Source      vid
+  ────  ───────  ──────  ────  ──────────  ────────────────────────────────────────────────────────────
+     1   21.765    1.70    37  how2sign    BTjsEc67kyM_8-5-rgb_front
+     2   14.571    1.30    19  openasl     Lp6gueznBhs-00:01:18.000-00:01:19.304
+     3   14.483    1.45    21  openasl     Lp6gueznBhs-00:02:08.310-00:02:09.756
+     4   13.659    2.05    28  openasl     rgE2ZZ9bHKA-00:00:49.759-00:00:51.799
+     5   12.491    1.36    17  openasl     sGZi_GpK1Ro-00:07:14.759-00:07:16.120
+     6   12.000    2.00    24  openasl     9-ff2wj6Kv8-00:01:42.359-00:01:44.340
+     7   11.667    1.80    21  openasl     rgE2ZZ9bHKA-00:00:52.500-00:00:54.299
+     8   11.483    2.00    23  openasl     Lp6gueznBhs-00:01:19.304-00:01:21.307
+     9   11.453    1.66    19  openasl     iMJ9CjBX7eo-00:04:17.720-00:04:19.379
+    10   10.667    1.50    16  openasl     7IONUnzZCzk-00:04:20.459-00:04:21.939
+  ... and 1549 more rows (see full list in log or re-run with higher cap)
+
+  [val]  1,257 → 1,193  (removed 64 rows, 5.09%)
+    how2sign: 56 rows removed
+    openasl: 8 rows removed
+
+     #      WPS     Dur    WC  Source      vid
+  ────  ───────  ──────  ────  ──────────  ────────────────────────────────────────────────────────────
+     1    7.879    1.65    13  how2sign    _2FBDaOPYig_8-3-rgb_front
+     2    7.407    1.35    10  how2sign    0zvsqf23tmw_15-1-rgb_front
+     3    7.234    2.35    17  openasl     ubC82N6N1bQ-00:00:59.266-00:01:01.600
+     4    7.143    1.40    10  how2sign    3EjKvwck6ss_23-1-rgb_front
+     5    7.097    1.55    11  how2sign    0zvsqf23tmw_14-1-rgb_front
+     6    6.857    1.75    12  openasl     P0S4xXiR3Jo-00:00:34.366-00:00:36.100
+     7    6.667    2.10    14  openasl     wE-HDf4tK9Y-00:17:02.433-00:17:04.533
+     8    6.500    2.00    13  how2sign    d_V_K6ziiNA_12-8-rgb_front
+     9    6.500    2.00    13  openasl     FYdKjJCcQcw-00:01:53.633-00:01:55.633
+    10    6.486    1.85    12  how2sign    eY32ru3Nstc_4-8-rgb_front
+  ... and 54 more rows (see full list in log or re-run with higher cap)
+
+  [test]  1,517 → 1,447  (removed 70 rows, 4.61%)
+    how2sign: 62 rows removed
+    openasl: 8 rows removed
+
+     #      WPS     Dur    WC  Source      vid
+  ────  ───────  ──────  ────  ──────────  ────────────────────────────────────────────────────────────
+     1    7.333    1.50    11  how2sign    fzegqlecOD8_2-8-rgb_front
+     2    7.179    1.95    14  openasl     ubC82N6N1bQ-00:01:05.100-00:01:07.033
+     3    6.486    1.85    12  how2sign    G23G21G49dk_8-2-rgb_front
+     4    6.364    2.20    14  how2sign    g25IORxoyXE_7-10-rgb_front
+     5    6.329    3.95    25  how2sign    G19uBylwQww_9-2-rgb_front
+     6    6.222    2.25    14  how2sign    Fz-N1S0swh8_2-8-rgb_front
+     7    6.154    1.95    12  how2sign    f_zna_wG3zo_12-10-rgb_front
+     8    6.000    3.50    21  how2sign    g1z6HOJ0yRw_4-3-rgb_front
+     9    5.957    2.35    14  how2sign    G095RWKQ39g_14-1-rgb_front
+    10    5.946    1.85    11  how2sign    92V3oH63zbQ_16-1-rgb_front
+  ... and 60 more rows (see full list in log or re-run with higher cap)
+
+------------------------------------------------------------------------
+  Step 1 Summary
+------------------------------------------------------------------------
+  Split     Before   Removed     After   % removed
+  ──────  ────────  ────────  ────────  ──────────
+  train     50,469     1,559    48,910       3.09%
+  val        1,257        64     1,193       5.09%
+  test       1,517        70     1,447       4.61%
+
+========================================================================
+  STEP 2 — WITHIN-SPLIT FUZZY NEAR-DUPLICATE REMOVAL  (>= 90%)
+========================================================================
+  Keeps the first row (lowest original index) per duplicate cluster.
+
+
+------------------------------------------------------------------------
+  Split: train  (48,910 rows)
+------------------------------------------------------------------------
+    Dispatching 74 blocks to 11 workers ...
+    20/74 blocks complete ...
+    40/74 blocks complete ...
+    60/74 blocks complete ...
+    74/74 blocks complete ...
+
+  Scan complete in 142.7s  —  52 pair(s) found
+  Similarity breakdown:  100% = 35  |  95–99% = 6  |  90–94% = 11
+
+  Top 10 highest-similarity pairs (of 52 total):
+     #   Sim%  WC_a  WC_b  vid_a                                       vid_b
+  ────  ─────  ────  ────  ──────────────────────────────────────────  ──────────────────────────────────────────
+     1  100.0     1     1  lIE16P1LVhc-00:09:37.639-00:09:39.039       T6YFwhrRwh0-00:03:39.953-00:03:41.354
+     2  100.0     1     1  EiPus06oKy0-00:10:13.419-00:10:15.000       RvnMGQ187dw-00:05:17.199-00:05:18.920
+     3  100.0     1     1  IRJtyOUMIeM-00:01:39.766-00:01:41.268       pSMiqJmz4-w-00:16:09.625-00:16:11.582
+     4  100.0     1     1  BJzvPCzkZ3Q-00:03:23.302-00:03:24.871       M2gtj0jFaPw-00:05:59.886-00:06:01.360
+     5  100.0     1     1  _dOtiTnkoxk-00:01:46.072-00:01:47.873       kdQ2a7hZXlo-00:12:31.144-00:12:32.960
+     6  100.0     1     1  _dOtiTnkoxk-00:01:46.072-00:01:47.873       1zB3R6tR5Ow-00:04:21.026-00:04:24.199
+     7  100.0     1     1  kdQ2a7hZXlo-00:12:31.144-00:12:32.960       1zB3R6tR5Ow-00:04:21.026-00:04:24.199
+     8  100.0     1     1  XOM46EX4nUg-00:04:35.660-00:04:41.040       UrAmx8nDnIM-00:02:08.139-00:02:10.460
+     9  100.0     2     2  ALW91e6WPTU-00:02:25.444-00:02:29.483       A0TqKW_XJZg-00:07:41.519-00:07:43.519
+    10  100.0     2     2  n5524md29E8-00:13:14.394-00:13:15.861       ST2fOv7TFJ8-00:02:50.860-00:02:52.379
+
+  Clusters formed: 32  |  vids to remove: 41
+
+  [train]  Removed 41 rows (0.08%)  →  48,869 remain
+
+------------------------------------------------------------------------
+  Split: val  (1,193 rows)
+------------------------------------------------------------------------
+    Dispatching 60 blocks to 11 workers ...
+    20/60 blocks complete ...
+    40/60 blocks complete ...
+    60/60 blocks complete ...
+
+  Scan complete in 6.3s  —  0 pair(s) found
+  No fuzzy near-duplicates found. Nothing removed.
+
+------------------------------------------------------------------------
+  Split: test  (1,447 rows)
+------------------------------------------------------------------------
+    Dispatching 60 blocks to 11 workers ...
+    20/60 blocks complete ...
+    40/60 blocks complete ...
+    60/60 blocks complete ...
+
+  Scan complete in 5.8s  —  4 pair(s) found
+  Similarity breakdown:  100% = 0  |  95–99% = 0  |  90–94% = 4
+
+  Top 4 highest-similarity pairs (of 4 total):
+     #   Sim%  WC_a  WC_b  vid_a                                       vid_b
+  ────  ─────  ────  ────  ──────────────────────────────────────────  ──────────────────────────────────────────
+     1   94.0    15    15  g2v-M6EXcUE_1-3-rgb_front                   g2v-M6EXcUE_20-3-rgb_front
+     2   93.8     6     6  92V3oH63zbQ_1-1-rgb_front                   92V3oH63zbQ_2-1-rgb_front
+     3   93.8     7     8  G1GUMky8kWc_10-2-rgb_front                  G1GUMky8kWc_11-2-rgb_front
+     4   92.0     4     5  f_zna_wG3zo_14-5-rgb_front                  g1xdqxCZxTg_18-3-rgb_front
+
+  Clusters formed: 4  |  vids to remove: 4
+
+  [test]  Removed 4 rows (0.28%)  →  1,443 remain
+
+------------------------------------------------------------------------
+  Step 2 Summary
+------------------------------------------------------------------------
+  Split     Before   Removed     After
+  ──────  ────────  ────────  ────────
+  train     48,910        41    48,869
+  val        1,193         0     1,193
+  test       1,447         4     1,443
+
+========================================================================
+  STEP 3 — CROSS-SPLIT FUZZY LEAKAGE REMOVAL  (>= 90%)
+========================================================================
+  train × val  → remove from val
+  train × test → remove from test
+  val   × test → remove from test
+
+
+------------------------------------------------------------------------
+  train × val  (remove from 'val')
+------------------------------------------------------------------------
+    Dispatching 61 blocks to 11 workers ...
+    20/61 blocks complete ...
+    40/61 blocks complete ...
+    60/61 blocks complete ...
+    61/61 blocks complete ...
+
+  Scan complete in 20.1s  —  0 pair(s) found
+  No cross-split fuzzy pairs found.
+
+------------------------------------------------------------------------
+  train × test  (remove from 'test')
+------------------------------------------------------------------------
+    Dispatching 63 blocks to 11 workers ...
+    20/63 blocks complete ...
+    40/63 blocks complete ...
+    60/63 blocks complete ...
+    63/63 blocks complete ...
+
+  Scan complete in 24.8s  —  2 pair(s) found
+  Similarity breakdown:  100% = 0  |  95–99% = 1  |  90–94% = 1
+
+  Top 2 highest-similarity pairs (of 2 total):
+     #   Sim%  WC_a  WC_b  keep vid                                    remove vid
+  ────  ─────  ────  ────  ──────────────────────────────────────────  ──────────────────────────────────────────
+     1   96.1    11    12  -9Kic0QsCYs_2-8-rgb_front                   FzoUVr98JmQ_2-8-rgb_front
+     2   92.6     5     6  -eaisNdrTS4_7-5-rgb_front                   fzQ2E3_xBZA_9-8-rgb_front
+
+------------------------------------------------------------------------
+  val × test  (remove from 'test')
+------------------------------------------------------------------------
+    Dispatching 62 blocks to 11 workers ...
+    20/62 blocks complete ...
+    40/62 blocks complete ...
+    60/62 blocks complete ...
+    62/62 blocks complete ...
+
+  Scan complete in 5.3s  —  0 pair(s) found
+  No cross-split fuzzy pairs found.
+
+  [test]  Removed 2 leaking rows (0.14%)  →  1,441 remain
+
+------------------------------------------------------------------------
+  Step 3 Summary
+------------------------------------------------------------------------
+  Pair               Pairs   Remove from   # removed
+  ────────────────  ──────  ────────────  ──────────
+  train × val            0           val           0
+  train × test           2          test           2
+  val × test             0          test           0
+
+========================================================================
+  WRITING OUTPUT FILES
+========================================================================
+  Wrote train:  48,869 rows  →  4_dataset_train.tsv
+  Wrote val  :   1,193 rows  →  4_dataset_val.tsv
+  Wrote test :   1,441 rows  →  4_dataset_test.tsv
+
+========================================================================
+  FINAL SUMMARY — ALL STEPS COMBINED
+========================================================================
+
+  Split    Original   Step1 WPS   Step2 Fuzz   Step3 Leak     Final   Total lost   % lost
+  ──────  ─────────  ──────────  ───────────  ───────────  ────────  ───────────  ───────
+  train      50,469       1,559           41            0    48,869        1,600    3.17%
+  val         1,257          64            0            0     1,193           64    5.09%
+  test        1,517          70            4            2     1,441           76    5.01%
+  ──────  ─────────  ──────────  ───────────  ───────────  ────────  ───────────  ───────
+  TOTAL      53,243       1,693           45            2    51,503        1,740    3.27%
+
+  Output files:
+    4_dataset_train.tsv  (48,869 rows)
+    4_dataset_val.tsv  (1,193 rows)
+    4_dataset_test.tsv  (1,441 rows)
+
+========================================================================
+  Filtering complete — 2026-04-23 20:09:54
+  Report saved to: C:\My Projects\sign-language-bridge\data_code\15_filter_wps_and_fuzzy.txt
+========================================================================
+

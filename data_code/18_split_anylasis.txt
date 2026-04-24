@@ -1,0 +1,117 @@
+Split & Source Balance Analysis — generated 2026-04-23 21:39:34
+========================================================================
+  Input : data/5_dataset_{train,val,test}.tsv
+  Log   : C:\My Projects\sign-language-bridge\data_code\18_split_anylasis.txt
+========================================================================
+
+========================================================================
+  0. LOADING
+========================================================================
+  train:  48,865 rows
+  val  :   1,193 rows
+  test :   1,441 rows
+
+========================================================================
+  1. SPLIT SIZES
+========================================================================
+
+  Split      Clips     Hours      Tokens     Vocab    %Total
+  ──────  ────────  ────────  ──────────  ────────  ────────
+  train     48,865     63.24     554,178    20,251     94.9%
+  val        1,193      1.41      14,352     2,778      2.3%
+  test       1,441      1.76      17,731     3,060      2.8%
+  ──────  ────────  ────────  ──────────  ────────  ────────
+  TOTAL     51,499     66.40     586,261    20,762
+
+========================================================================
+  2. SOURCE BALANCE PER SPLIT
+========================================================================
+
+  Split       how2sign       openasl     Total
+  ──────  ────────────  ────────────  ────────
+  train   17,029 (34.8%)  31,836 (65.2%)    48,865
+  val        780 (65.4%)     413 (34.6%)     1,193
+  test     1,062 (73.7%)     379 (26.3%)     1,441
+
+  Overall (all splits combined):
+    how2sign      :  18,871 clips  (36.6%)
+    openasl       :  32,628 clips  (63.4%)
+
+========================================================================
+  3. CROSS-SPLIT SOURCE RATIO SIMILARITY
+========================================================================
+
+  Ideal: val and test should mirror the train source ratio.
+
+  Split   how2sign ratio   openasl ratio  Δ from train
+  ──────  ──────────────  ──────────────  ─────────────
+  train            0.348           0.652  ← reference
+  val              0.654           0.346  avg Δ = 0.305
+  test             0.737           0.263  avg Δ = 0.388
+
+  (avg Δ is mean absolute difference in source ratio vs train;
+   < 0.05 = well-balanced,  > 0.10 = notable skew)
+
+========================================================================
+  4. DURATION & WORD-COUNT STATISTICS
+========================================================================
+
+  Duration (seconds):
+  Split      Min     p25    Median      Mean     p75     p95       Max       Std
+  ──────  ──────  ──────  ────────  ────────  ──────  ──────  ────────  ────────
+  train     1.30    3.12      4.62      4.66    6.15    7.65      8.00      1.83
+  val       1.35    2.75      4.10      4.24    5.55    7.40      8.00      1.76
+  test      1.30    2.90      4.25      4.39    5.85    7.45      8.00      1.77
+
+  Word count:
+  Split      Min     p25    Median      Mean     p75     p95       Max       Std
+  ──────  ──────  ──────  ────────  ────────  ──────  ──────  ────────  ────────
+  train     1.00    8.00     11.00     11.52   15.00   21.00     38.00      5.27
+  val       1.00    8.00     11.00     12.11   15.00   22.00     31.00      5.36
+  test      1.00    8.00     12.00     12.37   16.00   23.00     32.00      5.56
+
+========================================================================
+  5. SHORT-CLIP AUDIT  (word_count ≤ 2  or  duration_sec < 0.5)
+========================================================================
+
+  [train]  334 short clips  (0.68% of split)
+    word_count ≤ 2   : 334
+    duration < 0.5 s : 0
+    source openasl       : 309
+    source how2sign      : 25
+    Examples (up to 5):
+      dur=1.75s  wc=2  text='Even strokes.'
+      dur=2.15s  wc=2  text='Step, touch.'
+      dur=1.90s  wc=2  text='Squatting down.'
+      dur=1.50s  wc=2  text='Now tortillas.'
+      dur=1.40s  wc=2  text='Close again.'
+
+  [val]  5 short clips  (0.42% of split)
+    word_count ≤ 2   : 5
+    duration < 0.5 s : 0
+    source openasl       : 3
+    source how2sign      : 2
+    Examples (up to 5):
+      dur=2.35s  wc=2  text='Inhale, exhale.'
+      dur=1.80s  wc=2  text='Play, woohoo.'
+      dur=1.95s  wc=2  text='Stay positive.'
+      dur=2.65s  wc=1  text='Dating.'
+      dur=5.05s  wc=1  text='Uncle?'
+
+  [test]  10 short clips  (0.69% of split)
+    word_count ≤ 2   : 10
+    duration < 0.5 s : 0
+    source how2sign      : 5
+    source openasl       : 5
+    Examples (up to 5):
+      dur=1.45s  wc=2  text="We're back."
+      dur=1.40s  wc=2  text='Sometimes, confusion.'
+      dur=1.70s  wc=2  text='And there.'
+      dur=1.80s  wc=2  text='Pressing, compressing.'
+      dur=1.60s  wc=2  text='One, two.'
+
+========================================================================
+  Analysis complete — 2026-04-23 21:39:34
+  Report saved to: C:\My Projects\sign-language-bridge\data_code\18_split_anylasis.txt
+========================================================================
+

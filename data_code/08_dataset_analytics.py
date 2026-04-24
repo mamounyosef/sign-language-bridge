@@ -23,7 +23,9 @@ Figures produced:
 
 import csv
 import re
+import sys
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 import matplotlib
@@ -32,9 +34,23 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
 
+class _Tee:
+    def __init__(self, filepath):
+        self._file = open(filepath, "w", encoding="utf-8")
+        self._stdout = sys.__stdout__
+    def write(self, data):
+        self._stdout.write(data)
+        self._file.write(data)
+    def flush(self):
+        self._stdout.flush()
+        self._file.flush()
+    def close(self):
+        self._file.close()
+
+
 # =============================================================================
 DATA_DIR     = Path(r"C:\My Projects\sign-language-bridge\data")
-TSV_PATH     = DATA_DIR / "2_dataset_train.tsv"
+TSV_PATH     = DATA_DIR / "6_dataset_train.tsv"
 OUT_DIR      = Path(r"C:\My Projects\sign-language-bridge\images")
 # =============================================================================
 
@@ -83,6 +99,13 @@ def plot_histogram(values, title, xlabel, filename, color, bins=50, xlim=None):
 
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    _log_path = Path(__file__).resolve().parent / "analytics_report.txt"
+    _tee = _Tee(_log_path)
+    sys.stdout = _tee
+    _run_ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"Dataset Analytics Report — generated {_run_ts}")
+    print("=" * 60)
 
     print(f"Loading {TSV_PATH} ...")
     rows = load_tsv(TSV_PATH)
@@ -307,6 +330,15 @@ def main():
 
     print()
     print("\n".join(lines))
+
+    print()
+    print("=" * 60)
+    print(f"Report complete — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Saved to: {_log_path}")
+    print("=" * 60)
+
+    sys.stdout = sys.__stdout__
+    _tee.close()
 
 
 if __name__ == "__main__":
