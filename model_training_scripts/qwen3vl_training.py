@@ -136,6 +136,7 @@ CONFIG = {
         'q_proj', 'k_proj', 'v_proj', 'o_proj',  # LM attention projections
         'gate_proj', 'up_proj', 'down_proj',      # LM MLP projections
     ],
+
     'lora_t2_r': 32,                             
     'lora_t2_alpha': 64,
     'lora_t2_modules': [
@@ -144,6 +145,7 @@ CONFIG = {
         'pos_embed',                             # Vision positional embeddings (Embedding)
 
     ],
+    
     'lora_t3_r': 8,
     'lora_t3_alpha': 16,
     'lora_t3_modules': [                         # Remaining trainable layers (Linear + Embedding)
@@ -176,16 +178,16 @@ CONFIG = {
 
     # ── Learning Rates (per-tier; each tier owns its intrinsic peak/floor) ──
     # Tier 1 (LM LoRA): attn + MLP. Active only during Phase 2.
-    'lr_tier1_lm':          3e-5,
+    'lr_tier1':             3e-5,
     'min_lr_tier1':         3e-7,
     # Tier 2 (Vision LoRA). Active from step 0 to end (uninterrupted through phase transition).
-    'lr_tier2_vision':      5e-5,
+    'lr_tier2':             5e-5,
     'min_lr_tier2':         5e-7,
     # Tier 3 (Head LoRA): lm_head. Active only during Phase 2.
-    'lr_tier3_embed_head':  2e-5,
+    'lr_tier3':             2e-5,
     'min_lr_tier3':         2e-7,
     # Tier 4 (InfoNCE projections: vision_proj + text_proj). Active from step 0 to end.
-    'lr_tier4_projections': 1e-4,
+    'lr_tier4':             1e-4,
     'min_lr_tier4':         1e-6,
 
     # Single shared warmup ratio; each tier applies it against its own active-step count.
@@ -257,9 +259,9 @@ CONFIG = {
     # ─────────────────────────────────────────────────────────────────────────
     'lr_override': {
         'enabled': False,                   # Set True to apply, False after resuming
-        'lr_tier1_lm':          1e-5,       # peak LR for Tier 1 (LM attn + MLP)
-        'lr_tier2_vision':      5e-5,       # peak LR for Tier 2 (Vision encoder)
-        'lr_tier3_embed_head':  1e-5,       # peak LR for Tier 3 (Embed + LM head)
+        'lr_tier1':             1e-5,       # peak LR for Tier 1 (LM attn + MLP)
+        'lr_tier2':             5e-5,       # peak LR for Tier 2 (Vision encoder)
+        'lr_tier3':             1e-5,       # peak LR for Tier 3 (Embed + LM head)
         'min_lr_tier1':         1e-6,       # Cosine floor for Tier 1
         'min_lr_tier2':         5e-7,       # Cosine floor for Tier 2
         'min_lr_tier3':         1e-6,       # Cosine floor for Tier 3
@@ -1776,9 +1778,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
     if train_config.get('wait_for_manual_start', False):
         input("Press Enter to start training...")
-    print("\n" + "=" * 60)
-    print("🚀 TRAINING STARTED")
-    print("=" * 60 + "\n")
+    print("\n" + "━" * 80)
+    print("  🚀  TRAINING STARTED")
+    print("━" * 80 + "\n")
     if start_global_step > 0:
         print(f"  ▶ Resuming training from step {start_global_step}\n")
 
@@ -1860,10 +1862,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 print(f"  🧊 Data augmentation: OFF — training on clean data (augmentation starts at epoch {aug_start_epoch})")
             elif should_aug and not was_enabled:
                 print("")
-                print("  " + "=" * 55)
-                print("  🔥🎨 DATA AUGMENTATION ACTIVATED! 🎨🔥")
-                print(f"  📊 Epoch {epoch}: switching from clean → augmented data")
-                print("  " + "=" * 55)
+                print("  " + "━" * 70)
+                print("    🔥🎨  DATA AUGMENTATION ACTIVATED  🎨🔥")
+                print(f"    Epoch {epoch}: switching from clean → augmented data")
+                print("  " + "━" * 70)
                 print("")
             else:
                 print(f"  🎨 Data augmentation: ON")
@@ -1894,9 +1896,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
             else:
                 print(f"  ⏭️  Resuming mid-epoch: skipping {micro_steps_already_processed} micro-batches (iterate-and-discard fallback)")
 
-        # Number of micro-batches the loader will actually yield this epoch
-        # (may be less than steps_per_epoch when resuming mid-epoch via set_skip).
-        _actual_steps_this_epoch = steps_per_epoch - micro_steps_already_processed
+        # _abs_micro_offset is 0 on the fallback path (loader yields all batches), so this is correct for both resume paths.
+        _actual_steps_this_epoch = steps_per_epoch - _abs_micro_offset
 
         for micro_step, batch in enumerate(train_loader):
 
@@ -2195,11 +2196,11 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                 # ── Phase transition check (only once) ──
                 if current_phase == 1 and global_step == phase_transition_step:
-                    print(f"\n{'='*80}")
-                    print(f"▶  PHASE 1 → PHASE 2  (optimizer step {global_step} / {total_optimizer_steps})")
-                    print(f"   Activating Tier 1 (LM LoRA) and Tier 3 (Head LoRA)")
-                    print(f"   Tier 2 (Vision) and Tier 4 (Projections) continue uninterrupted")
-                    print(f"{'='*80}\n")
+                    print(f"\n{'━' * 80}")
+                    print(f"  ▶  PHASE 1 → PHASE 2   (optimizer step {global_step} / {total_optimizer_steps})")
+                    print(f"     Activating Tier 1 (LM LoRA) and Tier 3 (Head LoRA)")
+                    print(f"     Tier 2 (Vision) and Tier 4 (Projections) continue uninterrupted")
+                    print(f"{'━' * 80}\n")
 
                     # Flip requires_grad for Tier 1 and Tier 3 (stashed on model at setup)
                     for p in model._t1_params:
@@ -2208,9 +2209,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         p.requires_grad = True
 
                     # Build Tier 1 and Tier 3 optimizers + schedulers (tier-local warmup)
-                    _t1_peak, _t1_floor = CONFIG['lr_t1'], CONFIG['lr_t1_floor']
-                    _t3_peak, _t3_floor = CONFIG['lr_t3'], CONFIG['lr_t3_floor']
-                    _betas = (CONFIG.get('adam_beta1', 0.9), CONFIG.get('adam_beta2', 0.999))
+                    _t1_peak, _t1_floor = CONFIG['lr_tier1'], CONFIG['min_lr_tier1']
+                    _t3_peak, _t3_floor = CONFIG['lr_tier3'], CONFIG['min_lr_tier3']
+                    _betas = CONFIG['adam_betas']
                     _wd = CONFIG.get('weight_decay', 0.0)
                     if CONFIG.get('use_8bit_adam', True) and _BNB_AVAILABLE:
                         opt_tier1 = bnb.optim.PagedAdamW8bit(model._t1_params, lr=_t1_peak, betas=_betas, weight_decay=_wd)
@@ -2313,19 +2314,14 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                     train_ppl = math.exp(min(avg_loss, MAX_PPL_CAP))
 
-                    print("=" * 160)
+                    print("─" * 160)
                     print(
-                        f"[P{current_phase}][Step {global_step:>6d}/{total_optimizer_steps}] "
-                        f"[Epoch {epoch:>2d}/{num_epochs}] "
-                        f"Train Loss: {avg_loss:.4f} | "
-                        f"Contrast: {avg_contrast:.4f} | "
-                        f"PPL: {train_ppl:.3f} | "
-                        f"LR[T1/T2/T3/T4]: {lr_t1:.2e}/{lr_t2:.2e}/{lr_t3:.2e}/{lr_t4:.2e} | "
-                        f"GN[g/t1/t2/t3/t4]: {avg_grad_norm:.2f}/{avg_gn_t1:.2f}/{avg_gn_t2:.2f}/{avg_gn_t3:.2f}/{avg_gn_t4:.2f} | "
-                        f"Speed: {speed:.3f} s/s | "
-                        f"VRAM: {cuda_mem:.2f}/{cuda_peak:.2f} GB | "
-                        f"Elapsed: {format_time(elapsed)} | "
-                        f"ETA: {format_time(eta_seconds)}"
+                        f"  P{current_phase} │ Step {global_step:>6d}/{total_optimizer_steps} │ Epoch {epoch:>2d}/{num_epochs} │ "
+                        f"loss {avg_loss:.4f}  contrast {avg_contrast:.4f}  ppl {train_ppl:.3f}\n"
+                        f"      lr   T1 {lr_t1:.2e}  T2 {lr_t2:.2e}  T3 {lr_t3:.2e}  T4 {lr_t4:.2e}\n"
+                        f"      gn   global {avg_grad_norm:.2f}   T1 {avg_gn_t1:.2f}  T2 {avg_gn_t2:.2f}  T3 {avg_gn_t3:.2f}  T4 {avg_gn_t4:.2f}\n"
+                        f"      {speed:.3f} step/s │ vram {cuda_mem:.2f}/{cuda_peak:.2f} GB │ "
+                        f"elapsed {format_time(elapsed)} │ ETA {format_time(eta_seconds)}"
                     )
 
                     train_csv_logger.log({
@@ -2381,35 +2377,32 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     _should_eval = ((global_step - eval_warmup_threshold) % eval_every == 0)
 
                 if _should_eval:
-                    print(f"\n{'─' * 60}")
-                    print(f"  📊 Validation @ Step {global_step} / Epoch {epoch}")
-                    print(f"{'─' * 60}")
+                    print(f"\n{'━' * 80}")
+                    print(f"  📊  Validation  ·  Step {global_step}  ·  Epoch {epoch}")
+                    print(f"{'━' * 80}")
 
                     val_results = validate(model, processor, val_loader, val_dataset, train_config, val_collator=_val_collator)
-
-                    print(f"  Val Loss: {val_results['val_loss']:.4f} | "
-                          f"Val PPL: {val_results['val_ppl']:.3f} | "
-                          f"BLEU-1: {val_results['bleu1']:.4f} | "
-                          f"BLEU-2: {val_results['bleu2']:.4f} | "
-                          f"BLEU-4: {val_results['bleu4']:.4f} | "
-                          f"ROUGE-L: {val_results['rouge_l']:.3f}% | "
-                          f"WER: {val_results['wer']:.2f}% | "
-                          f"METEOR: {val_results['meteor']:.2f}%")
-                    print(f"  (Evaluated on {val_results['num_eval_batches']} batches, "
-                          f"generated {val_results['num_gen_samples']} samples)")
+                    print(f"\n{'━' * 80}")
+                    print(f"  Val Loss {val_results['val_loss']:.4f}   Val PPL {val_results['val_ppl']:.3f}   "
+                          f"BLEU-1 {val_results['bleu1']:.4f}   BLEU-2 {val_results['bleu2']:.4f}   "
+                          f"BLEU-4 {val_results['bleu4']:.4f}")
+                    print(f"  ROUGE-L {val_results['rouge_l']:.2f}%   "
+                          f"WER {val_results['wer']:.2f}%   METEOR {val_results['meteor']:.2f}%")
+                    print(f"  ({val_results['num_eval_batches']} eval batches · "
+                          f"{val_results['num_gen_samples']} generated samples)")
 
                     if val_results['sample_pairs']:
-                        print(f"\n  Sample Generations:")
+                        print(f"\n  Sample generations")
                         for i, (ref, hyp, src) in enumerate(val_results['sample_pairs'], 1):
-                            print(f"    [{i}] ({src}) REF: \"{ref}\"")
-                            print(f"            HYP: \"{hyp}\"")
+                            print(f"    [{i}] ({src})")
+                            print(f"        REF  \"{ref}\"")
+                            print(f"        HYP  \"{hyp}\"")
 
                     # Per-source breakdown
                     ps = val_results['per_source']
                     _w = 60
-                    print(f"\n{'─' * _w}")
-                    print(f"  {'METRIC':<12}  {'COMBINED':>10}  {'HOW2SIGN':>10}  {'OPENASL':>10}")
-                    print(f"  {'─'*12}  {'─'*10}  {'─'*10}  {'─'*10}")
+                    print(f"\n  {'metric':<10}  {'combined':>10}  {'how2sign':>10}  {'openasl':>10}")
+                    print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
                     _overall = {k: val_results[k] for k in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor')}
                     _rows = [
                         ('BLEU-1',   'bleu1',   '{:.2f}'),
@@ -2423,18 +2416,16 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         _ov  = _fmt.format(_overall[_key])
                         _h2s = _fmt.format(ps['how2sign'][_key]) if ps['how2sign']['n'] > 0 else '   —'
                         _osl = _fmt.format(ps['openasl'][_key])  if ps['openasl']['n']  > 0 else '   —'
-                        print(f"  {_label:<12}  {_ov:>10}  {_h2s:>10}  {_osl:>10}")
-                    print(f"  {'─'*12}  {'─'*10}  {'─'*10}  {'─'*10}")
-                    print(f"  {'Samples':<12}  {val_results['num_gen_samples']:>10}  "
+                        print(f"  {_label:<10}  {_ov:>10}  {_h2s:>10}  {_osl:>10}")
+                    print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
+                    print(f"  {'samples':<10}  {val_results['num_gen_samples']:>10}  "
                           f"{ps['how2sign']['n']:>10}  {ps['openasl']['n']:>10}")
-                    print(f"{'─' * _w}")
 
                     # Compute distinct_N on all generated hypotheses (mode-collapse detector)
                     _all_hyps = [hyp for (_r, hyp, _s) in val_results.get('all_pairs', [])]
                     _distinct_n = CONFIG.get('log_distinct_n', 2)
                     _distinct_val = compute_distinct_n(_all_hyps, n=_distinct_n)
-                    print(f"  distinct_{_distinct_n}: {_distinct_val:.4f} "
-                          f"(diversity; low = mode-collapse)")
+                    print(f"  distinct-{_distinct_n}  {_distinct_val:.4f}  (diversity; low = mode collapse)")
                     tb_writer.add_scalar(f'val/distinct_{_distinct_n}', _distinct_val, global_step)
 
                     # Log to CSV
@@ -2487,9 +2478,12 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     for _src in ('how2sign', 'openasl'):
                         _m = val_results['per_source'][_src]
                         if _m['n'] > 0:
+                            tb_writer.add_scalar(f'BLEU/BLEU-1_{_src}', _m['bleu1'], global_step)
+                            tb_writer.add_scalar(f'BLEU/BLEU-2_{_src}', _m['bleu2'], global_step)
                             tb_writer.add_scalar(f'BLEU/BLEU-4_{_src}', _m['bleu4'], global_step)
-                            tb_writer.add_scalar(f'ROUGE-L_{_src}',   _m['rouge_l'], global_step)
-                            tb_writer.add_scalar(f'WER_{_src}',       _m['wer'], global_step)
+                            tb_writer.add_scalar(f'ROUGE-L_{_src}',     _m['rouge_l'], global_step)
+                            tb_writer.add_scalar(f'WER_{_src}',         _m['wer'], global_step)
+                            tb_writer.add_scalar(f'METEOR_{_src}',      _m['meteor'], global_step)
 
                     # Early stopping / best model
                     elapsed = time.time() - training_start
@@ -2497,21 +2491,21 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         best_val_loss = val_results['val_loss']
                         evals_without_improvement = 0
                         ckpt_manager.save_best(
-                            model, optimizer, _sched[0], epoch, global_step,
+                            model, opt_tier2, sched_tier2, epoch, global_step,
                             (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
                             best_val_loss,
                             evals_without_improvement, elapsed
                         )
-                        print(f"\n  ⭐ New best val_loss: {best_val_loss:.4f}")
+                        print(f"\n  ⭐  New best val_loss: {best_val_loss:.4f}")
                     else:
                         evals_without_improvement += 1
-                        print(f"\n  Val loss did not improve. ({evals_without_improvement}/{patience} evals without improvement)")
+                        print(f"\n  ⚠️  No improvement  ({evals_without_improvement}/{patience} evals)")
 
                     if evals_without_improvement >= patience:
-                        print("=" * 60)
-                        print(f"🛑 EARLY STOPPING triggered at step {global_step}, epoch {epoch}")
-                        print(f"   Best val loss: {best_val_loss:.4f}")
-                        print("=" * 60)
+                        print("\n" + "━" * 80)
+                        print(f"  🛑  EARLY STOPPING  at step {global_step}, epoch {epoch}")
+                        print(f"      Best val loss: {best_val_loss:.4f}")
+                        print("━" * 80)
                         return global_step, best_val_loss
 
                     # Reclaim VRAM from validation before resuming training
@@ -2519,13 +2513,13 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     gc.collect()
                     torch.cuda.empty_cache()
 
-                    print(f"{'─' * 60}\n")
+                    print(f"{'━' * 80}\n")
 
                 # ── Periodic Checkpoint ──
                 if global_step % save_every == 0:
                     elapsed = time.time() - training_start
                     ckpt_manager.save_periodic(
-                        model, optimizer, _sched[0], epoch, global_step,
+                        model, opt_tier2, sched_tier2, epoch, global_step,
                         (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
                         best_val_loss,
                         evals_without_improvement, elapsed
@@ -2539,10 +2533,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
         epoch_avg_loss = ((epoch_loss_sum / max(epoch_microbatches, 1)).item()
                           if epoch_loss_sum is not None else 0.0)
         epoch_loss_sum = None  # release the accumulated loss tensor for the next epoch
-        print(f"\n{'=' * 60}")
-        print(f"  ✅ Epoch {epoch}/{num_epochs} Complete")
-        print(f"  Avg Train Loss: {epoch_avg_loss:.4f} | Time: {format_time(epoch_time)}")
-        print(f"{'=' * 60}\n")
+        print(f"\n{'━' * 80}")
+        print(f"  ✅  Epoch {epoch}/{num_epochs} Complete")
+        print(f"      Avg train loss: {epoch_avg_loss:.4f}  ·  Time: {format_time(epoch_time)}")
+        print(f"{'━' * 80}\n")
 
     return global_step, best_val_loss
 
@@ -2593,10 +2587,10 @@ def main():
 
     # ── Print Configuration Summary ──
     _W = 72
-    _SEP = "=" * _W
+    _SEP = "━" * _W
     effective_batch = CONFIG['batch_size'] * CONFIG['grad_accum_steps']
     print("\n" + _SEP)
-    print("  QWEN3-VL TRAINING CONFIGURATION")
+    print("  🔧  QWEN3-VL TRAINING CONFIGURATION")
     print(_SEP)
 
     print("\n  [ ENVIRONMENT ]")
@@ -2655,11 +2649,11 @@ def main():
     print(f"    DataLoader workers     : {CONFIG['train_num_workers']} train / {CONFIG['val_num_workers']} val")
 
     print("\n  [ LEARNING RATE ]")
-    warmup_info = f"{CONFIG['warmup_steps']} steps" if CONFIG['warmup_steps'] else f"{CONFIG['warmup_ratio']:.1%} of total"
+    warmup_info = f"{CONFIG['warmup_ratio']:.1%} of total"
     print(f"    Warmup                 : {warmup_info}")
-    print(f"    Tier 1 (LM LoRA)       : {CONFIG['lr_tier1_lm']:.2e}  →  {CONFIG['min_lr_tier1']:.2e}  (cosine floor)")
-    print(f"    Tier 2 (Vision LoRA)   : {CONFIG['lr_tier2_vision']:.2e}  →  {CONFIG['min_lr_tier2']:.2e}  (cosine floor)")
-    print(f"    Tier 3 (Embed/Head)    : {CONFIG['lr_tier3_embed_head']:.2e}  →  {CONFIG['min_lr_tier3']:.2e}  (cosine floor)")
+    print(f"    Tier 1 (LM LoRA)       : {CONFIG['lr_tier1']:.2e}  →  {CONFIG['min_lr_tier1']:.2e}  (cosine floor)")
+    print(f"    Tier 2 (Vision LoRA)   : {CONFIG['lr_tier2']:.2e}  →  {CONFIG['min_lr_tier2']:.2e}  (cosine floor)")
+    print(f"    Tier 3 (Embed/Head)    : {CONFIG['lr_tier3']:.2e}  →  {CONFIG['min_lr_tier3']:.2e}  (cosine floor)")
 
     print("\n  [ EVALUATION & CHECKPOINTING ]")
     print(f"    Eval every             : {CONFIG['eval_every_steps']} steps  (warmup: {CONFIG['eval_every_steps_warmup']} until step {CONFIG['eval_warmup_threshold']})")
@@ -2981,9 +2975,9 @@ def main():
     }
 
     _W = 80
-    print("\n" + "=" * _W)
-    print("  MODEL PARAMETER SUMMARY")
-    print("=" * _W)
+    print("\n" + "━" * _W)
+    print("  📊  MODEL PARAMETER SUMMARY")
+    print("━" * _W)
     print(f"  {'Tier':<10} {'Description':<28} {'Rank':>5} {'LoRA Layers':>12} {'Trainable Params':>18}")
     print("  " + "─" * (_W - 2))
     for _tl in ['Tier 1', 'Tier 2', 'Tier 3', 'Tier 4']:
@@ -2998,7 +2992,7 @@ def main():
     print(f"  {'TOTAL':<10} {'All parameters':<28} {'':>5} {'':>12} {_total_params:>18,}")
     print("  " + "─" * (_W - 2))
     print(f"  Trainable: {_trainable_params:,} / {_total_params:,}  ({_trainable_params / _total_params * 100:.4f}% of total model)")
-    print("=" * _W)
+    print("━" * _W)
     del _t1_set, _t2_set, _t3_set, _lora_marks, _tier_params, _tier_layers, _t4_projections
     del _lora_total, _frozen_params, _tier_meta, _W
 
@@ -3108,10 +3102,10 @@ def main():
             f"Examples: {unclassified[:5]}"
         )
 
-    print(f"  Tier 1 (LM LoRA):          {len(t1_params)} params  @ peak={CONFIG['lr_t1']:.2e}, floor={CONFIG['lr_t1_floor']:.2e}")
-    print(f"  Tier 2 (Vision LoRA):      {len(t2_params)} params  @ peak={CONFIG['lr_t2']:.2e}, floor={CONFIG['lr_t2_floor']:.2e}")
-    print(f"  Tier 3 (Head LoRA):        {len(t3_params)} params  @ peak={CONFIG['lr_t3']:.2e}, floor={CONFIG['lr_t3_floor']:.2e}")
-    print(f"  Tier 4 (InfoNCE proj):     {len(t4_params)} params  @ peak={CONFIG['lr_t4']:.2e}, floor={CONFIG['lr_t4_floor']:.2e}")
+    print(f"  Tier 1 (LM LoRA):          {len(t1_params)} params  @ peak={CONFIG['lr_tier1']:.2e}, floor={CONFIG['min_lr_tier1']:.2e}")
+    print(f"  Tier 2 (Vision LoRA):      {len(t2_params)} params  @ peak={CONFIG['lr_tier2']:.2e}, floor={CONFIG['min_lr_tier2']:.2e}")
+    print(f"  Tier 3 (Head LoRA):        {len(t3_params)} params  @ peak={CONFIG['lr_tier3']:.2e}, floor={CONFIG['min_lr_tier3']:.2e}")
+    print(f"  Tier 4 (InfoNCE proj):     {len(t4_params)} params  @ peak={CONFIG['lr_tier4']:.2e}, floor={CONFIG['min_lr_tier4']:.2e}")
     print(f"  Warmup ratio (all tiers): {CONFIG['warmup_ratio']:.3f} (applied to each tier's active-step lifetime)")
 
     # Stash tier param lists on the model so train() can access them at phase transition
@@ -3136,23 +3130,25 @@ def main():
     print(f"  Phase 2 duration: {phase2_steps} steps (T1, T2, T3, T4 active)")
 
     # ── Create Tier 2 and Tier 4 optimizers (active from step 0) ──
-    def _create_optimizer(tier_params, tier_name):
+    def _create_optimizer(tier_params, tier_name, peak_lr):
         """Create PagedAdamW8bit or AdamW for given tier params."""
         if CONFIG['use_8bit_adam'] and _BNB_AVAILABLE:
             return bnb.optim.PagedAdamW8bit(
                 tier_params,
+                lr=peak_lr,
                 betas=CONFIG['adam_betas'],
                 weight_decay=CONFIG['weight_decay'],
             )
         else:
             return torch.optim.AdamW(
                 tier_params,
+                lr=peak_lr,
                 betas=CONFIG['adam_betas'],
                 weight_decay=CONFIG['weight_decay'],
             )
 
-    opt_tier2 = _create_optimizer(t2_params, "Tier 2")
-    opt_tier4 = _create_optimizer(t4_params, "Tier 4")
+    opt_tier2 = _create_optimizer(t2_params, "Tier 2", CONFIG['lr_tier2'])
+    opt_tier4 = _create_optimizer(t4_params, "Tier 4", CONFIG['lr_tier4'])
 
     # Tier 1 and 3 optimizers are created at phase transition (will be None initially)
     opt_tier1 = None
@@ -3163,12 +3159,12 @@ def main():
     # T2 and T4 active from step 0, so total_active_steps = total_optimizer_steps
     sched_tier2 = torch.optim.lr_scheduler.LambdaLR(
         opt_tier2,
-        lr_lambda=_make_tier_lambda(CONFIG['lr_t2'], CONFIG['lr_t2_floor'],
+        lr_lambda=_make_tier_lambda(CONFIG['lr_tier2'], CONFIG['min_lr_tier2'],
                                      total_optimizer_steps, CONFIG['warmup_ratio'])
     )
     sched_tier4 = torch.optim.lr_scheduler.LambdaLR(
         opt_tier4,
-        lr_lambda=_make_tier_lambda(CONFIG['lr_t4'], CONFIG['lr_t4_floor'],
+        lr_lambda=_make_tier_lambda(CONFIG['lr_tier4'], CONFIG['min_lr_tier4'],
                                      total_optimizer_steps, CONFIG['warmup_ratio'])
     )
 
@@ -3181,10 +3177,10 @@ def main():
     cosine_steps_t2 = total_optimizer_steps - warmup_steps_t2
     print(f"\n📈 LR Schedules (per-tier cosine with linear warmup):")
     print(f"  Warmup: {warmup_steps_t2} steps | Cosine: {cosine_steps_t2} steps")
-    print(f"  T1 LM:       {CONFIG['lr_t1']:.2e} → {CONFIG['lr_t1_floor']:.2e}  (born at phase transition)")
-    print(f"  T2 Vision:   {CONFIG['lr_t2']:.2e} → {CONFIG['lr_t2_floor']:.2e}  (from step 0)")
-    print(f"  T3 Head:     {CONFIG['lr_t3']:.2e} → {CONFIG['lr_t3_floor']:.2e}  (born at phase transition)")
-    print(f"  T4 Proj:     {CONFIG['lr_t4']:.2e} → {CONFIG['lr_t4_floor']:.2e}  (from step 0)")
+    print(f"  T1 LM:       {CONFIG['lr_tier1']:.2e} → {CONFIG['min_lr_tier1']:.2e}  (born at phase transition)")
+    print(f"  T2 Vision:   {CONFIG['lr_tier2']:.2e} → {CONFIG['min_lr_tier2']:.2e}  (from step 0)")
+    print(f"  T3 Head:     {CONFIG['lr_tier3']:.2e} → {CONFIG['min_lr_tier3']:.2e}  (born at phase transition)")
+    print(f"  T4 Proj:     {CONFIG['lr_tier4']:.2e} → {CONFIG['min_lr_tier4']:.2e}  (from step 0)")
 
     # ── Resume optimizer/scheduler state ──
     if training_state is not None:
@@ -3200,20 +3196,20 @@ def main():
             # If resuming into Phase 2, restore T1 and T3 optimizer/scheduler states
             if start_global_step >= phase_transition_step and 'opt_tier1_state_dict' in training_state:
                 # Create Tier 1 and Tier 3 optimizers
-                opt_tier1 = _create_optimizer(t1_params, "Tier 1")
-                opt_tier3 = _create_optimizer(t3_params, "Tier 3")
+                opt_tier1 = _create_optimizer(t1_params, "Tier 1", CONFIG['lr_tier1'])
+                opt_tier3 = _create_optimizer(t3_params, "Tier 3", CONFIG['lr_tier3'])
                 opt_tier1.load_state_dict(training_state['opt_tier1_state_dict'])
                 opt_tier3.load_state_dict(training_state['opt_tier3_state_dict'])
 
                 # Create Tier 1 and Tier 3 schedulers
                 sched_tier1 = torch.optim.lr_scheduler.LambdaLR(
                     opt_tier1,
-                    lr_lambda=_make_tier_lambda(CONFIG['lr_t1'], CONFIG['lr_t1_floor'],
+                    lr_lambda=_make_tier_lambda(CONFIG['lr_tier1'], CONFIG['min_lr_tier1'],
                                                  phase2_steps, CONFIG['warmup_ratio'])
                 )
                 sched_tier3 = torch.optim.lr_scheduler.LambdaLR(
                     opt_tier3,
-                    lr_lambda=_make_tier_lambda(CONFIG['lr_t3'], CONFIG['lr_t3_floor'],
+                    lr_lambda=_make_tier_lambda(CONFIG['lr_tier3'], CONFIG['min_lr_tier3'],
                                                  phase2_steps, CONFIG['warmup_ratio'])
                 )
                 sched_tier1.load_state_dict(training_state['sched_tier1_state_dict'])
@@ -3332,12 +3328,12 @@ def main():
         controller=controller,
     )
 
-    print("\n" + "=" * 60)
-    print("✅ TRAINING COMPLETE")
-    print("=" * 60)
-    print(f"  Final step:     {final_step}")
-    print(f"  Best val loss:  {final_best_loss:.4f}")
-    print("=" * 60)
+    print("\n" + "━" * 80)
+    print("  ✅  TRAINING COMPLETE")
+    print("━" * 80)
+    print(f"  Final step:      {final_step}")
+    print(f"  Best val loss:   {final_best_loss:.4f}")
+    print("━" * 80)
 
     tb_writer.close()
     _log_file.close()
@@ -3362,5 +3358,3 @@ def _safe_main():
 
 if __name__ == '__main__':
     _safe_main()
-
-# %%
