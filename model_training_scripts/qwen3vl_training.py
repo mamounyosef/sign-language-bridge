@@ -50,8 +50,10 @@ import sacrebleu
 import tempfile
 import shutil
 import gc
+import io
 import torch.multiprocessing as mp
 from PIL import Image
+import cv2
 
 # Windows: prevent ERROR_COMMITMENT_LIMIT with DataLoader workers
 try:
@@ -59,7 +61,30 @@ try:
 except Exception:
     pass
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")\
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def _remap_path_for_kaggle(fp: str) -> str:
+    """
+    Converts a local Windows file_path from the TSV to its Kaggle equivalent.
+    Works on paths from both sources:
+      D:\\signbridge_dataset\\how2sign\\<split>\\<file>  →
+        /kaggle/input/datasets/mamounhussam/sign-bridge/how2sign/how2sign/<split>/<file>
+      D:\\signbridge_dataset\\openasl\\<split>\\<file>   →
+        /kaggle/input/datasets/mamounhussam/sign-bridge/openasl/openasl/<split>/<file>
+    The doubled subfolder (how2sign/how2sign, openasl/openasl) matches Kaggle's
+    upload structure where the dataset root contains a folder named after the source.
+    """
+    _KAGGLE_BASE = '/kaggle/input/datasets/mamounhussam/sign-bridge'
+    p = Path(fp.replace('\\', '/'))
+    # parts are: ['D:', 'signbridge_dataset', '<source>', '<split>', '<file>']
+    parts = [x for x in p.parts if x not in ('', '/') and ':' not in x]
+    # parts[0] = 'signbridge_dataset', parts[1] = source, parts[2] = split, parts[3] = filename
+    if len(parts) < 4:
+        return fp  # unexpected format — return unchanged
+    source   = parts[1]   # 'how2sign' or 'openasl'
+    split    = parts[2]   # 'train', 'val', 'test'
+    filename = parts[3]
+    return f'{_KAGGLE_BASE}/{source}/{source}/{split}/{filename}'
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -80,14 +105,19 @@ torch.backends.cuda.enable_math_sdp(False)          # disable slow fallback; fla
 # ─── Training Constants ───
 MAX_PPL_CAP = 20  # math.exp(20) ~ 485M — cap for display
 
+# Resolve the repo root whether running as a .py script or a Kaggle notebook cell.
+# __file__ is undefined in notebook/REPL contexts; fall back to cwd in that case.
+_SCRIPT_DIR = Path(__file__).parent if '__file__' in dir() else Path.cwd()
+_REPO_ROOT  = _SCRIPT_DIR.parent if '__file__' in dir() else _SCRIPT_DIR
+
 # %%
 ## Configuration
 
 CONFIG = {
     # ── Data Paths ──
-    'data_train_tsv': Path('..') / 'data' / '6_dataset_train.tsv',
-    'data_val_tsv': Path('..') / 'data' / '6_dataset_val.tsv',
-    'data_test_tsv': Path('..') / 'data' / '6_dataset_test.tsv',
+    'data_train_tsv': _REPO_ROOT / 'data' / '7_dataset_train.tsv',
+    'data_val_tsv': _REPO_ROOT / 'data' / '7_dataset_val.tsv',
+    'data_test_tsv': _REPO_ROOT / 'data' / '7_dataset_test.tsv',
     'tsv_sep': '\t',
 
     # ── Model ──
@@ -106,7 +136,7 @@ CONFIG = {
     'quantize_skip_modules': ['visual'],
 
     # ── Video Processing ──
-    'video_fps': 14,                              # Frames per second to sample (lowered from 18 to fit bigger per-frame budget within 20M total cap)
+    'video_fps': 16,                              # Frames per second to sample (lowered from 18 to fit bigger per-frame budget within 20M total cap)
     'video_min_pixels': 4 * 32 * 32,              # Min visual tokens per frame pair (~4 tokens)
     'video_max_pixels': 100 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
     'video_total_pixels': 20480 * 32 * 32,        # Total pixel budget cap across all frames (None = no cap)
@@ -115,11 +145,10 @@ CONFIG = {
     # Bboxes are one static box per clip (padded union of pose landmarks across
     # sampled frames). Crop is applied to decoded frames BEFORE Qwen3-VL's
     # internal resize, so the full pixel budget lands on the signing region.
-    # CSVs are produced by data_code/11_extract_signer_bboxes.py.
+    # Unified CSV produced by data_code/23_merge_bbox_csvs.py (merges the
+    # original split-specific CSVs so clips re-shuffled between splits are covered).
     'use_signer_crop': True,
-    'bbox_csv_train': Path('..') / 'data' / '2_dataset_train_bboxes.csv',
-    'bbox_csv_val':   Path('..') / 'data' / '2_dataset_val_bboxes.csv',
-    'bbox_csv_test':  Path('..') / 'data' / '2_dataset_test_bboxes.csv',
+    'bbox_csv': _REPO_ROOT / 'data' / 'bboxes_all.csv',
 
     # ── Chat Template / Prompts ──
     'system_prompt': 'You are a sign language translator.',
@@ -166,8 +195,8 @@ CONFIG = {
     'grad_accum_steps': 32,                       # Effective batch = 1 x 32 = 32
 
     # ── DataLoader Config ──
-    'train_num_workers': 1,                       # 2 workers; lower count avoids Windows shared-memory exhaustion (error 1455)
-    'train_prefetch_factor': 1,                   # Pre-load 2 batches ahead (safe now that pin_memory is permanently off)
+    'train_num_workers': 2,                       # reduce to 1 if Windows shared-memory error 1455 reappears
+    'train_prefetch_factor': 2,
     'train_pin_memory': False,                     # Pinned memory for async CPU→GPU DMA during training (disabled to reduce RAM usage and fragmentation)
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
@@ -205,15 +234,15 @@ CONFIG = {
 
     # ── Logging ──
     'log_every_steps': 1,
-    'train_log_file': Path('..') / 'saved_metrics' / 'qwen3vl_train_log.csv',
-    'val_log_file': Path('..') / 'saved_metrics' / 'qwen3vl_val_log.csv',
-    'gen_samples_log_file': Path('..') / 'saved_metrics' / 'qwen3vl_gen_samples_log.csv',
-    'tensorboard_dir': Path('..') / 'saved_metrics' / 'tensorboard' / 'qwen3vl_training',
+    'train_log_file': _REPO_ROOT / 'saved_metrics' / 'qwen3vl_train_log.csv',
+    'val_log_file': _REPO_ROOT / 'saved_metrics' / 'qwen3vl_val_log.csv',
+    'gen_samples_log_file': _REPO_ROOT / 'saved_metrics' / 'qwen3vl_gen_samples_log.csv',
+    'tensorboard_dir': _REPO_ROOT / 'saved_metrics' / 'tensorboard' / 'qwen3vl_training',
 
     # ── Checkpointing ──
     'save_every_steps': 10,
     'keep_last_n_checkpoints': 3,
-    'checkpoint_dir': Path('..') / 'checkpoints' / 'qwen3vl',
+    'checkpoint_dir': _REPO_ROOT / 'checkpoints' / 'qwen3vl',
 
     # ── Evaluation ──
     'eval_every_steps': 80,
@@ -235,15 +264,20 @@ CONFIG = {
     # ── Performance & Memory Optimizations ──
     'use_8bit_adam': True,
     'use_gradient_checkpointing': True,
+    'use_liger_kernel': True,                     # Master switch — fused Triton kernels for faster forward/backward + lower VRAM
+    'liger_rms_norm': True,                       # LigerRMSNorm: 113 modules (28 LM decoder layers × 4 + 1 final norm)
+    'liger_layer_norm': True,                     # LigerLayerNorm: 52 modules (24 vision blocks × 2 + 4 merger norms)
+    # liger_swiglu / liger_cross_entropy: not yet supported for Qwen3VL class names;
+    # will be enabled when liger adds apply_liger_kernel_to_qwen3_vl.
     'use_torch_compile': False,
-    'torch_compile_mode': 'default',              # 'default' or 'max-autotune'
+    'torch_compile_mode': 'reduce-overhead',      # 'reduce-overhead' (CUDA graphs, fewer kernel launches) | 'default' | 'max-autotune'
 
     # ── Resuming ──
     # Fresh run: old checkpoints are incompatible with LM-only quantization (new bf16
     # vision path), new Tier-3 LoRA rank (2 → 8), and the new InfoNCE projection modules.
-    'resume_training': False,
+    'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': None,            # None = latest, or specific step number
+    'resume_checkpoint_step': 70,            # None = latest, or specific step number
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -314,8 +348,23 @@ CONFIG = {
     # ── Runtime ──
     'wait_for_manual_start': False,               # Interactive safety gate before training loop starts
 
-    # ── Data Augmentation (video frames, training only) ──
-    'aug_start_epoch': 2,                         # Epoch at which to enable augmentation (1 = from the start)
+    # ────── Data Augmentation ──────
+    'aug_start_epoch': 3,                         # Epoch at which to enable augmentation
+    
+    # ── CLAHE (always-on preprocessing, all splits including inference) ──
+    # Applied after signer crop, before augmentation. Replaces RandomEqualize.
+    # Operates on L channel in LAB space to preserve hue while enhancing local contrast.
+    'use_clahe': True,
+    'clahe_clip_limit': 2.0,
+    'clahe_tile_grid': [8, 8],
+
+    # ── Landmark overlay (pre-computed offline by 21_extract_landmarks.py) ──
+    'use_landmark_overlay': False,            # Enable after running 21_extract_landmarks.py
+    'landmark_overlay_prob': 1.0,
+    'landmark_parquet_train': _REPO_ROOT / 'data' / 'landmarks_train.parquet',
+    'landmark_parquet_val':   _REPO_ROOT / 'data' / 'landmarks_val.parquet',
+    'landmark_parquet_test':  _REPO_ROOT / 'data' / 'landmarks_test.parquet',
+
     'aug_temporal_jitter': True,
     'aug_temporal_jitter_range': 2,           # Max frames to shift (±2)
     'aug_temporal_jitter_prob': 0.4,
@@ -338,8 +387,8 @@ CONFIG = {
     'aug_solarize_prob': 0.07,
     'aug_solarize_threshold': 220,            # 0–255; pixels above this get inverted
 
-    'aug_equalize': True,                     # Histogram equalisation — bridges studio vs natural lighting
-    'aug_equalize_prob': 0.1,
+    'aug_equalize': False,                    # Replaced by always-on CLAHE below
+
 
     'aug_random_erasing': False,              # Randomly blacks out small patches — occlusion robustness
     'aug_random_erasing_prob': 0.2,
@@ -360,9 +409,42 @@ CONFIG = {
 
     # ── Debug: save augmented frames to disk ──
     'aug_debug_save_images': True,
-    'aug_debug_save_interval': 20,          # Save one frame every N optimiser steps
-    'aug_debug_save_dir': Path('..') / 'data' / 'debugging_images',
+    'aug_debug_save_interval': 5,          # Save one frame every N optimiser steps
+    'aug_debug_save_dir': _REPO_ROOT / 'data' / 'debugging_images',
+
+    # ── Kaggle ──
+    # Set True when running on Kaggle. Remaps all paths to /kaggle/input|working.
+    # file_path values in the TSVs are remapped on-the-fly; no new TSV files needed.
+    'is_kaggle': False,
 }
+
+# ── Kaggle path overrides ─────────────────────────────────────────────────────
+# Applied immediately after CONFIG is defined. All output paths go to
+# /kaggle/working/ (the only writable location). Input datasets are read-only
+# under /kaggle/input/datasets/mamounhussam/sign-bridge/.
+if CONFIG.get('is_kaggle'):
+    _KIN   = Path('/kaggle/input/datasets/mamounhussam/sign-bridge')
+    _KOUT  = Path('/kaggle/working')
+    CONFIG.update({
+        'data_train_tsv':         _KIN  / '7_dataset_train.tsv',
+        'data_val_tsv':           _KIN  / '7_dataset_val.tsv',
+        'data_test_tsv':          _KIN  / '7_dataset_test.tsv',
+        'bbox_csv_train':         _KIN  / 'bboxes_all.csv',
+        'bbox_csv_val':           _KIN  / 'bboxes_all.csv',
+        'bbox_csv_test':          _KIN  / 'bboxes_all.csv',
+        'landmark_parquet_train': _KIN  / 'landmarks_train.parquet',
+        'landmark_parquet_val':   _KIN  / 'landmarks_val.parquet',
+        'landmark_parquet_test':  _KIN  / 'landmarks_test.parquet',
+        'train_log_file':         _KOUT / 'saved_metrics' / 'qwen3vl_train_log.csv',
+        'val_log_file':           _KOUT / 'saved_metrics' / 'qwen3vl_val_log.csv',
+        'gen_samples_log_file':   _KOUT / 'saved_metrics' / 'qwen3vl_gen_samples_log.csv',
+        'tensorboard_dir':        _KOUT / 'saved_metrics' / 'tensorboard' / 'qwen3vl_training',
+        'checkpoint_dir':         _KOUT / 'checkpoints' / 'qwen3vl',
+        'aug_debug_save_dir':     _KOUT / 'data' / 'debugging_images',
+        'model_name':             '/kaggle/input/models/qwen-lm/qwen-3-vl/transformers/2b-instruct/1',
+    })
+    os.environ['TRANSFORMERS_OFFLINE'] = '1'
+# ─────────────────────────────────────────────────────────────────────────────
 
 torch.manual_seed(CONFIG['seed'])
 torch.cuda.manual_seed_all(CONFIG['seed'])
@@ -557,6 +639,7 @@ class SignLanguageQwen3VLDataset(Dataset):
     """
 
     def __init__(self, tsv_path, sep='\t', bbox_csv_path=None,
+                 landmark_parquet_path=None,
                  tokenizer=None, max_text_tokens=None):
         df = pd.read_csv(tsv_path, sep=sep)
         required_cols = {'vid', 'file_path', 'text', 'duration_sec', 'source'}
@@ -579,6 +662,21 @@ class SignLanguageQwen3VLDataset(Dataset):
             print(f"  ✓ Loaded {len(bbox_by_vid)} bboxes from {Path(bbox_csv_path).name} "
                   f"({n_bbox_failed} failed, filtered out)")
 
+        # Load landmark parquet and build O(1) lookup by vid.
+        landmark_by_vid = {}
+        if landmark_parquet_path is not None and Path(landmark_parquet_path).exists():
+            lm_df = pd.read_parquet(landmark_parquet_path)
+            lm_ok = lm_df[~lm_df['failed']]
+            for r in lm_ok.itertuples(index=False):
+                landmark_by_vid[str(r.vid)] = {
+                    'frame_indices': np.load(io.BytesIO(r.frame_indices)),
+                    'pose':          np.load(io.BytesIO(r.pose)),
+                    'left_hand':     np.load(io.BytesIO(r.left_hand)),
+                    'right_hand':    np.load(io.BytesIO(r.right_hand)),
+                }
+            print(f"  ✓ Loaded {len(landmark_by_vid)} landmark entries from "
+                  f"{Path(landmark_parquet_path).name}")
+
         do_truncate = tokenizer is not None and max_text_tokens is not None and max_text_tokens > 0
 
         self.samples = []
@@ -586,9 +684,27 @@ class SignLanguageQwen3VLDataset(Dataset):
         no_bbox = 0
         truncated = 0
 
+        # On Kaggle the dataset filesystem is slow for per-file stat calls.
+        # Pre-scan all candidate directories once to build an O(1) existence set.
+        existing_files: set[str] | None = None
+        if CONFIG.get('is_kaggle'):
+            _scan_roots: set[Path] = set()
+            for row in df.itertuples(index=False):
+                fp_remapped = _remap_path_for_kaggle(str(row.file_path))
+                _scan_roots.add(Path(fp_remapped).parent)
+            existing_files = set()
+            for root in _scan_roots:
+                if root.is_dir():
+                    for p in root.iterdir():
+                        existing_files.add(str(p))
+            print(f"  ✓ Pre-scanned {len(existing_files)} files across {len(_scan_roots)} directories")
+
         for row in tqdm(df.itertuples(index=False), total=len(df), desc=f'Loading {Path(tsv_path).stem}'):
             fp = str(row.file_path)
-            if not Path(fp).exists():
+            if CONFIG.get('is_kaggle'):
+                fp = _remap_path_for_kaggle(fp)
+            file_exists = (fp in existing_files) if existing_files is not None else Path(fp).exists()
+            if not file_exists:
                 missing += 1
                 continue
             vid = str(row.vid)
@@ -610,6 +726,7 @@ class SignLanguageQwen3VLDataset(Dataset):
                 'file_path': fp,
                 'source': str(row.source),
                 'bbox': bbox,
+                'landmarks': landmark_by_vid.get(vid),
             })
 
         trunc_msg = f", {truncated} truncated to ≤{max_text_tokens} tokens" if do_truncate else ""
@@ -767,12 +884,6 @@ class Qwen3VLCollator:
                     T_v2.RandomApply([
                         T_v2.RandomSolarize(threshold=config.get('aug_solarize_threshold', 128))
                     ], p=config.get('aug_solarize_prob', 0.1))
-                )
-            if config.get('aug_equalize', False):
-                aug_transforms.append(
-                    T_v2.RandomApply([
-                        T_v2.RandomEqualize()
-                    ], p=config.get('aug_equalize_prob', 0.15))
                 )
             if config.get('aug_affine', False):
                 aug_transforms.append(
@@ -998,6 +1109,189 @@ class Qwen3VLCollator:
         self._maybe_log_snap_stats()
         return cropped
 
+    # ─────────────────────────────────────────────────────────────
+    #  CLAHE preprocessing (always-on, all splits)
+    # ─────────────────────────────────────────────────────────────
+
+    def _apply_clahe(self, all_videos):
+        """Apply CLAHE to every frame of every clip.
+
+        Operates on the L channel in LAB colour space so hue is preserved.
+        Applied unconditionally on all splits (train, val, test) as a
+        deterministic preprocessing step, not an augmentation.
+
+        Uses Kornia for batched, vectorised processing (all T frames of a clip
+        in one pass — no per-frame Python loop). Falls back to OpenCV if Kornia
+        is not installed.
+
+        Input/output: list of (T, C, H, W) uint8 torch.Tensor.
+        """
+        if not all_videos:
+            return all_videos
+        clip_limit = float(self.config.get('clahe_clip_limit', 2.0))
+        tile = self.config.get('clahe_tile_grid', [8, 8])
+        grid_size = (int(tile[0]), int(tile[1]))
+
+        try:
+            import kornia.color
+            import kornia.enhance
+        except ImportError:
+            return self._apply_clahe_opencv(all_videos)
+
+        result = []
+        for vid in all_videos:
+            if not isinstance(vid, torch.Tensor):
+                vid = torch.as_tensor(np.asarray(vid))
+            if vid.dtype != torch.uint8:
+                vid = vid.clamp(0, 255).to(torch.uint8)
+
+            # (T, 3, H, W) uint8 → float32 [0, 1] on CPU
+            vid_f = vid.float() / 255.0
+
+            # RGB → LAB: L in [0, 100], a/b in [-128, 127]
+            lab = kornia.color.rgb_to_lab(vid_f)
+
+            # Normalise L to [0, 1] for equalize_clahe
+            l_norm = (lab[:, 0:1] / 100.0).clamp(0.0, 1.0)  # (T, 1, H, W)
+
+            # Apply CLAHE over all T frames in one batched call — no per-frame loop
+            l_clahe = kornia.enhance.equalize_clahe(
+                l_norm, clip_limit=clip_limit, grid_size=grid_size,
+                slow_and_differentiable=False,
+            )
+
+            lab[:, 0:1] = l_clahe * 100.0
+            rgb_f = kornia.color.lab_to_rgb(lab).clamp(0.0, 1.0)
+            result.append((rgb_f * 255.0).clamp(0, 255).to(torch.uint8))
+            del vid_f, lab, l_norm, l_clahe, rgb_f
+
+        return result
+
+    def _apply_clahe_opencv(self, all_videos):
+        """OpenCV fallback for _apply_clahe when Kornia is unavailable."""
+        clip_limit = float(self.config.get('clahe_clip_limit', 2.0))
+        tile = self.config.get('clahe_tile_grid', [8, 8])
+        tile_grid = (int(tile[0]), int(tile[1]))
+        clahe = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid)
+        result = []
+        for vid in all_videos:
+            if not isinstance(vid, torch.Tensor):
+                vid = torch.as_tensor(np.asarray(vid))
+            if vid.dtype != torch.uint8:
+                vid = vid.clamp(0, 255).to(torch.uint8)
+            T_frames = vid.shape[0]
+            out = vid.clone()
+            for t in range(T_frames):
+                frame_rgb = vid[t].permute(1, 2, 0).contiguous().numpy()
+                frame_lab = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2LAB)
+                l_ch, a_ch, b_ch = cv2.split(frame_lab)
+                l_ch = clahe.apply(l_ch)
+                frame_lab = cv2.merge([l_ch, a_ch, b_ch])
+                frame_rgb = cv2.cvtColor(frame_lab, cv2.COLOR_LAB2RGB)
+                out[t] = torch.from_numpy(frame_rgb).permute(2, 0, 1)
+            result.append(out)
+        return result
+
+    # ─────────────────────────────────────────────────────────────
+    #  Landmark overlay (pre-computed offline)
+    # ─────────────────────────────────────────────────────────────
+
+    # Pose array stores indices [11,12,13,14,15,16] at positions [0,1,2,3,4,5].
+    _POSE_CONNECTIONS = [
+        (0, 1),  # left shoulder - right shoulder
+        (0, 2),  # left shoulder - left elbow
+        (2, 4),  # left elbow - left wrist
+        (1, 3),  # right shoulder - right elbow
+        (3, 5),  # right elbow - right wrist
+    ]
+
+    _HAND_CONNECTIONS = [
+        (0, 1), (1, 2), (2, 3), (3, 4),           # thumb
+        (0, 5), (5, 6), (6, 7), (7, 8),            # index
+        (0, 9), (9, 10), (10, 11), (11, 12),       # middle
+        (0, 13), (13, 14), (14, 15), (15, 16),     # ring
+        (0, 17), (17, 18), (18, 19), (19, 20),     # pinky
+        (5, 9), (9, 13), (13, 17),                 # palm arch
+    ]
+
+    def _apply_landmark_overlay(self, all_videos, sample_landmarks):
+        """Draw pre-computed pose + hand landmarks onto cropped frames.
+
+        Landmarks are normalized (0.0-1.0) relative to the crop at extraction
+        time. Multiplying by current crop dims gives pixel coords at any scale.
+
+        Input/output: list of (T, C, H, W) uint8 torch.Tensor.
+        """
+        prob = float(self.config.get('landmark_overlay_prob', 1.0))
+        result = []
+        for vid, lm in zip(all_videos, sample_landmarks):
+            if lm is None or (prob < 1.0 and random.random() > prob):
+                result.append(vid)
+                continue
+
+            if not isinstance(vid, torch.Tensor):
+                vid = torch.as_tensor(np.asarray(vid))
+            if vid.dtype != torch.uint8:
+                vid = vid.clamp(0, 255).to(torch.uint8)
+
+            T_frames, _, cur_h, cur_w = vid.shape
+            stored_fi = lm['frame_indices'].astype(np.float32)  # (N,) native frame indices
+            pose_lms = lm['pose']        # (N, 6, 2)
+            lh_lms   = lm['left_hand']   # (N, 21, 2)
+            rh_lms   = lm['right_hand']  # (N, 21, 2)
+
+            # Map decoded frame index → native frame space so the lookup is
+            # correct regardless of what FPS the training decoder used.
+            t_native_max = float(stored_fi[-1]) if len(stored_fi) else 0.0
+            t_decoded_max = max(T_frames - 1, 1)
+
+            out = vid.clone()
+            for t in range(T_frames):
+                t_native = t / t_decoded_max * t_native_max
+                nearest = int(np.abs(stored_fi - t_native).argmin())
+
+                frame_rgb = vid[t].permute(1, 2, 0).contiguous().numpy().copy()
+                frame_bgr = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2BGR)
+
+                def to_px(nx, ny, _w=cur_w, _h=cur_h):
+                    return (int(round(float(nx) * _w)), int(round(float(ny) * _h)))
+
+                # Pose skeleton (yellow — BGR: 0,255,255)
+                pose = pose_lms[nearest]  # (6, 2)
+                for i, j in self._POSE_CONNECTIONS:
+                    if np.any(np.isnan(pose[i])) or np.any(np.isnan(pose[j])):
+                        continue
+                    cv2.line(frame_bgr, to_px(*pose[i]), to_px(*pose[j]),
+                             (0, 255, 255), 1, cv2.LINE_AA)
+                for i in range(6):
+                    if not np.any(np.isnan(pose[i])):
+                        cv2.circle(frame_bgr, to_px(*pose[i]), 3,
+                                   (0, 255, 255), -1, cv2.LINE_AA)
+
+                # Left hand (green BGR: 0,200,0), right hand (blue BGR: 255,80,0)
+                for hand_lms, color in (
+                    (lh_lms, (0, 200, 0)),
+                    (rh_lms, (255, 80, 0)),
+                ):
+                    hand = hand_lms[nearest]  # (21, 2)
+                    if np.all(np.isnan(hand)):
+                        continue
+                    for i, j in self._HAND_CONNECTIONS:
+                        if np.any(np.isnan(hand[i])) or np.any(np.isnan(hand[j])):
+                            continue
+                        cv2.line(frame_bgr, to_px(*hand[i]), to_px(*hand[j]),
+                                 color, 1, cv2.LINE_AA)
+                    for i in range(21):
+                        if not np.any(np.isnan(hand[i])):
+                            cv2.circle(frame_bgr, to_px(*hand[i]), 3,
+                                       color, -1, cv2.LINE_AA)
+
+                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+                out[t] = torch.from_numpy(frame_rgb).permute(2, 0, 1)
+
+            result.append(out)
+        return result
+
     def __call__(self, batch):
         """
         Process a batch of samples into model-ready inputs.
@@ -1008,7 +1302,8 @@ class Qwen3VLCollator:
         all_videos = []
         all_video_metadatas = []
         all_video_kwargs = {}
-        sample_bboxes = []  # parallel to all_videos: (x1,y1,x2,y2,fw,fh) or None
+        sample_bboxes = []      # parallel to all_videos: (x1,y1,x2,y2,fw,fh) or None
+        sample_landmarks = []   # parallel to all_videos: landmark dict or None
 
         for sample in batch:
             messages = self._build_messages(sample, include_assistant=True)
@@ -1035,6 +1330,7 @@ class Qwen3VLCollator:
                 all_videos.extend(list(vids))
                 all_video_metadatas.extend(list(metas))
                 sample_bboxes.extend([sample.get('bbox')] * len(vids))
+                sample_landmarks.extend([sample.get('landmarks')] * len(vids))
             del images, videos  # free intermediate references
 
             # Merge video_kwargs (should be same for all samples)
@@ -1043,6 +1339,14 @@ class Qwen3VLCollator:
 
         # ── Signer-centric crop (applied BEFORE augmentation) ──
         all_videos = self._apply_signer_crop(all_videos, sample_bboxes)
+
+        # ── CLAHE (always-on, all splits) ──
+        if self.config.get('use_clahe', False) and all_videos:
+            all_videos = self._apply_clahe(all_videos)
+
+        # ── Landmark overlay (always-on when enabled, all splits) ──
+        if self.config.get('use_landmark_overlay', False) and all_videos:
+            all_videos = self._apply_landmark_overlay(all_videos, sample_landmarks)
 
         # ── Data Augmentation (training only) ──
         # Applied AFTER process_vision_info (frames decoded & resized to the Qwen3-VL
@@ -1433,11 +1737,37 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
                      for k, v in batch.items()}
 
         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-            outputs = model(**batch_gpu)
+            labels = batch_gpu.pop('labels')
+            outputs = model(**batch_gpu, labels=None)  # logits only — avoids OOM from full [B,T,V] cross-entropy
+            logits = outputs.logits
+            del outputs
 
-        total_loss += outputs.loss.item()
+            # Chunked cross-entropy: never materialise full [B*T, V] at once
+            shift_logits = logits[:, :-1, :].contiguous()
+            shift_labels = labels[:, 1:].contiguous()
+            del logits, labels
+            B, T, V = shift_logits.shape
+            flat_logits = shift_logits.view(B * T, V)
+            flat_labels = shift_labels.view(-1)
+            del shift_logits, shift_labels
+            chunk_size = 512
+            loss_sum = 0.0
+            token_count = 0
+            for c in range(0, B * T, chunk_size):
+                cl = flat_logits[c:c + chunk_size]
+                ck = flat_labels[c:c + chunk_size]
+                valid = ck != -100
+                if valid.any():
+                    loss_sum += torch.nn.functional.cross_entropy(
+                        cl[valid], ck[valid], reduction='sum'
+                    ).item()
+                    token_count += valid.sum().item()
+            del flat_logits, flat_labels
+            batch_loss = loss_sum / token_count if token_count > 0 else 0.0
+
+        total_loss += batch_loss
         num_batches += 1
-        del outputs, batch_gpu, batch
+        del batch_gpu, batch
         loss_pbar.update(1)
     loss_pbar.close()
 
@@ -1778,11 +2108,84 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
     if train_config.get('wait_for_manual_start', False):
         input("Press Enter to start training...")
-    print("\n" + "━" * 80)
-    print("  🚀  TRAINING STARTED")
-    print("━" * 80 + "\n")
+
+    _W = 100
+    _phase2_pct = int(phase_transition_step / total_optimizer_steps * 100)
+    _phase2_steps = total_optimizer_steps - phase_transition_step
+    _aug_on  = CONFIG.get('aug_color_jitter', False) or CONFIG.get('aug_random_grayscale', False) \
+               or CONFIG.get('aug_gaussian_blur', False) or CONFIG.get('aug_solarize', False) \
+               or CONFIG.get('aug_equalize', False) or CONFIG.get('aug_random_erasing', False) \
+               or CONFIG.get('aug_affine', False) or CONFIG.get('aug_temporal_jitter', False) \
+               or CONFIG.get('aug_speed_perturb', False)
+    _curriculum_on = bool(CONFIG.get('enable_epoch1_curriculum', True))
+    _weighted_sampling = CONFIG.get('sampling_strategy', 'weighted') == 'weighted' and CONFIG.get('balance_by_source', True)
+    _early_stop = train_config['early_stopping_patience']
+    _label_smooth = train_config['label_smoothing']
+    _grad_clip = train_config['max_grad_norm']
+    _warmup_pct = int(CONFIG.get('warmup_ratio', 0.05) * 100)
+
+    print("\n" + "━" * _W)
+    print(f"  🚀  TRAINING STARTED" + ("  —  RESUMING" if start_global_step > 0 else ""))
+    print("━" * _W)
+
+    print(f"\n  ┌─ SCHEDULE {'─' * (_W - 14)}┐")
+    print(f"  │  Epochs            : {num_epochs}   │   Total optimizer steps : {total_optimizer_steps:,}   │   Steps/epoch : {optimizer_steps_per_epoch:,}")
+    print(f"  │  Grad accum        : {grad_accum_steps} micro-batches per step   │   Warmup : {_warmup_pct}% of each tier's active life")
+    print(f"  │  Log every         : {log_every} steps   │   Save every : {save_every} steps   │   Eval every : {eval_every} steps  (warmup: {eval_every_warmup} until step {eval_warmup_threshold})")
+    print(f"  │  Early stopping    : patience = {_early_stop} evals without improvement")
+    print(f"  │  Label smoothing   : {_label_smooth}   │   Grad clip max_norm : {_grad_clip}")
+    print(f"  └{'─' * (_W - 2)}┘")
+
+    print(f"\n  ┌─ TWO-PHASE TRAINING {'─' * (_W - 23)}┐")
+    print(f"  │  Phase 1  (steps 1 → {phase_transition_step:,},  {_phase2_pct}% of training)")
+    print(f"  │    Active tiers  : T2 (Vision LoRA)  +  T4 (Projections)")
+    print(f"  │    Frozen tiers  : T1 (LM LoRA)  +  T3 (Embed/Head LoRA)")
+    print(f"  │    Purpose       : Align vision features with language space before touching the LM")
+    print(f"  │  Phase 2  (steps {phase_transition_step + 1:,} → {total_optimizer_steps:,},  {100 - _phase2_pct}% of training,  {_phase2_steps:,} steps)")
+    print(f"  │    Active tiers  : T1 (LM LoRA)  +  T2 (Vision LoRA)  +  T3 (Embed/Head LoRA)  +  T4 (Projections)")
+    print(f"  │    Purpose       : Full fine-tuning across all adapters once vision is warm")
+    print(f"  │  Current phase   : Phase {current_phase}  (starting at step {start_global_step})")
+    print(f"  └{'─' * (_W - 2)}┘")
+
+    print(f"\n  ┌─ CURRICULUM LEARNING {'─' * (_W - 24)}┐")
+    _cl_status = "ENABLED" if _curriculum_on else "DISABLED"
+    print(f"  │  Status            : {_cl_status}")
+    if _curriculum_on:
+        _easy_thr = float(CONFIG.get('easy_threshold_sec', 4.0))
+        print(f"  │  Epoch 1 strategy  : Easy-first — samples ≤ {_easy_thr}s are drawn first, then harder samples")
+        print(f"  │  Epochs 2+         : Standard weighted sampling (no easy/hard split)")
+    print(f"  │  Weighted sampling : {'ENABLED — inverse-frequency per source dataset' if _weighted_sampling else 'DISABLED — uniform'}")
+    print(f"  └{'─' * (_W - 2)}┘")
+
+    print(f"\n  ┌─ DATA AUGMENTATION {'─' * (_W - 22)}┐")
+    _aug_start_ep = CONFIG.get('aug_start_epoch', 1)
+    print(f"  │  Status            : {'ENABLED' if _aug_on else 'DISABLED'}   │   Starts at epoch : {_aug_start_ep}")
+    if _aug_on:
+        def _aug_flag(key, label, extra=''):
+            on = CONFIG.get(key, False)
+            return f"  │    {'✓' if on else '✗'}  {label:<26} {'ON' if on else 'OFF'}" + (f"  {extra}" if on and extra else '')
+        print(_aug_flag('aug_color_jitter',     'Color jitter',        f"p={CONFIG.get('aug_color_jitter_prob')}"))
+        print(_aug_flag('aug_random_grayscale', 'Random grayscale',    f"p={CONFIG.get('aug_random_grayscale_prob')}"))
+        print(_aug_flag('aug_gaussian_blur',    'Gaussian blur',       f"p={CONFIG.get('aug_gaussian_blur_prob')}"))
+        print(_aug_flag('aug_solarize',         'Solarize',            f"p={CONFIG.get('aug_solarize_prob')}"))
+        print(_aug_flag('aug_equalize',         'Equalize',            ''))
+        print(_aug_flag('aug_random_erasing',   'Random erasing',      f"p={CONFIG.get('aug_random_erasing_prob')}"))
+        print(_aug_flag('aug_affine',           'Affine transform',    f"p={CONFIG.get('aug_affine_prob')}  deg=±{CONFIG.get('aug_affine_degrees')}"))
+        print(_aug_flag('aug_temporal_jitter',  'Temporal jitter',     f"p={CONFIG.get('aug_temporal_jitter_prob')}  ±{CONFIG.get('aug_temporal_jitter_range')} frames"))
+        print(_aug_flag('aug_speed_perturb',    'Speed perturbation',  f"p={CONFIG.get('aug_speed_perturb_prob')}  {CONFIG.get('aug_speed_perturb_min')}×–{CONFIG.get('aug_speed_perturb_max')}×"))
+        print(f"  │    ✗  Horizontal flip         OFF  (sign language handedness is semantically meaningful)")
+    print(f"  └{'─' * (_W - 2)}┘")
+
+    print(f"\n  ┌─ INFONCE CONTRASTIVE LOSS {'─' * (_W - 29)}┐")
+    print(f"  │  Status            : {'ENABLED' if infonce_enabled else 'DISABLED'}")
+    if infonce_enabled:
+        print(f"  │  Temperature (τ)   : {infonce_tau}   │   Queue size : {infonce_queue_max}")
+        print(f"  │  Purpose           : Align visual embeddings with text embeddings (vision↔language contrastive)")
+    print(f"  └{'─' * (_W - 2)}┘")
+
     if start_global_step > 0:
-        print(f"  ▶ Resuming training from step {start_global_step}\n")
+        print(f"\n  ▶  Resuming from step {start_global_step} / {total_optimizer_steps}  (epoch {start_epoch})")
+    print()
 
     # Handle mid-epoch resume
     if start_steps_done_in_epoch is not None:
@@ -1846,9 +2249,18 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 if _ep_idx is not None:
                     train_loader.batch_sampler.rebuild_with_indices(_ep_idx, partition_sizes=_ep_parts)
                     _ep_hash = hash(tuple(_ep_idx[:1024]))
-                    _mode = "curriculum (easy→rest)" if _ep_parts else "weighted"
-                    print(f"  [epoch {epoch}] sampler rebuilt: mode={_mode}, N_draws={len(_ep_idx)}, "
-                          f"partitions={_ep_parts}, idx_hash={_ep_hash}")
+                    if _ep_parts:
+                        print(f"\n  ┌─ EPOCH {epoch} SAMPLER  (Curriculum Mode) {'─' * 50}┐")
+                        print(f"  │  Strategy   : Easy-first curriculum  (epoch 1 only)")
+                        print(f"  │  Easy draws : {_ep_parts[0]:,}  (samples ≤ {float(CONFIG.get('easy_threshold_sec', 4.0))}s)")
+                        print(f"  │  Hard draws : {_ep_parts[1]:,}  (samples > {float(CONFIG.get('easy_threshold_sec', 4.0))}s)")
+                        print(f"  │  Total      : {len(_ep_idx):,}  │  idx_hash : {_ep_hash}")
+                        print(f"  └{'─' * 92}┘\n")
+                    else:
+                        print(f"\n  ┌─ EPOCH {epoch} SAMPLER  (Weighted Sampling) {'─' * 50}┐")
+                        print(f"  │  Strategy   : Inverse-frequency weighted sampling (balanced per source)")
+                        print(f"  │  Total      : {len(_ep_idx):,}  │  idx_hash : {_ep_hash}")
+                        print(f"  └{'─' * 92}┘\n")
             except Exception as _se:
                 print(f"  ⚠️  Per-epoch sampler rebuild failed: {_se}")
 
@@ -2196,11 +2608,21 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                 # ── Phase transition check (only once) ──
                 if current_phase == 1 and global_step == phase_transition_step:
-                    print(f"\n{'━' * 80}")
-                    print(f"  ▶  PHASE 1 → PHASE 2   (optimizer step {global_step} / {total_optimizer_steps})")
-                    print(f"     Activating Tier 1 (LM LoRA) and Tier 3 (Head LoRA)")
-                    print(f"     Tier 2 (Vision) and Tier 4 (Projections) continue uninterrupted")
-                    print(f"{'━' * 80}\n")
+                    _pt_W = 100
+                    _pt_pct = int(global_step / total_optimizer_steps * 100)
+                    print(f"\n{'━' * _pt_W}")
+                    print(f"  🔀  PHASE TRANSITION  —  Phase 1 → Phase 2")
+                    print(f"{'━' * _pt_W}")
+                    print(f"  Reached step {global_step:,} / {total_optimizer_steps:,}  ({_pt_pct}% of training complete)")
+                    print(f"")
+                    print(f"  What changes now:")
+                    print(f"    ✓  Tier 1 — LM LoRA          : UNFROZEN  →  now training  (lr peak {CONFIG['lr_tier1']:.2e}, floor {CONFIG['min_lr_tier1']:.2e}  with fresh warmup)")
+                    print(f"    ✓  Tier 3 — Embed / Head LoRA : UNFROZEN  →  now training  (lr peak {CONFIG['lr_tier3']:.2e}, floor {CONFIG['min_lr_tier3']:.2e}  with fresh warmup)")
+                    print(f"    ─  Tier 2 — Vision LoRA       : continues uninterrupted  (lr {lr_t2:.2e})")
+                    print(f"    ─  Tier 4 — Projections       : continues uninterrupted  (lr {lr_t4:.2e})")
+                    print(f"")
+                    print(f"  Remaining steps in Phase 2 : {total_optimizer_steps - global_step:,}")
+                    print(f"{'━' * _pt_W}\n")
 
                     # Flip requires_grad for Tier 1 and Tier 3 (stashed on model at setup)
                     for p in model._t1_params:
@@ -2314,14 +2736,13 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                     train_ppl = math.exp(min(avg_loss, MAX_PPL_CAP))
 
-                    print("─" * 160)
+                    print("─" * 200)
                     print(
-                        f"  P{current_phase} │ Step {global_step:>6d}/{total_optimizer_steps} │ Epoch {epoch:>2d}/{num_epochs} │ "
-                        f"loss {avg_loss:.4f}  contrast {avg_contrast:.4f}  ppl {train_ppl:.3f}\n"
-                        f"      lr   T1 {lr_t1:.2e}  T2 {lr_t2:.2e}  T3 {lr_t3:.2e}  T4 {lr_t4:.2e}\n"
-                        f"      gn   global {avg_grad_norm:.2f}   T1 {avg_gn_t1:.2f}  T2 {avg_gn_t2:.2f}  T3 {avg_gn_t3:.2f}  T4 {avg_gn_t4:.2f}\n"
-                        f"      {speed:.3f} step/s │ vram {cuda_mem:.2f}/{cuda_peak:.2f} GB │ "
-                        f"elapsed {format_time(elapsed)} │ ETA {format_time(eta_seconds)}"
+                        f"  Phase {current_phase} │ Epoch {epoch}/{num_epochs} │ Step {global_step:>6d}/{total_optimizer_steps}"
+                        f" │ Loss {avg_loss:.4f} │ Contrast {avg_contrast:.4f} │ PPL {train_ppl:.3f}"
+                        f" │ LR  T1(LM) {lr_t1:.2e}  T2(Vision) {lr_t2:.2e}  T3(Head) {lr_t3:.2e}  T4(Proj) {lr_t4:.2e}"
+                        f" │ GradNorm  Global {avg_grad_norm:.2f}  T1 {avg_gn_t1:.2f}  T2 {avg_gn_t2:.2f}  T3 {avg_gn_t3:.2f}  T4 {avg_gn_t4:.2f}"
+                        f" │ Speed {speed:.3f} step/s │ VRAM {cuda_mem:.2f}/{cuda_peak:.2f} GB │ Elapsed {format_time(elapsed)} │ ETA {format_time(eta_seconds)}"
                     )
 
                     train_csv_logger.log({
@@ -2370,6 +2791,19 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     step_contrast_losses.clear()
                     log_step_start = time.time()
 
+                # ── Periodic Checkpoint ──
+                if global_step % save_every == 0:
+                    elapsed = time.time() - training_start
+                    ckpt_manager.save_periodic(
+                        model, opt_tier2, sched_tier2, epoch, global_step,
+                        (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
+                        best_val_loss,
+                        evals_without_improvement, elapsed
+                    )
+                    # Checkpoint serialization creates temporary CPU copies — reclaim them
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
                 # ── Validation ──
                 if global_step < eval_warmup_threshold:
                     _should_eval = (global_step % eval_every_warmup == 0)
@@ -2383,13 +2817,12 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                     val_results = validate(model, processor, val_loader, val_dataset, train_config, val_collator=_val_collator)
                     print(f"\n{'━' * 80}")
-                    print(f"  Val Loss {val_results['val_loss']:.4f}   Val PPL {val_results['val_ppl']:.3f}   "
-                          f"BLEU-1 {val_results['bleu1']:.4f}   BLEU-2 {val_results['bleu2']:.4f}   "
-                          f"BLEU-4 {val_results['bleu4']:.4f}")
-                    print(f"  ROUGE-L {val_results['rouge_l']:.2f}%   "
-                          f"WER {val_results['wer']:.2f}%   METEOR {val_results['meteor']:.2f}%")
-                    print(f"  ({val_results['num_eval_batches']} eval batches · "
-                          f"{val_results['num_gen_samples']} generated samples)")
+                    print(
+                        f"  Val Loss {val_results['val_loss']:.4f} │ Val PPL {val_results['val_ppl']:.3f}"
+                        f" │ BLEU-1 {val_results['bleu1']:.4f} │ BLEU-2 {val_results['bleu2']:.4f} │ BLEU-4 {val_results['bleu4']:.4f}"
+                        f" │ ROUGE-L {val_results['rouge_l']:.2f}% │ WER {val_results['wer']:.2f}% │ METEOR {val_results['meteor']:.2f}%"
+                        f"  ({val_results['num_eval_batches']} eval batches · {val_results['num_gen_samples']} generated samples)"
+                    )
 
                     if val_results['sample_pairs']:
                         print(f"\n  Sample generations")
@@ -2515,19 +2948,6 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                     print(f"{'━' * 80}\n")
 
-                # ── Periodic Checkpoint ──
-                if global_step % save_every == 0:
-                    elapsed = time.time() - training_start
-                    ckpt_manager.save_periodic(
-                        model, opt_tier2, sched_tier2, epoch, global_step,
-                        (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
-                        best_val_loss,
-                        evals_without_improvement, elapsed
-                    )
-                    # Checkpoint serialization creates temporary CPU copies — reclaim them
-                    gc.collect()
-                    torch.cuda.empty_cache()
-
         # End of epoch
         epoch_time = time.time() - epoch_start
         epoch_avg_loss = ((epoch_loss_sum / max(epoch_microbatches, 1)).item()
@@ -2644,6 +3064,8 @@ def main():
     print(f"    Adam betas             : {CONFIG['adam_betas']}")
     print(f"    8-bit AdamW            : {CONFIG['use_8bit_adam']}")
     print(f"    Gradient checkpointing : {CONFIG['use_gradient_checkpointing']}")
+    print(f"    Liger Kernel           : {CONFIG.get('use_liger_kernel', False)}")
+    print(f"    Torch compile          : {CONFIG['use_torch_compile']}  (mode={CONFIG['torch_compile_mode']})")
     print(f"    Bucket batching        : {CONFIG.get('use_bucket_batching', False)}")
     print(f"    Label smoothing        : {CONFIG['label_smoothing']}")
     print(f"    DataLoader workers     : {CONFIG['train_num_workers']} train / {CONFIG['val_num_workers']} val")
@@ -2673,7 +3095,7 @@ def main():
     print(f"    Random grayscale       : {'ON' if CONFIG['aug_random_grayscale'] else 'OFF'}  (prob={CONFIG['aug_random_grayscale_prob']})")
     print(f"    Gaussian blur          : {'ON' if CONFIG['aug_gaussian_blur'] else 'OFF'}  (prob={CONFIG['aug_gaussian_blur_prob']}, kernel={CONFIG['aug_gaussian_blur_kernel']})")
     print(f"    Solarize               : {'ON' if CONFIG['aug_solarize'] else 'OFF'}  (prob={CONFIG['aug_solarize_prob']}, threshold={CONFIG['aug_solarize_threshold']})")
-    print(f"    Equalize               : {'ON' if CONFIG['aug_equalize'] else 'OFF'}  (prob={CONFIG['aug_equalize_prob']})")
+    print(f"    Equalize               : {'ON' if CONFIG['aug_equalize'] else 'OFF'}")
     print(f"    Random erasing         : {'ON' if CONFIG['aug_random_erasing'] else 'OFF'}  (prob={CONFIG['aug_random_erasing_prob']}, scale={CONFIG['aug_random_erasing_scale']})")
     print(f"    Affine                 : {'ON' if CONFIG['aug_affine'] else 'OFF'}  (prob={CONFIG['aug_affine_prob']}, deg=±{CONFIG['aug_affine_degrees']}, translate={CONFIG['aug_affine_translate']}, scale={CONFIG['aug_affine_scale_min']}–{CONFIG['aug_affine_scale_max']})")
     print(f"    Temporal jitter        : {'ON' if CONFIG['aug_temporal_jitter'] else 'OFF'}  (prob={CONFIG['aug_temporal_jitter_prob']}, ±{CONFIG['aug_temporal_jitter_range']} frames)")
@@ -2701,13 +3123,17 @@ def main():
     # to CONFIG['max_text_tokens']; the full processor is loaded with the model).
     print("📂 Loading tokenizer for reference-text truncation ...")
     from transformers import AutoTokenizer
-    _trunc_tokenizer = AutoTokenizer.from_pretrained(CONFIG['model_name'], local_files_only=True)
+    _trunc_tokenizer = AutoTokenizer.from_pretrained(
+        CONFIG['model_name'],
+        local_files_only=CONFIG.get('is_kaggle', False),
+    )
 
     # ── Load Data Manifests ──
     print("📂 Loading training data...")
     train_dataset = SignLanguageQwen3VLDataset(
         CONFIG['data_train_tsv'], CONFIG['tsv_sep'],
-        bbox_csv_path=CONFIG['bbox_csv_train'] if CONFIG.get('use_signer_crop') else None,
+        bbox_csv_path=CONFIG.get('bbox_csv_train', CONFIG.get('bbox_csv')) if CONFIG.get('use_signer_crop') else None,
+        landmark_parquet_path=CONFIG.get('landmark_parquet_train') if CONFIG.get('use_landmark_overlay') else None,
         tokenizer=_trunc_tokenizer,
         max_text_tokens=CONFIG['max_text_tokens'],
     )
@@ -2715,7 +3141,8 @@ def main():
     print("\n📂 Loading validation data...")
     val_dataset = SignLanguageQwen3VLDataset(
         CONFIG['data_val_tsv'], CONFIG['tsv_sep'],
-        bbox_csv_path=CONFIG['bbox_csv_val'] if CONFIG.get('use_signer_crop') else None,
+        bbox_csv_path=CONFIG.get('bbox_csv_val', CONFIG.get('bbox_csv')) if CONFIG.get('use_signer_crop') else None,
+        landmark_parquet_path=CONFIG.get('landmark_parquet_val') if CONFIG.get('use_landmark_overlay') else None,
         tokenizer=_trunc_tokenizer,
         max_text_tokens=CONFIG['max_text_tokens'],
     )
@@ -2745,7 +3172,11 @@ def main():
         model_kwargs['attn_implementation'] = attn_impl
         print(f"  Using {attn_impl}")
 
-    # QLoRA quantization — LM-only. Vision tower stays bf16 (see CONFIG['quantize_skip_modules']).
+    # QLoRA quantization — LM-only. llm_int8_skip_modules is an int8-era parameter that
+    # silently misfires with 4-bit: skipped modules end up routed through
+    # _move_missing_keys_from_meta_to_cpu → CPU quantization, allocating ~20GB of RAM for
+    # the [N, 16] NF4 intermediate tensor. Fix: quantize everything during load (GPU path),
+    # then cast skip-prefix modules back to bf16 immediately after.
     if CONFIG['use_qlora']:
         from transformers import BitsAndBytesConfig
         from peft import prepare_model_for_kbit_training
@@ -2755,17 +3186,24 @@ def main():
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_quant_type=CONFIG['bnb_4bit_quant_type'],
             bnb_4bit_use_double_quant=CONFIG['bnb_4bit_use_double_quant'],
-            llm_int8_skip_modules=_skip if _skip else None,
+            bnb_4bit_quant_storage=torch.bfloat16,
         )
         model_kwargs['device_map'] = 'auto'
-        if _skip:
-            print(f"  ✓ QLoRA enabled (4-bit quantization); skipping modules: {_skip}")
-        else:
-            print("  ✓ QLoRA enabled (4-bit quantization; all modules quantized)")
+        print(f"  ✓ QLoRA enabled (4-bit quantization); will restore bf16 post-load: {_skip}" if _skip
+              else "  ✓ QLoRA enabled (4-bit quantization; all modules quantized)")
     else:
         model_kwargs['device_map'] = 'cuda'
+        _skip = []
 
     model = AutoModelForImageTextToText.from_pretrained(CONFIG['model_name'], local_files_only=True, **model_kwargs)
+
+    # Restore vision tower to bf16. It was quantized to 4-bit during load (GPU path, cheap),
+    # but NF4 is tuned for LM weight distributions and degrades vision encoder quality.
+    if _skip:
+        for _name, _mod in model.named_modules():
+            if any(_name == sp or _name.startswith(sp + '.') for sp in _skip):
+                _mod.to(torch.bfloat16)
+        print(f"  ✓ Restored {_skip} to bf16")
     del model_kwargs  # no longer needed after model is loaded
 
     # ── Post-load quantization audit ──
@@ -2801,6 +3239,68 @@ def main():
 
     if CONFIG['use_qlora']:
         model = prepare_model_for_kbit_training(model)
+
+    # ── Liger Kernel ──
+    # Manual module replacement by exact class name, confirmed against the Qwen3-VL
+    # architecture. apply_liger_kernel_to_qwen2_vl is NOT used because Qwen3-VL uses
+    # distinct class names (Qwen3VLTextRMSNorm, Qwen3VLTextMLP, Qwen3VLForConditionalGeneration)
+    # that don't match what the Qwen2-VL patcher targets.
+    #
+    # What gets patched:
+    #   RMSNorm  → LigerRMSNorm  : 113 modules (28 decoder layers × 4 + 1 final norm)
+    #   LayerNorm → LigerLayerNorm: 52 modules (24 vision blocks × 2 + 4 merger norms)
+    #   SwiGLU, CrossEntropy: skipped — require native Qwen3-VL support in liger-kernel.
+    #     When liger adds apply_liger_kernel_to_qwen3_vl, enable them here.
+    if CONFIG.get('use_liger_kernel', False):
+        try:
+            from liger_kernel.transformers import LigerRMSNorm, LigerLayerNorm
+
+            _do_rms = CONFIG.get('liger_rms_norm', True)
+            _do_ln  = CONFIG.get('liger_layer_norm', True)
+
+            _to_rms, _to_ln = [], []
+            for _parent in model.modules():
+                for _cname, _cmod in _parent.named_children():
+                    _cls = type(_cmod).__name__
+                    if _do_rms and _cls == 'Qwen3VLTextRMSNorm':
+                        _to_rms.append((_parent, _cname, _cmod))
+                    elif _do_ln and isinstance(_cmod, torch.nn.LayerNorm) and not isinstance(_cmod, LigerLayerNorm):
+                        _to_ln.append((_parent, _cname, _cmod))
+
+            for _parent, _name, _orig in _to_rms:
+                _eps = getattr(_orig, 'variance_epsilon', getattr(_orig, 'eps', 1e-6))
+                _new = LigerRMSNorm(_orig.weight.shape[0], eps=_eps)
+                _new.weight = _orig.weight
+                setattr(_parent, _name, _new)
+
+            for _parent, _name, _orig in _to_ln:
+                _new = LigerLayerNorm(_orig.normalized_shape, eps=_orig.eps, elementwise_affine=_orig.elementwise_affine)
+                if _orig.elementwise_affine:
+                    _new.weight = _orig.weight
+                    _new.bias   = _orig.bias
+                setattr(_parent, _name, _new)
+
+            # Runtime audit — count actual Liger modules in the model after patching.
+            # Expected: RMSNorm=113, LayerNorm=52. Any other count means a class name
+            # changed in the transformers version you're running.
+            _audit = {'LigerRMSNorm': 0, 'LigerLayerNorm': 0}
+            for _, _m in model.named_modules():
+                _t = type(_m).__name__
+                if _t in _audit:
+                    _audit[_t] += 1
+
+            if _do_rms:
+                _ok = '✓' if _audit['LigerRMSNorm']  == 113 else '⚠️ '
+                print(f"  {_ok} Liger RMSNorm  : {_audit['LigerRMSNorm']:>4} patched  (expected 113: 28 layers × 4 + 1 final)")
+            if _do_ln:
+                _ok = '✓' if _audit['LigerLayerNorm'] == 52  else '⚠️ '
+                print(f"  {_ok} Liger LayerNorm: {_audit['LigerLayerNorm']:>4} patched  (expected  52: 24 vision blocks × 2 + 4 merger norms)")
+            del _to_rms, _to_ln, _audit, _do_rms, _do_ln, _ok
+
+        except ImportError:
+            print("  ⚠️  liger-kernel not installed — skipping (pip install liger-kernel)")
+        except Exception as _liger_err:
+            print(f"  ⚠️  Liger Kernel failed: {_liger_err} — skipping")
 
     processor = AutoProcessor.from_pretrained(CONFIG['model_name'], local_files_only=True)
     processor.tokenizer.padding_side = 'left'
@@ -2962,10 +3462,33 @@ def main():
                     _tier_layers[_tier].add('.'.join(_parts[:_i]))
                 break
 
-    _total_params    = sum(p.numel() for p in model.parameters())
-    _trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    _frozen_params   = _total_params - _trainable_params
-    _lora_total      = sum(_tier_params.values())
+    # Count logical parameters correctly.
+    # bitsandbytes Linear4bit packs 2 NF4 values per uint8 byte, so p.numel()
+    # returns half the actual logical parameter count for quantized weights.
+    # LoRA adapters and non-quantized modules (e.g. vision encoder) are bf16 → numel() is exact.
+    try:
+        from bitsandbytes.nn import Linear4bit as _Linear4bit_count
+    except Exception:
+        _Linear4bit_count = None
+
+    def _logical_numel(p, param_name):
+        """Return the logical (unquantized) parameter count for a parameter tensor."""
+        if _Linear4bit_count is None:
+            return p.numel()
+        # Walk named_modules to find the parent module; if it's Linear4bit, ×2.
+        parts = param_name.rsplit('.', 1)
+        if len(parts) == 2:
+            mod_name, _ = parts
+            mod = dict(model.named_modules()).get(mod_name)
+            if mod is not None and isinstance(mod, _Linear4bit_count):
+                return p.numel() * 2
+        return p.numel()
+
+    _named_params = list(model.named_parameters())
+    _total_params     = sum(_logical_numel(p, n) for n, p in _named_params)
+    _trainable_params = sum(_logical_numel(p, n) for n, p in _named_params if p.requires_grad)
+    _frozen_params    = _total_params - _trainable_params
+    _lora_total       = sum(_tier_params.values())
 
     _tier_meta = {
         'Tier 1': (f"LM attention + MLP",       CONFIG['lora_t1_r']),
@@ -2993,8 +3516,35 @@ def main():
     print("  " + "─" * (_W - 2))
     print(f"  Trainable: {_trainable_params:,} / {_total_params:,}  ({_trainable_params / _total_params * 100:.4f}% of total model)")
     print("━" * _W)
+
+    # ── Per-phase active/frozen breakdown ──
+    _p1_active = _tier_params['Tier 2'] + _tier_params['Tier 4']
+    _p1_frozen_lora = _tier_params['Tier 1'] + _tier_params['Tier 3']
+    _p2_active = _trainable_params  # all tiers
+    _p1_pct = CONFIG['phase1_fraction'] * 100
+    _p2_pct = 100 - _p1_pct
+
+    print(f"\n  📋  PER-PHASE TRAINING PLAN  (phase1_fraction={CONFIG['phase1_fraction']})")
+    print("  " + "─" * (_W - 2))
+    print(f"  {'':2}{'PHASE 1':} — first {_p1_pct:.0f}% of optimizer steps")
+    print(f"  {'':4}Active   : T2 Vision LoRA  (r={CONFIG['lora_t2_r']}, {_tier_params['Tier 2']:,} params)"
+          f"  +  T4 InfoNCE proj ({_tier_params['Tier 4']:,} params)")
+    print(f"  {'':4}Frozen   : T1 LM LoRA  (r={CONFIG['lora_t1_r']}, {_tier_params['Tier 1']:,} params)"
+          f"  +  T3 Head LoRA  (r={CONFIG['lora_t3_r']}, {_tier_params['Tier 3']:,} params)")
+    print(f"  {'':4}Trainable: {_p1_active:,} params  /  frozen LoRA: {_p1_frozen_lora:,} params  /  base: {_frozen_params:,} params")
+    print(f"  {'':4}Purpose  : Align vision features with language space before touching the LM")
+    print("  " + "─" * (_W - 2))
+    print(f"  {'':2}{'PHASE 2':} — remaining {_p2_pct:.0f}% of optimizer steps")
+    print(f"  {'':4}Active   : T1 LM LoRA  +  T2 Vision LoRA  +  T3 Head LoRA  +  T4 InfoNCE proj")
+    print(f"  {'':4}           T1: {_tier_params['Tier 1']:,}  |  T2: {_tier_params['Tier 2']:,}"
+          f"  |  T3: {_tier_params['Tier 3']:,}  |  T4: {_tier_params['Tier 4']:,}")
+    print(f"  {'':4}Trainable: {_p2_active:,} params  (all LoRA adapters + projections)  /  base: {_frozen_params:,} params")
+    print(f"  {'':4}Purpose  : End-to-end fine-tuning — LM conditioned on aligned vision features")
+    print("━" * _W)
+
     del _t1_set, _t2_set, _t3_set, _lora_marks, _tier_params, _tier_layers, _t4_projections
     del _lora_total, _frozen_params, _tier_meta, _W
+    del _p1_active, _p1_frozen_lora, _p2_active, _p1_pct, _p2_pct
 
     # ── Gradient Checkpointing ──
     if CONFIG['use_gradient_checkpointing']:
@@ -3078,10 +3628,17 @@ def main():
         return any(f".{m}." in name or name.endswith(f".{m}") or f".{m}.lora_" in name
                    for m in module_list)
 
+    # Collect Tier 4 (InfoNCE projections) first so they can be excluded from tier matching.
+    t4_params = [p for p in [model.vision_proj, model.text_proj]
+                 for p in p.parameters() if p.requires_grad]
+    _t4_ids = {id(p) for p in t4_params}
+
     t1_params, t2_params, t3_params, unclassified = [], [], [], []
     for n, p in model.named_parameters():
         if not p.requires_grad:
             continue
+        if id(p) in _t4_ids:
+            continue  # already in Tier 4
         if _matches_tier(n, CONFIG['lora_t3_modules']):
             t3_params.append(p)
         elif _matches_tier(n, CONFIG['lora_t2_modules']):
@@ -3090,10 +3647,6 @@ def main():
             t1_params.append(p)
         else:
             unclassified.append(n)
-
-    # Collect Tier 4 (InfoNCE projections)
-    t4_params = [p for p in [model.vision_proj, model.text_proj]
-                 for p in p.parameters() if p.requires_grad]
 
     total_trainable = len(t1_params) + len(t2_params) + len(t3_params) + len(t4_params)
     if unclassified:
