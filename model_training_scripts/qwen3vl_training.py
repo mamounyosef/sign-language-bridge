@@ -187,8 +187,47 @@ CONFIG = {
     'lora_use_rslora': True,                      # Rank-Stabilized LoRA (sqrt(r) scaling; better stability)
     'lora_init_weights': True,                    # Default init (PiSSA not supported for Conv3d layers in vision encoder)
 
+    # ── Dataset Phases ──────────────────────────────────────────────────────────────────────
+    # Phase A: OpenASL  (noisy, larger — pre-training phase)
+    'openasl_source_name':             'openasl',
+    'openasl_num_epochs':              2,
+    # Two-phase freeze for OpenASL: Phase 1 = vision-only, Phase 2 = all tiers
+    'openasl_enable_two_phase':        True,
+    'openasl_phase1_fraction':         0.20,        # fraction of OpenASL optimizer steps in Phase 1
+    # Curriculum for OpenASL: list of within-phase epoch numbers that use easy-first ordering
+    'openasl_curriculum_epochs':       [1],
+    # Augmentation for OpenASL: within-phase epoch at which augmentation turns ON
+    'openasl_aug_start_epoch':         2,
+
+    # Phase B: How2Sign  (clean, smaller — fine-tuning phase)
+    'how2sign_source_name':            'how2sign',
+    'how2sign_num_epochs':             2,
+    # Two-phase freeze for How2Sign (recommended OFF — all tiers active from start)
+    'how2sign_enable_two_phase':       False,
+    'how2sign_phase1_fraction':        0.20,        # ignored when enable_two_phase=False
+    # Curriculum for How2Sign
+    'how2sign_curriculum_epochs':      [1],
+    # Augmentation for How2Sign
+    'how2sign_aug_start_epoch':        2,
+
+    # How2Sign fine-tuning LRs — lower than OpenASL (fresh restart at phase transition)
+    # Tier 1 (LM LoRA)
+    'lr_how2sign_tier1':               1e-5,
+    'min_lr_how2sign_tier1':           1e-7,
+    # Tier 2 (Vision LoRA)
+    'lr_how2sign_tier2':               2e-5,
+    'min_lr_how2sign_tier2':           2e-7,
+    # Tier 3 (Head LoRA)
+    'lr_how2sign_tier3':               1e-5,
+    'min_lr_how2sign_tier3':           1e-7,
+    # Tier 4 (InfoNCE projections)
+    'lr_how2sign_tier4':               5e-5,
+    'min_lr_how2sign_tier4':           5e-7,
+
+    # easy_threshold_sec: shared across both phases
+    'easy_threshold_sec':              4.0,
+
     # ── Core Training ──
-    'num_epochs': 3,
     'batch_size': 1,                              # VRAM constraint with vision LoRA — 1 sample per micro-batch
 
     # ── Gradient Accumulation ──
@@ -226,11 +265,6 @@ CONFIG = {
     'weight_decay': 0.01,
     'adam_betas': (0.9, 0.98),
     'max_grad_norm': 1.0,
-
-    # ── Two-phase training ──
-    # Phase 1 = first `phase1_fraction` of total optimizer steps: only Tier 2 + Tier 4
-    # are trainable (LM frozen). Phase 2 = remainder: all tiers trainable.
-    'phase1_fraction': 0.20,
 
     # ── Logging ──
     'log_every_steps': 1,
@@ -311,13 +345,6 @@ CONFIG = {
     'sampling_strategy': 'weighted',              # 'weighted' | 'uniform'
     'balance_by_source': True,
 
-    # ── Epoch-1 Curriculum ──
-    # Epoch 1 only: first process all clips with duration ≤ easy_threshold_sec,
-    # then the rest. Epochs 2..N are normal weighted sampling. Resume-safe —
-    # derived deterministically from (epoch, base_seed).
-    'enable_epoch1_curriculum': True,
-    'easy_threshold_sec': 4.0,
-
     # ── Temporal jitter padding mode ──
     # 'edge_replicate' = repeat first/last frame into shifted slots (in-domain).
     # 'black'          = fill shifted slots with zeros (legacy; OOD for vision tower).
@@ -349,8 +376,6 @@ CONFIG = {
     'wait_for_manual_start': False,               # Interactive safety gate before training loop starts
 
     # ────── Data Augmentation ──────
-    'aug_start_epoch': 3,                         # Epoch at which to enable augmentation
-    
     # ── CLAHE (always-on preprocessing, all splits including inference) ──
     # Applied after signer crop, before augmentation. Replaces RandomEqualize.
     # Operates on L channel in LAB space to preserve hue while enhancing local contrast.
@@ -450,6 +475,14 @@ torch.manual_seed(CONFIG['seed'])
 torch.cuda.manual_seed_all(CONFIG['seed'])
 np.random.seed(CONFIG['seed'])
 random.seed(CONFIG['seed'])
+
+
+def _get_phase_info(global_epoch: int, openasl_epochs: int) -> tuple[str, int]:
+    """Return (dataset_phase_name, epoch_within_phase) for a given global epoch (1-indexed)."""
+    if global_epoch <= openasl_epochs:
+        return 'openasl', global_epoch
+    else:
+        return 'how2sign', global_epoch - openasl_epochs
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -640,12 +673,16 @@ class SignLanguageQwen3VLDataset(Dataset):
 
     def __init__(self, tsv_path, sep='\t', bbox_csv_path=None,
                  landmark_parquet_path=None,
-                 tokenizer=None, max_text_tokens=None):
+                 tokenizer=None, max_text_tokens=None,
+                 source_filter=None):
         df = pd.read_csv(tsv_path, sep=sep)
         required_cols = {'vid', 'file_path', 'text', 'duration_sec', 'source'}
         missing_cols = required_cols - set(df.columns)
         if missing_cols:
             raise RuntimeError(f"{tsv_path} missing columns: {missing_cols}")
+        if source_filter is not None:
+            df = df[df['source'] == source_filter].reset_index(drop=True)
+            print(f"  ✓ source_filter='{source_filter}': {len(df)} rows retained")
 
         # Load bbox CSV and build O(1) lookup by vid. Filter failed extractions.
         bbox_by_vid = {}
@@ -1638,7 +1675,8 @@ class CheckpointManager:
                 print(f"  🗑️  Evicted old checkpoint: {old_path.name}")
 
     def save_best(self, model, optimizer, scheduler, epoch, global_step,
-                  steps_done_in_epoch, best_val_loss, evals_without_improvement, elapsed_sec):
+                  steps_done_in_epoch, best_val_loss, evals_without_improvement, elapsed_sec,
+                  extra_state=None):
         """Save best model checkpoint."""
         path = self.best_path
         if path.exists():
@@ -1662,6 +1700,8 @@ class CheckpointManager:
             }
             if torch.cuda.is_available():
                 state['cuda_rng_state_all'] = torch.cuda.get_rng_state_all()
+            if extra_state:
+                state.update(extra_state)
             torch.save(state, path / 'training_state.pt')
             print(f"  ⭐ Saved best model: {path.name}")
         except Exception as e:
@@ -1989,11 +2029,15 @@ def train(model, processor, train_loader, val_loader, val_dataset,
           _val_collator=None, _train_collator=None,
           start_epoch=1, start_global_step=0, start_steps_done_in_epoch=None,
           best_val_loss=float('inf'), start_evals_without_improvement=0, start_elapsed_sec=0.0,
-          controller=None):
-    """Full training loop for Qwen3-VL LoRA fine-tuning with two-phase training and four independent optimizers."""
+          controller=None,
+          global_epoch_offset=0, dataset_phase_name='openasl'):
+    """Full training loop for one dataset phase (OpenASL or How2Sign)."""
 
     # Unpack config
-    num_epochs = train_config['num_epochs']
+    _phase = dataset_phase_name  # short alias for per-phase key lookups
+    num_epochs = train_config['num_epochs']   # per-phase epoch count (2 for each phase)
+    curriculum_epochs = train_config.get('curriculum_epochs', [1])   # within-phase list
+    aug_start_epoch   = train_config.get('aug_start_epoch', 2)       # within-phase start
     grad_accum_steps = train_config['grad_accum_steps']
     # max_grad_norm is read live from train_config['max_grad_norm'] each step
     # so that InteractiveController.check() can update it mid-training.
@@ -2031,8 +2075,13 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     infonce_tau = float(CONFIG.get('infonce_temperature', 0.07))
     infonce_skip_count = 0
 
-    # ── Phase management (two-phase training with 4 independent optimizers) ──
-    current_phase = 1 if start_global_step < phase_transition_step else 2
+    # ── Phase management ──
+    _enable_two_phase_local = train_config.get('enable_two_phase', True)
+    if not _enable_two_phase_local:
+        # All tiers active from step 0 — no freeze/unfreeze ever needed
+        current_phase = 2
+    else:
+        current_phase = 1 if start_global_step < phase_transition_step else 2
 
     # Create list of active (optimizer, scheduler) pairs per phase
     def _get_active_opt_sched():
@@ -2044,7 +2093,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     (opt_tier3, sched_tier3), (opt_tier4, sched_tier4)]
 
     active_opt_sched = _get_active_opt_sched()
-    print(f"  Starting in Phase {current_phase} (global_step {start_global_step} / {phase_transition_step})")
+    _two_phase_tag = f"two-phase enabled (transition at step {phase_transition_step})" if _enable_two_phase_local else "two-phase DISABLED (all tiers active)"
+    print(f"  Starting in model phase {current_phase}  |  {_two_phase_tag}")
 
     # ── CUDA RT handle for sticky-error recovery ─────────────────────────────
     # Resolve the CUDA runtime DLL once and cache it.  Used by the CUDA error
@@ -2117,49 +2167,73 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                or CONFIG.get('aug_equalize', False) or CONFIG.get('aug_random_erasing', False) \
                or CONFIG.get('aug_affine', False) or CONFIG.get('aug_temporal_jitter', False) \
                or CONFIG.get('aug_speed_perturb', False)
-    _curriculum_on = bool(CONFIG.get('enable_epoch1_curriculum', True))
+    _enable_two_phase = train_config.get('enable_two_phase', True)
+    _curriculum_on = bool(curriculum_epochs)
     _weighted_sampling = CONFIG.get('sampling_strategy', 'weighted') == 'weighted' and CONFIG.get('balance_by_source', True)
     _early_stop = train_config['early_stopping_patience']
     _label_smooth = train_config['label_smoothing']
     _grad_clip = train_config['max_grad_norm']
     _warmup_pct = int(CONFIG.get('warmup_ratio', 0.05) * 100)
+    _easy_thr = float(CONFIG.get('easy_threshold_sec', 4.0))
+    _phase_label = dataset_phase_name.upper()
+    _global_epochs_str = f"{global_epoch_offset + 1}–{global_epoch_offset + num_epochs}"
 
     print("\n" + "━" * _W)
-    print(f"  🚀  TRAINING STARTED" + ("  —  RESUMING" if start_global_step > 0 else ""))
+    _resume_tag = "  —  RESUMING" if start_global_step > 0 else ""
+    print(f"  🚀  TRAINING STARTED  ·  DATASET PHASE: {_phase_label}{_resume_tag}")
     print("━" * _W)
 
-    print(f"\n  ┌─ SCHEDULE {'─' * (_W - 14)}┐")
-    print(f"  │  Epochs            : {num_epochs}   │   Total optimizer steps : {total_optimizer_steps:,}   │   Steps/epoch : {optimizer_steps_per_epoch:,}")
-    print(f"  │  Grad accum        : {grad_accum_steps} micro-batches per step   │   Warmup : {_warmup_pct}% of each tier's active life")
-    print(f"  │  Log every         : {log_every} steps   │   Save every : {save_every} steps   │   Eval every : {eval_every} steps  (warmup: {eval_every_warmup} until step {eval_warmup_threshold})")
-    print(f"  │  Early stopping    : patience = {_early_stop} evals without improvement")
-    print(f"  │  Label smoothing   : {_label_smooth}   │   Grad clip max_norm : {_grad_clip}")
+    print(f"\n  ┌─ PHASE OVERVIEW {'─' * (_W - 20)}┐")
+    print(f"  │  Dataset           : {dataset_phase_name}  (source filter applied)")
+    print(f"  │  Global epochs     : {_global_epochs_str}  (within-phase: 1–{num_epochs})")
+    print(f"  │  Total opt steps   : {total_optimizer_steps:,}   │   Steps/epoch : {optimizer_steps_per_epoch:,}")
+    print(f"  │  Grad accum        : {grad_accum_steps} micro-batches/step   │   Warmup : {_warmup_pct}% of each tier's active life")
+    print(f"  │  Log/Save/Eval     : every {log_every}/{save_every}/{eval_every} steps  (warmup eval: {eval_every_warmup} until step {eval_warmup_threshold})")
+    print(f"  │  Early stopping    : patience = {_early_stop} evals   │   Label smoothing : {_label_smooth}   │   Grad clip : {_grad_clip}")
     print(f"  └{'─' * (_W - 2)}┘")
 
-    print(f"\n  ┌─ TWO-PHASE TRAINING {'─' * (_W - 23)}┐")
-    print(f"  │  Phase 1  (steps 1 → {phase_transition_step:,},  {_phase2_pct}% of training)")
-    print(f"  │    Active tiers  : T2 (Vision LoRA)  +  T4 (Projections)")
-    print(f"  │    Frozen tiers  : T1 (LM LoRA)  +  T3 (Embed/Head LoRA)")
-    print(f"  │    Purpose       : Align vision features with language space before touching the LM")
-    print(f"  │  Phase 2  (steps {phase_transition_step + 1:,} → {total_optimizer_steps:,},  {100 - _phase2_pct}% of training,  {_phase2_steps:,} steps)")
-    print(f"  │    Active tiers  : T1 (LM LoRA)  +  T2 (Vision LoRA)  +  T3 (Embed/Head LoRA)  +  T4 (Projections)")
-    print(f"  │    Purpose       : Full fine-tuning across all adapters once vision is warm")
-    print(f"  │  Current phase   : Phase {current_phase}  (starting at step {start_global_step})")
+    print(f"\n  ┌─ FREEZE / UNFREEZE SCHEDULE {'─' * (_W - 32)}┐")
+    if _enable_two_phase:
+        _p1_pct = int(train_config.get('phase1_fraction', 0.20) * 100)
+        print(f"  │  Two-phase freeze  : ENABLED  (phase1_fraction={train_config.get('phase1_fraction', 0.20)})")
+        print(f"  │  Phase 1  (steps 1 → {phase_transition_step:,},  first {_p1_pct}%)")
+        print(f"  │    Active : T2 (Vision LoRA)  +  T4 (InfoNCE Projections)")
+        print(f"  │    Frozen : T1 (LM LoRA)  +  T3 (Head LoRA)")
+        print(f"  │    Purpose: Align vision features before touching the LM")
+        print(f"  │  Phase 2  (steps {phase_transition_step + 1:,} → {total_optimizer_steps:,},  {_phase2_steps:,} steps)")
+        print(f"  │    Active : T1 + T2 + T3 + T4  (all tiers)")
+        print(f"  │  Current  : Phase {current_phase}  (at step {start_global_step})")
+    else:
+        print(f"  │  Two-phase freeze  : DISABLED  →  All tiers (T1 T2 T3 T4) active from step 0")
+    print(f"  └{'─' * (_W - 2)}┘")
+
+    print(f"\n  ┌─ LEARNING RATES  ({dataset_phase_name}) {'─' * (_W - 25)}┐")
+    _lr1 = train_config.get('lr_tier1', 0);  _fl1 = train_config.get('min_lr_tier1', 0)
+    _lr2 = train_config.get('lr_tier2', 0);  _fl2 = train_config.get('min_lr_tier2', 0)
+    _lr3 = train_config.get('lr_tier3', 0);  _fl3 = train_config.get('min_lr_tier3', 0)
+    _lr4 = train_config.get('lr_tier4', 0);  _fl4 = train_config.get('min_lr_tier4', 0)
+    _born1 = 'at phase transition' if _enable_two_phase else 'from step 0'
+    _born3 = 'at phase transition' if _enable_two_phase else 'from step 0'
+    print(f"  │  Schedule          : Linear warmup ({_warmup_pct}%) → Cosine decay (fresh for this phase)")
+    print(f"  │  T1 (LM LoRA)      : peak={_lr1:.2e}  floor={_fl1:.2e}  [{_born1}]")
+    print(f"  │  T2 (Vision LoRA)  : peak={_lr2:.2e}  floor={_fl2:.2e}  [from step 0]")
+    print(f"  │  T3 (Head LoRA)    : peak={_lr3:.2e}  floor={_fl3:.2e}  [{_born3}]")
+    print(f"  │  T4 (InfoNCE proj) : peak={_lr4:.2e}  floor={_fl4:.2e}  [from step 0]")
     print(f"  └{'─' * (_W - 2)}┘")
 
     print(f"\n  ┌─ CURRICULUM LEARNING {'─' * (_W - 24)}┐")
-    _cl_status = "ENABLED" if _curriculum_on else "DISABLED"
-    print(f"  │  Status            : {_cl_status}")
+    print(f"  │  Status            : {'ENABLED' if _curriculum_on else 'DISABLED'}")
     if _curriculum_on:
-        _easy_thr = float(CONFIG.get('easy_threshold_sec', 4.0))
-        print(f"  │  Epoch 1 strategy  : Easy-first — samples ≤ {_easy_thr}s are drawn first, then harder samples")
-        print(f"  │  Epochs 2+         : Standard weighted sampling (no easy/hard split)")
-    print(f"  │  Weighted sampling : {'ENABLED — inverse-frequency per source dataset' if _weighted_sampling else 'DISABLED — uniform'}")
+        _cl_epochs_disp = [global_epoch_offset + e for e in curriculum_epochs]
+        print(f"  │  Within-phase epochs : {curriculum_epochs}  →  global epochs {_cl_epochs_disp}")
+        print(f"  │  Strategy          : Easy-first — clips ≤ {_easy_thr}s first, then longer clips")
+        print(f"  │  Other epochs      : Standard weighted sampling")
+    print(f"  │  Weighted sampling : {'ENABLED — inverse-frequency per source' if _weighted_sampling else 'DISABLED — uniform'}")
     print(f"  └{'─' * (_W - 2)}┘")
 
     print(f"\n  ┌─ DATA AUGMENTATION {'─' * (_W - 22)}┐")
-    _aug_start_ep = CONFIG.get('aug_start_epoch', 1)
-    print(f"  │  Status            : {'ENABLED' if _aug_on else 'DISABLED'}   │   Starts at epoch : {_aug_start_ep}")
+    _aug_epochs_disp = [global_epoch_offset + e for e in range(aug_start_epoch, num_epochs + 1)]
+    print(f"  │  Augmented epochs  : within-phase epoch ≥ {aug_start_epoch}  →  global epochs {_aug_epochs_disp}")
     if _aug_on:
         def _aug_flag(key, label, extra=''):
             on = CONFIG.get(key, False)
@@ -2173,18 +2247,17 @@ def train(model, processor, train_loader, val_loader, val_dataset,
         print(_aug_flag('aug_affine',           'Affine transform',    f"p={CONFIG.get('aug_affine_prob')}  deg=±{CONFIG.get('aug_affine_degrees')}"))
         print(_aug_flag('aug_temporal_jitter',  'Temporal jitter',     f"p={CONFIG.get('aug_temporal_jitter_prob')}  ±{CONFIG.get('aug_temporal_jitter_range')} frames"))
         print(_aug_flag('aug_speed_perturb',    'Speed perturbation',  f"p={CONFIG.get('aug_speed_perturb_prob')}  {CONFIG.get('aug_speed_perturb_min')}×–{CONFIG.get('aug_speed_perturb_max')}×"))
-        print(f"  │    ✗  Horizontal flip         OFF  (sign language handedness is semantically meaningful)")
+        print(f"  │    ✗  Horizontal flip         OFF  (handedness is semantically meaningful)")
     print(f"  └{'─' * (_W - 2)}┘")
 
     print(f"\n  ┌─ INFONCE CONTRASTIVE LOSS {'─' * (_W - 29)}┐")
     print(f"  │  Status            : {'ENABLED' if infonce_enabled else 'DISABLED'}")
     if infonce_enabled:
         print(f"  │  Temperature (τ)   : {infonce_tau}   │   Queue size : {infonce_queue_max}")
-        print(f"  │  Purpose           : Align visual embeddings with text embeddings (vision↔language contrastive)")
     print(f"  └{'─' * (_W - 2)}┘")
 
     if start_global_step > 0:
-        print(f"\n  ▶  Resuming from step {start_global_step} / {total_optimizer_steps}  (epoch {start_epoch})")
+        print(f"\n  ▶  Resuming from global step {start_global_step}  (within-phase epoch {start_epoch}/{num_epochs})")
     print()
 
     # Handle mid-epoch resume
@@ -2195,8 +2268,6 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     if steps_done_in_epoch == 0 and start_global_step > 0:
         start_epoch += 1
         print(f"  ⏭️  Checkpoint was at exact end of Epoch {start_epoch - 1}. Advancing to Epoch {start_epoch}.")
-
-    aug_start_epoch = train_config.get('aug_start_epoch', 1)
 
     # ── Build per-sample source info for weighted sampling (once) ──
     base_seed = int(CONFIG.get('seed', 42))
@@ -2219,17 +2290,17 @@ def train(model, processor, train_loader, val_loader, val_dataset,
             _sample_weights = None
 
     def _build_epoch_indices(epoch_num):
-        """Weighted-sampled index list for this epoch (+ epoch-1 curriculum if enabled)."""
+        """Weighted-sampled index list for this epoch. epoch_num is within-phase (1-indexed)."""
         if _sample_weights is None:
             return None, None
-        gen = torch.Generator().manual_seed(base_seed + epoch_num)
+        gen = torch.Generator().manual_seed(base_seed + global_epoch_offset + epoch_num)
         N = len(_sample_weights)
-        if epoch_num == 1 and CONFIG.get('enable_epoch1_curriculum', True):
+        if epoch_num in curriculum_epochs:
             easy_idx = [i for i, e in enumerate(_easy_mask) if e]
             rest_idx = [i for i, e in enumerate(_easy_mask) if not e]
             easy_w = torch.tensor([_sample_weights[i] for i in easy_idx], dtype=torch.double)
             rest_w = torch.tensor([_sample_weights[i] for i in rest_idx], dtype=torch.double)
-            gen2 = torch.Generator().manual_seed(base_seed + epoch_num + 10_000)
+            gen2 = torch.Generator().manual_seed(base_seed + global_epoch_offset + epoch_num + 10_000)
             easy_draws = torch.multinomial(easy_w, len(easy_idx), replacement=True, generator=gen).tolist()
             rest_draws = torch.multinomial(rest_w, len(rest_idx), replacement=True, generator=gen2).tolist()
             picked_easy = [easy_idx[j] for j in easy_draws]
@@ -2249,38 +2320,38 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 if _ep_idx is not None:
                     train_loader.batch_sampler.rebuild_with_indices(_ep_idx, partition_sizes=_ep_parts)
                     _ep_hash = hash(tuple(_ep_idx[:1024]))
+                    _g_ep = global_epoch_offset + epoch
                     if _ep_parts:
-                        print(f"\n  ┌─ EPOCH {epoch} SAMPLER  (Curriculum Mode) {'─' * 50}┐")
-                        print(f"  │  Strategy   : Easy-first curriculum  (epoch 1 only)")
-                        print(f"  │  Easy draws : {_ep_parts[0]:,}  (samples ≤ {float(CONFIG.get('easy_threshold_sec', 4.0))}s)")
-                        print(f"  │  Hard draws : {_ep_parts[1]:,}  (samples > {float(CONFIG.get('easy_threshold_sec', 4.0))}s)")
+                        print(f"\n  ┌─ EPOCH {_g_ep} [{dataset_phase_name} {epoch}/{num_epochs}]  SAMPLER  (Curriculum Mode) {'─' * 30}┐")
+                        print(f"  │  Strategy   : Easy-first curriculum  (within-phase epoch {epoch})")
+                        print(f"  │  Easy draws : {_ep_parts[0]:,}  (clips ≤ {_easy_thr}s)")
+                        print(f"  │  Hard draws : {_ep_parts[1]:,}  (clips > {_easy_thr}s)")
                         print(f"  │  Total      : {len(_ep_idx):,}  │  idx_hash : {_ep_hash}")
                         print(f"  └{'─' * 92}┘\n")
                     else:
-                        print(f"\n  ┌─ EPOCH {epoch} SAMPLER  (Weighted Sampling) {'─' * 50}┐")
+                        print(f"\n  ┌─ EPOCH {_g_ep} [{dataset_phase_name} {epoch}/{num_epochs}]  SAMPLER  (Weighted Sampling) {'─' * 30}┐")
                         print(f"  │  Strategy   : Inverse-frequency weighted sampling (balanced per source)")
                         print(f"  │  Total      : {len(_ep_idx):,}  │  idx_hash : {_ep_hash}")
                         print(f"  └{'─' * 92}┘\n")
             except Exception as _se:
                 print(f"  ⚠️  Per-epoch sampler rebuild failed: {_se}")
 
-        # Toggle data augmentation based on aug_start_epoch
+        # Toggle data augmentation: epoch is within-phase, aug_start_epoch is per-phase config
         if _train_collator is not None:
             was_enabled = _train_collator.augmentation_enabled
             should_aug = epoch >= aug_start_epoch
             _train_collator.augmentation_enabled = should_aug
-
+            _g_ep_aug = global_epoch_offset + epoch
             if not should_aug:
-                print(f"  🧊 Data augmentation: OFF — training on clean data (augmentation starts at epoch {aug_start_epoch})")
+                print(f"  🧊 Augmentation: OFF  (global epoch {_g_ep_aug}, within-phase {epoch}/{num_epochs} — starts at within-phase epoch {aug_start_epoch})")
             elif should_aug and not was_enabled:
                 print("")
                 print("  " + "━" * 70)
-                print("    🔥🎨  DATA AUGMENTATION ACTIVATED  🎨🔥")
-                print(f"    Epoch {epoch}: switching from clean → augmented data")
+                print(f"    🔥🎨  DATA AUGMENTATION ACTIVATED  —  Global Epoch {_g_ep_aug}  [{dataset_phase_name} {epoch}/{num_epochs}]  🎨🔥")
                 print("  " + "━" * 70)
                 print("")
             else:
-                print(f"  🎨 Data augmentation: ON")
+                print(f"  🎨 Augmentation: ON  (global epoch {_g_ep_aug}, within-phase {epoch}/{num_epochs})")
 
         epoch_start = time.time()
         epoch_loss_sum = None
@@ -2606,8 +2677,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 valid_microbatches_in_window = 0
                 global_step += 1
 
-                # ── Phase transition check (only once) ──
-                if current_phase == 1 and global_step == phase_transition_step:
+                # ── Phase transition check (only once, only when two-phase enabled) ──
+                if _enable_two_phase_local and current_phase == 1 and global_step == phase_transition_step:
                     _pt_W = 100
                     _pt_pct = int(global_step / total_optimizer_steps * 100)
                     print(f"\n{'━' * _pt_W}")
@@ -2616,8 +2687,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     print(f"  Reached step {global_step:,} / {total_optimizer_steps:,}  ({_pt_pct}% of training complete)")
                     print(f"")
                     print(f"  What changes now:")
-                    print(f"    ✓  Tier 1 — LM LoRA          : UNFROZEN  →  now training  (lr peak {CONFIG['lr_tier1']:.2e}, floor {CONFIG['min_lr_tier1']:.2e}  with fresh warmup)")
-                    print(f"    ✓  Tier 3 — Embed / Head LoRA : UNFROZEN  →  now training  (lr peak {CONFIG['lr_tier3']:.2e}, floor {CONFIG['min_lr_tier3']:.2e}  with fresh warmup)")
+                    print(f"    ✓  Tier 1 — LM LoRA          : UNFROZEN  →  now training  (lr peak {train_config['lr_tier1']:.2e}, floor {train_config['min_lr_tier1']:.2e}  with fresh warmup)")
+                    print(f"    ✓  Tier 3 — Embed / Head LoRA : UNFROZEN  →  now training  (lr peak {train_config['lr_tier3']:.2e}, floor {train_config['min_lr_tier3']:.2e}  with fresh warmup)")
                     print(f"    ─  Tier 2 — Vision LoRA       : continues uninterrupted  (lr {lr_t2:.2e})")
                     print(f"    ─  Tier 4 — Projections       : continues uninterrupted  (lr {lr_t4:.2e})")
                     print(f"")
@@ -2631,8 +2702,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         p.requires_grad = True
 
                     # Build Tier 1 and Tier 3 optimizers + schedulers (tier-local warmup)
-                    _t1_peak, _t1_floor = CONFIG['lr_tier1'], CONFIG['min_lr_tier1']
-                    _t3_peak, _t3_floor = CONFIG['lr_tier3'], CONFIG['min_lr_tier3']
+                    _t1_peak, _t1_floor = train_config['lr_tier1'], train_config['min_lr_tier1']
+                    _t3_peak, _t3_floor = train_config['lr_tier3'], train_config['min_lr_tier3']
                     _betas = CONFIG['adam_betas']
                     _wd = CONFIG.get('weight_decay', 0.0)
                     if CONFIG.get('use_8bit_adam', True) and _BNB_AVAILABLE:
@@ -2655,6 +2726,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     _extra = {
                         'phase': current_phase,
                         'phase_transition_step': phase_transition_step,
+                        'dataset_phase_name': dataset_phase_name,
+                        'epoch_within_phase': epoch,
+                        'global_epoch_offset': global_epoch_offset,
                         'opt_tier1_state_dict': opt_tier1.state_dict(),
                         'sched_tier1_state_dict': sched_tier1.state_dict(),
                         'opt_tier3_state_dict': opt_tier3.state_dict(),
@@ -2737,8 +2811,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     train_ppl = math.exp(min(avg_loss, MAX_PPL_CAP))
 
                     print("─" * 200)
+                    _g_ep_log = global_epoch_offset + epoch
+                    _total_global_epochs = global_epoch_offset + num_epochs
                     print(
-                        f"  Phase {current_phase} │ Epoch {epoch}/{num_epochs} │ Step {global_step:>6d}/{total_optimizer_steps}"
+                        f"  [{dataset_phase_name}] Phase {current_phase} │ Global Ep {_g_ep_log}/{_total_global_epochs} │ Phase Ep {epoch}/{num_epochs} │ Step {global_step:>6d}/{total_optimizer_steps}"
                         f" │ Loss {avg_loss:.4f} │ Contrast {avg_contrast:.4f} │ PPL {train_ppl:.3f}"
                         f" │ LR  T1(LM) {lr_t1:.2e}  T2(Vision) {lr_t2:.2e}  T3(Head) {lr_t3:.2e}  T4(Proj) {lr_t4:.2e}"
                         f" │ GradNorm  Global {avg_grad_norm:.2f}  T1 {avg_gn_t1:.2f}  T2 {avg_gn_t2:.2f}  T3 {avg_gn_t3:.2f}  T4 {avg_gn_t4:.2f}"
@@ -2794,11 +2870,27 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 # ── Periodic Checkpoint ──
                 if global_step % save_every == 0:
                     elapsed = time.time() - training_start
+                    _ckpt_extra = {
+                        'phase':                  current_phase,
+                        'phase_transition_step':  phase_transition_step,
+                        'dataset_phase_name':     dataset_phase_name,
+                        'epoch_within_phase':     epoch,
+                        'global_epoch_offset':    global_epoch_offset,
+                        'opt_tier4_state_dict':   opt_tier4.state_dict(),
+                        'sched_tier4_state_dict': sched_tier4.state_dict(),
+                    }
+                    if opt_tier1 is not None:
+                        _ckpt_extra['opt_tier1_state_dict']  = opt_tier1.state_dict()
+                        _ckpt_extra['sched_tier1_state_dict'] = sched_tier1.state_dict()
+                    if opt_tier3 is not None:
+                        _ckpt_extra['opt_tier3_state_dict']  = opt_tier3.state_dict()
+                        _ckpt_extra['sched_tier3_state_dict'] = sched_tier3.state_dict()
                     ckpt_manager.save_periodic(
                         model, opt_tier2, sched_tier2, epoch, global_step,
                         (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
                         best_val_loss,
-                        evals_without_improvement, elapsed
+                        evals_without_improvement, elapsed,
+                        extra_state=_ckpt_extra,
                     )
                     # Checkpoint serialization creates temporary CPU copies — reclaim them
                     gc.collect()
@@ -2923,11 +3015,27 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     if val_results['val_loss'] < best_val_loss:
                         best_val_loss = val_results['val_loss']
                         evals_without_improvement = 0
+                        _best_extra = {
+                            'phase':                  current_phase,
+                            'phase_transition_step':  phase_transition_step,
+                            'dataset_phase_name':     dataset_phase_name,
+                            'epoch_within_phase':     epoch,
+                            'global_epoch_offset':    global_epoch_offset,
+                            'opt_tier4_state_dict':   opt_tier4.state_dict(),
+                            'sched_tier4_state_dict': sched_tier4.state_dict(),
+                        }
+                        if opt_tier1 is not None:
+                            _best_extra['opt_tier1_state_dict']   = opt_tier1.state_dict()
+                            _best_extra['sched_tier1_state_dict'] = sched_tier1.state_dict()
+                        if opt_tier3 is not None:
+                            _best_extra['opt_tier3_state_dict']   = opt_tier3.state_dict()
+                            _best_extra['sched_tier3_state_dict'] = sched_tier3.state_dict()
                         ckpt_manager.save_best(
                             model, opt_tier2, sched_tier2, epoch, global_step,
                             (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
                             best_val_loss,
-                            evals_without_improvement, elapsed
+                            evals_without_improvement, elapsed,
+                            extra_state=_best_extra,
                         )
                         print(f"\n  ⭐  New best val_loss: {best_val_loss:.4f}")
                     else:
@@ -2953,8 +3061,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
         epoch_avg_loss = ((epoch_loss_sum / max(epoch_microbatches, 1)).item()
                           if epoch_loss_sum is not None else 0.0)
         epoch_loss_sum = None  # release the accumulated loss tensor for the next epoch
+        _g_ep_end = global_epoch_offset + epoch
         print(f"\n{'━' * 80}")
-        print(f"  ✅  Epoch {epoch}/{num_epochs} Complete")
+        print(f"  ✅  Global Epoch {_g_ep_end}  [{dataset_phase_name} {epoch}/{num_epochs}]  Complete")
         print(f"      Avg train loss: {epoch_avg_loss:.4f}  ·  Time: {format_time(epoch_time)}")
         print(f"{'━' * 80}\n")
 
@@ -3056,7 +3165,9 @@ def main():
     print(f"    DoRA / RSLoRA          : {CONFIG['lora_use_dora']} / {CONFIG['lora_use_rslora']}")
 
     print("\n  [ TRAINING ]")
-    print(f"    Epochs                 : {CONFIG['num_epochs']}")
+    print(f"    Epochs (OpenASL)       : {CONFIG['openasl_num_epochs']}")
+    print(f"    Epochs (How2Sign)      : {CONFIG['how2sign_num_epochs']}")
+    print(f"    Total epochs           : {CONFIG['openasl_num_epochs'] + CONFIG['how2sign_num_epochs']}")
     print(f"    Batch size             : {CONFIG['batch_size']}  (effective: {effective_batch} with {CONFIG['grad_accum_steps']}x accum)")
     print(f"    Mixed precision        : bfloat16")
     print(f"    Grad clip max_norm     : {CONFIG['max_grad_norm']}")
@@ -3070,12 +3181,17 @@ def main():
     print(f"    Label smoothing        : {CONFIG['label_smoothing']}")
     print(f"    DataLoader workers     : {CONFIG['train_num_workers']} train / {CONFIG['val_num_workers']} val")
 
-    print("\n  [ LEARNING RATE ]")
-    warmup_info = f"{CONFIG['warmup_ratio']:.1%} of total"
-    print(f"    Warmup                 : {warmup_info}")
-    print(f"    Tier 1 (LM LoRA)       : {CONFIG['lr_tier1']:.2e}  →  {CONFIG['min_lr_tier1']:.2e}  (cosine floor)")
-    print(f"    Tier 2 (Vision LoRA)   : {CONFIG['lr_tier2']:.2e}  →  {CONFIG['min_lr_tier2']:.2e}  (cosine floor)")
-    print(f"    Tier 3 (Embed/Head)    : {CONFIG['lr_tier3']:.2e}  →  {CONFIG['min_lr_tier3']:.2e}  (cosine floor)")
+    print("\n  [ LEARNING RATES ]")
+    print(f"    Warmup                 : {CONFIG['warmup_ratio']:.1%} of each tier's active life (per phase)")
+    print(f"    Schedule               : Linear warmup → Cosine decay  |  Fresh restart at How2Sign phase")
+    print(f"    OpenASL  T1 (LM)       : peak={CONFIG['lr_tier1']:.2e}  floor={CONFIG['min_lr_tier1']:.2e}")
+    print(f"    OpenASL  T2 (Vision)   : peak={CONFIG['lr_tier2']:.2e}  floor={CONFIG['min_lr_tier2']:.2e}")
+    print(f"    OpenASL  T3 (Head)     : peak={CONFIG['lr_tier3']:.2e}  floor={CONFIG['min_lr_tier3']:.2e}")
+    print(f"    OpenASL  T4 (InfoNCE)  : peak={CONFIG['lr_tier4']:.2e}  floor={CONFIG['min_lr_tier4']:.2e}")
+    print(f"    How2Sign T1 (LM)       : peak={CONFIG['lr_how2sign_tier1']:.2e}  floor={CONFIG['min_lr_how2sign_tier1']:.2e}")
+    print(f"    How2Sign T2 (Vision)   : peak={CONFIG['lr_how2sign_tier2']:.2e}  floor={CONFIG['min_lr_how2sign_tier2']:.2e}")
+    print(f"    How2Sign T3 (Head)     : peak={CONFIG['lr_how2sign_tier3']:.2e}  floor={CONFIG['min_lr_how2sign_tier3']:.2e}")
+    print(f"    How2Sign T4 (InfoNCE)  : peak={CONFIG['lr_how2sign_tier4']:.2e}  floor={CONFIG['min_lr_how2sign_tier4']:.2e}")
 
     print("\n  [ EVALUATION & CHECKPOINTING ]")
     print(f"    Eval every             : {CONFIG['eval_every_steps']} steps  (warmup: {CONFIG['eval_every_steps_warmup']} until step {CONFIG['eval_warmup_threshold']})")
@@ -3087,9 +3203,8 @@ def main():
     print(f"    Checkpoint dir         : {CONFIG['checkpoint_dir'].resolve()}")
 
     print("\n  [ DATA AUGMENTATION (training only) ]")
-    _aug_start = CONFIG['aug_start_epoch']
-    _aug_note = 'from the start' if _aug_start <= 1 else f'clean data for first {_aug_start - 1} epoch(s)'
-    print(f"    Augmentation start     : epoch {_aug_start}  ({_aug_note})")
+    print(f"    OpenASL  aug starts    : within-phase epoch {CONFIG['openasl_aug_start_epoch']}  (global epoch {CONFIG['openasl_aug_start_epoch']})")
+    print(f"    How2Sign aug starts    : within-phase epoch {CONFIG['how2sign_aug_start_epoch']}  (global epoch {CONFIG['openasl_num_epochs'] + CONFIG['how2sign_aug_start_epoch']})")
     print(f"    Horizontal flip        : DISABLED  (sign language handedness is semantically meaningful)")
     print(f"    Color jitter           : {'ON' if CONFIG['aug_color_jitter'] else 'OFF'}  (prob={CONFIG['aug_color_jitter_prob']}, b={CONFIG['aug_color_jitter_brightness']}, c={CONFIG['aug_color_jitter_contrast']}, s={CONFIG['aug_color_jitter_saturation']}, h={CONFIG['aug_color_jitter_hue']})")
     print(f"    Random grayscale       : {'ON' if CONFIG['aug_random_grayscale'] else 'OFF'}  (prob={CONFIG['aug_random_grayscale_prob']})")
@@ -3517,34 +3632,45 @@ def main():
     print(f"  Trainable: {_trainable_params:,} / {_total_params:,}  ({_trainable_params / _total_params * 100:.4f}% of total model)")
     print("━" * _W)
 
-    # ── Per-phase active/frozen breakdown ──
-    _p1_active = _tier_params['Tier 2'] + _tier_params['Tier 4']
-    _p1_frozen_lora = _tier_params['Tier 1'] + _tier_params['Tier 3']
-    _p2_active = _trainable_params  # all tiers
-    _p1_pct = CONFIG['phase1_fraction'] * 100
-    _p2_pct = 100 - _p1_pct
+    # ── Dataset-phase training plan summary ──
+    _p1_active_params = _tier_params['Tier 2'] + _tier_params['Tier 4']
+    _p1_frozen_lora   = _tier_params['Tier 1'] + _tier_params['Tier 3']
+    _all_active_params = _trainable_params
 
-    print(f"\n  📋  PER-PHASE TRAINING PLAN  (phase1_fraction={CONFIG['phase1_fraction']})")
+    print(f"\n  📋  DATASET PHASE TRAINING PLAN")
     print("  " + "─" * (_W - 2))
-    print(f"  {'':2}{'PHASE 1':} — first {_p1_pct:.0f}% of optimizer steps")
-    print(f"  {'':4}Active   : T2 Vision LoRA  (r={CONFIG['lora_t2_r']}, {_tier_params['Tier 2']:,} params)"
-          f"  +  T4 InfoNCE proj ({_tier_params['Tier 4']:,} params)")
-    print(f"  {'':4}Frozen   : T1 LM LoRA  (r={CONFIG['lora_t1_r']}, {_tier_params['Tier 1']:,} params)"
-          f"  +  T3 Head LoRA  (r={CONFIG['lora_t3_r']}, {_tier_params['Tier 3']:,} params)")
-    print(f"  {'':4}Trainable: {_p1_active:,} params  /  frozen LoRA: {_p1_frozen_lora:,} params  /  base: {_frozen_params:,} params")
-    print(f"  {'':4}Purpose  : Align vision features with language space before touching the LM")
+    # OpenASL
+    _osl_p1_pct = CONFIG['openasl_phase1_fraction'] * 100
+    _osl_p2_pct = 100 - _osl_p1_pct
+    print(f"  DATASET PHASE A  ──  OpenASL  ({CONFIG['openasl_num_epochs']} epochs  ·  global epochs 1–{CONFIG['openasl_num_epochs']})")
+    print(f"    Two-phase freeze : {'ENABLED' if CONFIG['openasl_enable_two_phase'] else 'DISABLED'}", end='')
+    if CONFIG['openasl_enable_two_phase']:
+        print(f"  (phase1_fraction={CONFIG['openasl_phase1_fraction']}  →  first {_osl_p1_pct:.0f}% T2+T4 only, remaining {_osl_p2_pct:.0f}% all tiers)")
+    else:
+        print(f"  →  all tiers active from step 0")
+    print(f"    Curriculum epochs: {CONFIG['openasl_curriculum_epochs']}  (easy ≤{CONFIG['easy_threshold_sec']}s first)")
+    print(f"    Augmentation ON  : within-phase epoch ≥ {CONFIG['openasl_aug_start_epoch']}")
+    print(f"    LR T1/T2/T3/T4   : {CONFIG['lr_tier1']:.1e}/{CONFIG['lr_tier2']:.1e}/{CONFIG['lr_tier3']:.1e}/{CONFIG['lr_tier4']:.1e}")
+    _g2_start = CONFIG['openasl_num_epochs'] + 1
+    _g2_end   = CONFIG['openasl_num_epochs'] + CONFIG['how2sign_num_epochs']
     print("  " + "─" * (_W - 2))
-    print(f"  {'':2}{'PHASE 2':} — remaining {_p2_pct:.0f}% of optimizer steps")
-    print(f"  {'':4}Active   : T1 LM LoRA  +  T2 Vision LoRA  +  T3 Head LoRA  +  T4 InfoNCE proj")
-    print(f"  {'':4}           T1: {_tier_params['Tier 1']:,}  |  T2: {_tier_params['Tier 2']:,}"
-          f"  |  T3: {_tier_params['Tier 3']:,}  |  T4: {_tier_params['Tier 4']:,}")
-    print(f"  {'':4}Trainable: {_p2_active:,} params  (all LoRA adapters + projections)  /  base: {_frozen_params:,} params")
-    print(f"  {'':4}Purpose  : End-to-end fine-tuning — LM conditioned on aligned vision features")
+    print(f"  DATASET PHASE B  ──  How2Sign  ({CONFIG['how2sign_num_epochs']} epochs  ·  global epochs {_g2_start}–{_g2_end})")
+    print(f"    Two-phase freeze : {'ENABLED' if CONFIG['how2sign_enable_two_phase'] else 'DISABLED'}", end='')
+    if CONFIG['how2sign_enable_two_phase']:
+        _h2_p1_pct = CONFIG['how2sign_phase1_fraction'] * 100
+        print(f"  (phase1_fraction={CONFIG['how2sign_phase1_fraction']}  →  first {_h2_p1_pct:.0f}% T2+T4 only)")
+    else:
+        print(f"  →  all tiers active from step 0  (recommended for fine-tuning)")
+    print(f"    Curriculum epochs: {CONFIG['how2sign_curriculum_epochs']}  (easy ≤{CONFIG['easy_threshold_sec']}s first)")
+    print(f"    Augmentation ON  : within-phase epoch ≥ {CONFIG['how2sign_aug_start_epoch']}")
+    print(f"    LR T1/T2/T3/T4   : {CONFIG['lr_how2sign_tier1']:.1e}/{CONFIG['lr_how2sign_tier2']:.1e}/{CONFIG['lr_how2sign_tier3']:.1e}/{CONFIG['lr_how2sign_tier4']:.1e}  (fresh restart)")
+    print("  " + "─" * (_W - 2))
+    print(f"  Tier params — T1: {_tier_params['Tier 1']:,}  T2: {_tier_params['Tier 2']:,}  T3: {_tier_params['Tier 3']:,}  T4: {_tier_params['Tier 4']:,}  |  All: {_all_active_params:,}")
     print("━" * _W)
 
     del _t1_set, _t2_set, _t3_set, _lora_marks, _tier_params, _tier_layers, _t4_projections
     del _lora_total, _frozen_params, _tier_meta, _W
-    del _p1_active, _p1_frozen_lora, _p2_active, _p1_pct, _p2_pct
+    del _p1_active_params, _p1_frozen_lora, _all_active_params
 
     # ── Gradient Checkpointing ──
     if CONFIG['use_gradient_checkpointing']:
@@ -3563,72 +3689,224 @@ def main():
     lora_vram = torch.cuda.memory_allocated() / 1e9 if torch.cuda.is_available() else 0
     print(f"  VRAM after LoRA: {lora_vram:.2f} GB")
 
-    # ── Create Data Loaders ──
-    print("\n⚙️  Creating data loaders...")
+    # ── Collators (shared across both dataset phases) ──
+    print("\n⚙️  Creating collators and data loaders...")
     train_collator = Qwen3VLCollator(processor, CONFIG, is_training=True)
-    val_collator = Qwen3VLCollator(processor, CONFIG, is_training=False)
+    val_collator   = Qwen3VLCollator(processor, CONFIG, is_training=False)
 
-    _nw_train = CONFIG['train_num_workers']
+    def _make_loader(dataset, is_train):
+        """Build a DataLoader for the given dataset (train or val)."""
+        _nw = CONFIG['train_num_workers'] if is_train else CONFIG['val_num_workers']
+        _collator = train_collator if is_train else val_collator
+        if is_train and CONFIG.get('use_bucket_batching', False):
+            _bs = BucketBatchSampler(dataset, batch_size=CONFIG['batch_size'], shuffle=True)
+            _loader = DataLoader(
+                dataset,
+                batch_sampler=_bs,
+                collate_fn=_collator,
+                num_workers=_nw,
+                prefetch_factor=CONFIG['train_prefetch_factor'] if _nw > 0 else None,
+                pin_memory=CONFIG['train_pin_memory'],
+                persistent_workers=CONFIG['train_persistent_workers'] and _nw > 0,
+                worker_init_fn=_worker_init_fn,
+            )
+            print(f"  Bucket sampling: {len(_bs)} batches")
+        elif is_train:
+            _loader = DataLoader(
+                dataset,
+                batch_size=CONFIG['batch_size'],
+                shuffle=True,
+                collate_fn=_collator,
+                num_workers=_nw,
+                prefetch_factor=CONFIG['train_prefetch_factor'] if _nw > 0 else None,
+                pin_memory=CONFIG['train_pin_memory'],
+                persistent_workers=CONFIG['train_persistent_workers'] and _nw > 0,
+                worker_init_fn=_worker_init_fn,
+            )
+        else:
+            _loader = DataLoader(
+                dataset,
+                batch_size=CONFIG['batch_size'],
+                shuffle=False,
+                collate_fn=_collator,
+                num_workers=_nw,
+                prefetch_factor=CONFIG['val_prefetch_factor'] if _nw > 0 else None,
+                pin_memory=CONFIG['val_pin_memory'],
+                persistent_workers=CONFIG['val_persistent_workers'] and _nw > 0,
+                worker_init_fn=_worker_init_fn,
+            )
+        return _loader
 
-    if CONFIG.get('use_bucket_batching', False):
-        train_batch_sampler = BucketBatchSampler(
-            train_dataset, batch_size=CONFIG['batch_size'], shuffle=True
-        )
-        train_loader = DataLoader(
-            train_dataset,
-            batch_sampler=train_batch_sampler,
-            collate_fn=train_collator,
-            num_workers=_nw_train,
-            prefetch_factor=CONFIG['train_prefetch_factor'] if _nw_train > 0 else None,
-            pin_memory=CONFIG['train_pin_memory'],
-            persistent_workers=CONFIG['train_persistent_workers'] and _nw_train > 0,
-            worker_init_fn=_worker_init_fn,
-        )
-        print(f"  Using bucket batch sampling ({len(train_batch_sampler)} batches)")
-    else:
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=CONFIG['batch_size'],
-            shuffle=True,
-            collate_fn=train_collator,
-            num_workers=_nw_train,
-            prefetch_factor=CONFIG['train_prefetch_factor'] if _nw_train > 0 else None,
-            pin_memory=CONFIG['train_pin_memory'],
-            persistent_workers=CONFIG['train_persistent_workers'] and _nw_train > 0,
-            worker_init_fn=_worker_init_fn,
-        )
-
-    _nw_val = CONFIG['val_num_workers']
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=CONFIG['batch_size'],
-        shuffle=False,
-        collate_fn=val_collator,
-        num_workers=_nw_val,
-        prefetch_factor=CONFIG['val_prefetch_factor'] if _nw_val > 0 else None,
-        pin_memory=CONFIG['val_pin_memory'],
-        persistent_workers=CONFIG['val_persistent_workers'] and _nw_val > 0,
-        worker_init_fn=_worker_init_fn,
+    # ── Build filtered datasets for each phase ──
+    print("\n📂 Building per-phase filtered datasets...")
+    _common_ds_kwargs = dict(
+        sep=CONFIG['tsv_sep'],
+        bbox_csv_path=CONFIG.get('bbox_csv_train', CONFIG.get('bbox_csv')) if CONFIG.get('use_signer_crop') else None,
+        landmark_parquet_path=CONFIG.get('landmark_parquet_train') if CONFIG.get('use_landmark_overlay') else None,
+        tokenizer=None,   # processor tokenizer loaded below
+        max_text_tokens=CONFIG['max_text_tokens'],
     )
+    _common_val_kwargs = dict(
+        sep=CONFIG['tsv_sep'],
+        bbox_csv_path=CONFIG.get('bbox_csv_val', CONFIG.get('bbox_csv')) if CONFIG.get('use_signer_crop') else None,
+        landmark_parquet_path=CONFIG.get('landmark_parquet_val') if CONFIG.get('use_landmark_overlay') else None,
+        tokenizer=None,
+        max_text_tokens=CONFIG['max_text_tokens'],
+    )
+    print(f"  OpenASL train ({CONFIG['openasl_source_name']}):")
+    openasl_train_ds = SignLanguageQwen3VLDataset(
+        CONFIG['data_train_tsv'], source_filter=CONFIG['openasl_source_name'], **_common_ds_kwargs)
+    print(f"  OpenASL val:")
+    openasl_val_ds = SignLanguageQwen3VLDataset(
+        CONFIG['data_val_tsv'], source_filter=CONFIG['openasl_source_name'], **_common_val_kwargs)
+    print(f"  How2Sign train ({CONFIG['how2sign_source_name']}):")
+    how2sign_train_ds = SignLanguageQwen3VLDataset(
+        CONFIG['data_train_tsv'], source_filter=CONFIG['how2sign_source_name'], **_common_ds_kwargs)
+    print(f"  How2Sign val:")
+    how2sign_val_ds = SignLanguageQwen3VLDataset(
+        CONFIG['data_val_tsv'], source_filter=CONFIG['how2sign_source_name'], **_common_val_kwargs)
 
-    steps_per_epoch = len(train_loader)
-    optimizer_steps_per_epoch = math.ceil(steps_per_epoch / CONFIG['grad_accum_steps'])
-    total_optimizer_steps = optimizer_steps_per_epoch * CONFIG['num_epochs']
+    # Build loaders
+    openasl_train_loader  = _make_loader(openasl_train_ds,  is_train=True)
+    openasl_val_loader    = _make_loader(openasl_val_ds,    is_train=False)
+    how2sign_train_loader = _make_loader(how2sign_train_ds, is_train=True)
+    how2sign_val_loader   = _make_loader(how2sign_val_ds,   is_train=False)
 
-    print(f"  Train loader: {len(train_loader)} micro-batches/epoch")
-    print(f"  Optimizer steps/epoch: {optimizer_steps_per_epoch}")
-    print(f"  Total optimizer steps: {total_optimizer_steps}")
+    # ── Compute per-phase step counts ──
+    _osl_steps_per_epoch  = len(openasl_train_loader)
+    _osl_opt_steps_epoch  = math.ceil(_osl_steps_per_epoch  / CONFIG['grad_accum_steps'])
+    _osl_opt_steps_total  = _osl_opt_steps_epoch  * CONFIG['openasl_num_epochs']
+    _h2s_steps_per_epoch  = len(how2sign_train_loader)
+    _h2s_opt_steps_epoch  = math.ceil(_h2s_steps_per_epoch  / CONFIG['grad_accum_steps'])
+    _h2s_opt_steps_total  = _h2s_opt_steps_epoch  * CONFIG['how2sign_num_epochs']
 
-    # ── Optimizer: 4-tier independent optimizers (per plan §8) ──
-    # Partition trainable params by LoRA tier. T1/T3 frozen in Phase 1, T2/T4 active from start.
-    print("\n⚙️  Setting up 4 independent optimizers (two-phase training)...")
+    print(f"\n  OpenASL  : {len(openasl_train_ds):,} train / {len(openasl_val_ds):,} val  |  {_osl_steps_per_epoch} batches/epoch  |  {_osl_opt_steps_epoch} opt-steps/epoch  |  {_osl_opt_steps_total} total")
+    print(f"  How2Sign : {len(how2sign_train_ds):,} train / {len(how2sign_val_ds):,} val  |  {_h2s_steps_per_epoch} batches/epoch  |  {_h2s_opt_steps_epoch} opt-steps/epoch  |  {_h2s_opt_steps_total} total")
+    print(f"  Grand total optimizer steps: {_osl_opt_steps_total + _h2s_opt_steps_total:,}")
+
+    # ── Pre-training pipeline summary (printed after dataset sizes are known) ──
+    _osl_n_ep   = CONFIG['openasl_num_epochs']
+    _h2s_n_ep   = CONFIG['how2sign_num_epochs']
+    _osl_tp_on  = CONFIG['openasl_enable_two_phase']
+    _h2s_tp_on  = CONFIG['how2sign_enable_two_phase']
+    _osl_pt_step_summary = int(CONFIG['openasl_phase1_fraction'] * _osl_opt_steps_total) if _osl_tp_on else None
+    _h2s_pt_step_summary = int(CONFIG['how2sign_phase1_fraction'] * _h2s_opt_steps_total) if _h2s_tp_on else None
+    _warmup_pct_summary  = int(CONFIG['warmup_ratio'] * 100)
+    _PW = 78
+    print()
+    print("╔" + "═" * _PW + "╗")
+    print("║" + "  TRAINING PIPELINE CONFIGURATION SUMMARY".center(_PW) + "║")
+    print("╚" + "═" * _PW + "╝")
+    print()
+    print(f"  MODEL")
+    print(f"    Name        : {CONFIG['model_name']}")
+    print(f"    dtype       : {CONFIG['dtype']}  |  Attention: {CONFIG['attn_implementation']}")
+    print(f"    QLoRA       : {CONFIG['use_qlora']} (nf4 quantized base, vision in bf16)")
+    print()
+    print(f"  DATASET PHASES")
+    print(f"    Phase A  ──  OpenASL  (source='{CONFIG['openasl_source_name']}')")
+    print(f"      Train clips           : {len(openasl_train_ds):,}   Val clips : {len(openasl_val_ds):,}")
+    print(f"      Epochs                : {_osl_n_ep}  (global epochs 1–{_osl_n_ep})")
+    print(f"      Optimizer steps/epoch : {_osl_opt_steps_epoch:,}   Total OpenASL steps : {_osl_opt_steps_total:,}")
+    print()
+    print(f"    Phase B  ──  How2Sign  (source='{CONFIG['how2sign_source_name']}')")
+    print(f"      Train clips           : {len(how2sign_train_ds):,}   Val clips : {len(how2sign_val_ds):,}")
+    print(f"      Epochs                : {_h2s_n_ep}  (global epochs {_osl_n_ep + 1}–{_osl_n_ep + _h2s_n_ep})")
+    print(f"      Optimizer steps/epoch : {_h2s_opt_steps_epoch:,}   Total How2Sign steps : {_h2s_opt_steps_total:,}")
+    print()
+    print(f"    Grand total optimizer steps : {_osl_opt_steps_total + _h2s_opt_steps_total:,}")
+    print()
+    print(f"  TWO-PHASE FREEZE (per dataset phase)")
+    if _osl_tp_on:
+        _osl_p2_steps_summary = _osl_opt_steps_total - _osl_pt_step_summary
+        print(f"    OpenASL  : ENABLED  |  Phase-1 fraction : {CONFIG['openasl_phase1_fraction'] * 100:.0f}%")
+        print(f"               Phase-1 steps : {_osl_pt_step_summary:,}  →  Phase-2 starts at step {_osl_pt_step_summary + 1:,}")
+        print(f"               Phase-1 active : T2 (Vision LoRA), T4 (InfoNCE)")
+        print(f"               Phase-2 active : T1 + T2 + T3 + T4 (all)")
+    else:
+        print(f"    OpenASL  : DISABLED  →  All tiers active from step 0")
+    if _h2s_tp_on:
+        _h2s_p2_steps_summary = _h2s_opt_steps_total - _h2s_pt_step_summary
+        print(f"    How2Sign : ENABLED  |  Phase-1 fraction : {CONFIG['how2sign_phase1_fraction'] * 100:.0f}%")
+        print(f"               Phase-1 steps : {_h2s_pt_step_summary:,}  →  Phase-2 starts at step {_h2s_pt_step_summary + 1:,}")
+    else:
+        print(f"    How2Sign : DISABLED  →  All tiers active from step 0")
+    print()
+    print(f"  LEARNING RATES")
+    _lr_hdr = f"  {'Tier':<10}  {'OpenASL Phase':<30}  {'How2Sign Phase':<30}"
+    _lr_sep = "  " + "─" * 74
+    print(_lr_hdr)
+    print(_lr_sep)
+    _lr_rows = [
+        ("T1 (LM)",  CONFIG['lr_tier1'],          CONFIG['min_lr_tier1'],          CONFIG['lr_how2sign_tier1'],  CONFIG['min_lr_how2sign_tier1']),
+        ("T2 (Vis)", CONFIG['lr_tier2'],          CONFIG['min_lr_tier2'],          CONFIG['lr_how2sign_tier2'],  CONFIG['min_lr_how2sign_tier2']),
+        ("T3 (Hd)",  CONFIG['lr_tier3'],          CONFIG['min_lr_tier3'],          CONFIG['lr_how2sign_tier3'],  CONFIG['min_lr_how2sign_tier3']),
+        ("T4 (NCE)", CONFIG['lr_tier4'],          CONFIG['min_lr_tier4'],          CONFIG['lr_how2sign_tier4'],  CONFIG['min_lr_how2sign_tier4']),
+    ]
+    for _tname, _pk_o, _fl_o, _pk_h, _fl_h in _lr_rows:
+        _osl_str = f"peak={_pk_o:.1e}  floor={_fl_o:.1e}"
+        _h2s_str = f"peak={_pk_h:.1e}  floor={_fl_h:.1e}"
+        print(f"  {_tname:<10}  {_osl_str:<30}  {_h2s_str:<30}")
+    print(f"  Schedule : Linear warmup ({_warmup_pct_summary}%) → Cosine decay  |  Fresh restart at How2Sign")
+    print()
+    print(f"  CURRICULUM LEARNING")
+    _osl_cl = CONFIG['openasl_curriculum_epochs']
+    _h2s_cl = CONFIG['how2sign_curriculum_epochs']
+    _osl_cl_global = [e for e in _osl_cl]
+    _h2s_cl_global = [_osl_n_ep + e for e in _h2s_cl]
+    print(f"    OpenASL  curriculum epochs (within-phase) : {_osl_cl}  →  global epochs {_osl_cl_global}")
+    print(f"    How2Sign curriculum epochs (within-phase) : {_h2s_cl}  →  global epochs {_h2s_cl_global}")
+    print(f"    Easy threshold : ≤ {CONFIG['easy_threshold_sec']} s  |  Strategy: easy clips first, then rest")
+    print()
+    print(f"  DATA AUGMENTATION")
+    _osl_aug = CONFIG['openasl_aug_start_epoch']
+    _h2s_aug = CONFIG['how2sign_aug_start_epoch']
+    print(f"    OpenASL  aug starts at within-phase epoch : {_osl_aug}  →  global epoch {_osl_aug}")
+    print(f"    How2Sign aug starts at within-phase epoch : {_h2s_aug}  →  global epoch {_osl_n_ep + _h2s_aug}")
+    print()
+    print(f"  VALIDATION")
+    print(f"    OpenASL epochs  →  validate on OpenASL val set  ({len(openasl_val_ds):,} clips)")
+    print(f"    How2Sign epochs →  validate on How2Sign val set  ({len(how2sign_val_ds):,} clips)")
+    print(f"    Eval every : {CONFIG['eval_every_steps']} optimizer steps  (warmup: {CONFIG['eval_every_steps_warmup']} until step {CONFIG['eval_warmup_threshold']})")
+    print()
+    print(f"  EPOCH-BY-EPOCH PLAN")
+    _ep_header = f"    {'Epoch':<7}  {'Dataset':<12}  {'Two-Phase':<11}  {'Curriculum':<12}  {'Augmentation':<14}  Notes"
+    print(_ep_header)
+    print("    " + "─" * 74)
+    _total_ep = _osl_n_ep + _h2s_n_ep
+    for _gep in range(1, _total_ep + 1):
+        if _gep <= _osl_n_ep:
+            _ds   = 'OpenASL'
+            _wep  = _gep
+            _nep  = _osl_n_ep
+            _tp   = 'YES' if (_osl_tp_on and _gep == 1) else 'NO '
+            _cl   = 'YES' if (_wep in CONFIG['openasl_curriculum_epochs']) else 'NO '
+            _aug  = 'YES' if (_wep >= _osl_aug) else 'NO '
+        else:
+            _ds   = 'How2Sign'
+            _wep  = _gep - _osl_n_ep
+            _nep  = _h2s_n_ep
+            _tp   = 'YES' if (_h2s_tp_on and _wep == 1) else 'NO '
+            _cl   = 'YES' if (_wep in CONFIG['how2sign_curriculum_epochs']) else 'NO '
+            _aug  = 'YES' if (_wep >= _h2s_aug) else 'NO '
+        _notes = ''
+        if _gep <= _osl_n_ep and _osl_tp_on and _gep == 1:
+            _notes = 'T2+T4 only → all at step ' + str(_osl_pt_step_summary)
+        elif _gep > _osl_n_ep and _wep == 1:
+            _notes = 'Fresh LR restart, all tiers'
+        print(f"    Epoch {_gep:<2}  [{_ds:<8} {_wep}/{_nep}]  Two-Phase={_tp}  Curriculum={_cl}  Augmentation={_aug}  {_notes}")
+    print()
+    print(f"  CHECKPOINTING")
+    print(f"    Save every : {CONFIG['save_every_steps']} steps   Resume from : {'step ' + str(CONFIG['resume_checkpoint_step']) if CONFIG['resume_training'] else 'scratch'}")
+    print("═" * (_PW + 2))
+
+    # ── Partition trainable params by LoRA tier ──
+    print("\n⚙️  Partitioning parameters by LoRA tier...")
 
     def _matches_tier(name: str, module_list) -> bool:
-        # LoRA param names: `base_model.model.<...>.<tier_module>.lora_A.default.weight`
         return any(f".{m}." in name or name.endswith(f".{m}") or f".{m}.lora_" in name
                    for m in module_list)
 
-    # Collect Tier 4 (InfoNCE projections) first so they can be excluded from tier matching.
     t4_params = [p for p in [model.vision_proj, model.text_proj]
                  for p in p.parameters() if p.requires_grad]
     _t4_ids = {id(p) for p in t4_params}
@@ -3638,7 +3916,7 @@ def main():
         if not p.requires_grad:
             continue
         if id(p) in _t4_ids:
-            continue  # already in Tier 4
+            continue
         if _matches_tier(n, CONFIG['lora_t3_modules']):
             t3_params.append(p)
         elif _matches_tier(n, CONFIG['lora_t2_modules']):
@@ -3648,133 +3926,36 @@ def main():
         else:
             unclassified.append(n)
 
-    total_trainable = len(t1_params) + len(t2_params) + len(t3_params) + len(t4_params)
     if unclassified:
         raise RuntimeError(
             f"{len(unclassified)} trainable param(s) unclassified by LoRA tier matcher. "
             f"Examples: {unclassified[:5]}"
         )
 
-    print(f"  Tier 1 (LM LoRA):          {len(t1_params)} params  @ peak={CONFIG['lr_tier1']:.2e}, floor={CONFIG['min_lr_tier1']:.2e}")
-    print(f"  Tier 2 (Vision LoRA):      {len(t2_params)} params  @ peak={CONFIG['lr_tier2']:.2e}, floor={CONFIG['min_lr_tier2']:.2e}")
-    print(f"  Tier 3 (Head LoRA):        {len(t3_params)} params  @ peak={CONFIG['lr_tier3']:.2e}, floor={CONFIG['min_lr_tier3']:.2e}")
-    print(f"  Tier 4 (InfoNCE proj):     {len(t4_params)} params  @ peak={CONFIG['lr_tier4']:.2e}, floor={CONFIG['min_lr_tier4']:.2e}")
-    print(f"  Warmup ratio (all tiers): {CONFIG['warmup_ratio']:.3f} (applied to each tier's active-step lifetime)")
-
-    # Stash tier param lists on the model so train() can access them at phase transition
     model._t1_params = t1_params
     model._t2_params = t2_params
     model._t3_params = t3_params
     model._t4_params = t4_params
+    print(f"  T1: {len(t1_params)}  T2: {len(t2_params)}  T3: {len(t3_params)}  T4: {len(t4_params)}")
 
-    # Phase 1: freeze Tier 1 (LM LoRA) and Tier 3 (Head LoRA) — they activate at phase transition
-    for p in t1_params:
-        p.requires_grad = False
-    for p in t3_params:
-        p.requires_grad = False
-    print(f"  🧊 Phase 1: Tier 1 ({len(t1_params)}) and Tier 3 ({len(t3_params)}) params frozen until phase transition")
-
-    # Phase 1 and 2 transition point
-    phase1_fraction = CONFIG['phase1_fraction']
-    phase_transition_step = int(phase1_fraction * total_optimizer_steps)
-    phase2_steps = total_optimizer_steps - phase_transition_step
-
-    print(f"  Phase 1 duration: {phase_transition_step} steps (T2, T4 only)")
-    print(f"  Phase 2 duration: {phase2_steps} steps (T1, T2, T3, T4 active)")
-
-    # ── Create Tier 2 and Tier 4 optimizers (active from step 0) ──
-    def _create_optimizer(tier_params, tier_name, peak_lr):
-        """Create PagedAdamW8bit or AdamW for given tier params."""
+    def _create_optimizer(tier_params, peak_lr):
         if CONFIG['use_8bit_adam'] and _BNB_AVAILABLE:
             return bnb.optim.PagedAdamW8bit(
-                tier_params,
-                lr=peak_lr,
-                betas=CONFIG['adam_betas'],
-                weight_decay=CONFIG['weight_decay'],
-            )
-        else:
-            return torch.optim.AdamW(
-                tier_params,
-                lr=peak_lr,
-                betas=CONFIG['adam_betas'],
-                weight_decay=CONFIG['weight_decay'],
-            )
+                tier_params, lr=peak_lr,
+                betas=CONFIG['adam_betas'], weight_decay=CONFIG['weight_decay'])
+        return torch.optim.AdamW(
+            tier_params, lr=peak_lr,
+            betas=CONFIG['adam_betas'], weight_decay=CONFIG['weight_decay'])
 
-    opt_tier2 = _create_optimizer(t2_params, "Tier 2", CONFIG['lr_tier2'])
-    opt_tier4 = _create_optimizer(t4_params, "Tier 4", CONFIG['lr_tier4'])
-
-    # Tier 1 and 3 optimizers are created at phase transition (will be None initially)
-    opt_tier1 = None
-    opt_tier3 = None
-
-    print(f"  ✓ Tier 2 and Tier 4 optimizers created (active from step 0)")
-
-    # T2 and T4 active from step 0, so total_active_steps = total_optimizer_steps
-    sched_tier2 = torch.optim.lr_scheduler.LambdaLR(
-        opt_tier2,
-        lr_lambda=_make_tier_lambda(CONFIG['lr_tier2'], CONFIG['min_lr_tier2'],
-                                     total_optimizer_steps, CONFIG['warmup_ratio'])
-    )
-    sched_tier4 = torch.optim.lr_scheduler.LambdaLR(
-        opt_tier4,
-        lr_lambda=_make_tier_lambda(CONFIG['lr_tier4'], CONFIG['min_lr_tier4'],
-                                     total_optimizer_steps, CONFIG['warmup_ratio'])
-    )
-
-    # T1 and T3 schedulers are created at phase transition
-    sched_tier1 = None
-    sched_tier3 = None
-
-    # Print warmup/cosine schedule
-    warmup_steps_t2 = int(CONFIG['warmup_ratio'] * total_optimizer_steps)
-    cosine_steps_t2 = total_optimizer_steps - warmup_steps_t2
-    print(f"\n📈 LR Schedules (per-tier cosine with linear warmup):")
-    print(f"  Warmup: {warmup_steps_t2} steps | Cosine: {cosine_steps_t2} steps")
-    print(f"  T1 LM:       {CONFIG['lr_tier1']:.2e} → {CONFIG['min_lr_tier1']:.2e}  (born at phase transition)")
-    print(f"  T2 Vision:   {CONFIG['lr_tier2']:.2e} → {CONFIG['min_lr_tier2']:.2e}  (from step 0)")
-    print(f"  T3 Head:     {CONFIG['lr_tier3']:.2e} → {CONFIG['min_lr_tier3']:.2e}  (born at phase transition)")
-    print(f"  T4 Proj:     {CONFIG['lr_tier4']:.2e} → {CONFIG['min_lr_tier4']:.2e}  (from step 0)")
-
-    # ── Resume optimizer/scheduler state ──
+    # ── Determine resume state ──
+    _resume_phase_name = 'openasl'  # default: start from OpenASL
+    _resume_global_epoch_offset = 0
     if training_state is not None:
-        try:
-            # Restore Tier 2 and Tier 4 optimizer states (always exist)
-            if 'opt_tier2_state_dict' in training_state:
-                opt_tier2.load_state_dict(training_state['opt_tier2_state_dict'])
-            if 'opt_tier4_state_dict' in training_state:
-                opt_tier4.load_state_dict(training_state['opt_tier4_state_dict'])
-            sched_tier2.load_state_dict(training_state['sched_tier2_state_dict'])
-            sched_tier4.load_state_dict(training_state['sched_tier4_state_dict'])
+        _resume_phase_name = training_state.get('dataset_phase_name', 'openasl')
+        _resume_global_epoch_offset = training_state.get('global_epoch_offset', 0)
 
-            # If resuming into Phase 2, restore T1 and T3 optimizer/scheduler states
-            if start_global_step >= phase_transition_step and 'opt_tier1_state_dict' in training_state:
-                # Create Tier 1 and Tier 3 optimizers
-                opt_tier1 = _create_optimizer(t1_params, "Tier 1", CONFIG['lr_tier1'])
-                opt_tier3 = _create_optimizer(t3_params, "Tier 3", CONFIG['lr_tier3'])
-                opt_tier1.load_state_dict(training_state['opt_tier1_state_dict'])
-                opt_tier3.load_state_dict(training_state['opt_tier3_state_dict'])
-
-                # Create Tier 1 and Tier 3 schedulers
-                sched_tier1 = torch.optim.lr_scheduler.LambdaLR(
-                    opt_tier1,
-                    lr_lambda=_make_tier_lambda(CONFIG['lr_tier1'], CONFIG['min_lr_tier1'],
-                                                 phase2_steps, CONFIG['warmup_ratio'])
-                )
-                sched_tier3 = torch.optim.lr_scheduler.LambdaLR(
-                    opt_tier3,
-                    lr_lambda=_make_tier_lambda(CONFIG['lr_tier3'], CONFIG['min_lr_tier3'],
-                                                 phase2_steps, CONFIG['warmup_ratio'])
-                )
-                sched_tier1.load_state_dict(training_state['sched_tier1_state_dict'])
-                sched_tier3.load_state_dict(training_state['sched_tier3_state_dict'])
-
-                print("  ✅ Phase 2 optimizers/schedulers restored (T1, T2, T3, T4)")
-            else:
-                print("  ✅ Phase 1 optimizers/schedulers restored (T2, T4)")
-        except Exception as e:
-            print(f"  ⚠️  Warning: Could not restore optimizer/scheduler state: {e}")
-
-        # Restore RNG states (may be absent in older checkpoints — skip gracefully)
+    # ── Restore RNG states ──
+    if training_state is not None:
         if 'rng_state' in training_state:
             try:
                 torch.set_rng_state(training_state['rng_state'])
@@ -3786,15 +3967,11 @@ def main():
             except Exception as e:
                 print(f"  ⚠️  Warning: Could not restore RNG states: {e}")
         else:
-            print("  ℹ️  RNG states not in checkpoint (older save) — continuing with current RNG state")
+            print("  ℹ️  RNG states not in checkpoint (older save)")
 
-        del training_state
-        gc.collect()
-
-    # ── Checkpoint Manager ──
+    # ── Checkpoint Manager & Loggers ──
     ckpt_manager = CheckpointManager(CONFIG['checkpoint_dir'], CONFIG['keep_last_n_checkpoints'])
 
-    # ── CSV Loggers ──
     train_csv_logger = CSVLogger(CONFIG['train_log_file'], [
         'timestamp', 'global_step', 'epoch', 'phase',
         'train_loss', 'train_ppl', 'contrast_loss',
@@ -3817,54 +3994,271 @@ def main():
         'timestamp', 'global_step', 'epoch', 'source', 'reference', 'hypothesis',
     ])
 
-    # ── TensorBoard ──
     tb_dir = CONFIG['tensorboard_dir']
     Path(tb_dir).mkdir(parents=True, exist_ok=True)
     tb_writer = SummaryWriter(log_dir=str(tb_dir))
 
-    # ── Verify label masking (first batch debug) ──
-    print("\n🔍 Label masking verification (first training batch):")
+    # ── Verify label masking (first OpenASL batch) ──
+    print("\n🔍 Label masking verification (first OpenASL training batch):")
     try:
-        first_sample = train_dataset[0]
-        first_batch = train_collator([first_sample])
-        input_ids = first_batch['input_ids'][0]
-        labels = first_batch['labels'][0]
-
-        # Decode only the non-masked label positions
-        label_tokens = labels[labels != -100]
-        decoded_labels = processor.tokenizer.decode(label_tokens, skip_special_tokens=True)
-        print(f"  Ground truth: {first_sample['text']}")
-        print(f"  Decoded labels (non-masked): {decoded_labels}")
-        print(f"  Total tokens: {len(input_ids)} | Masked: {(labels == -100).sum().item()} | Unmasked: {(labels != -100).sum().item()}")
-
-        del first_batch, first_sample, input_ids, labels, label_tokens, decoded_labels
+        _first = openasl_train_ds[0]
+        _fbatch = train_collator([_first])
+        _input_ids = _fbatch['input_ids'][0]
+        _labels = _fbatch['labels'][0]
+        _label_tokens = _labels[_labels != -100]
+        _decoded = processor.tokenizer.decode(_label_tokens, skip_special_tokens=True)
+        print(f"  Ground truth: {_first['text']}")
+        print(f"  Decoded labels: {_decoded}")
+        print(f"  Total tokens: {len(_input_ids)} | Masked: {(_labels == -100).sum().item()} | Unmasked: {(_labels != -100).sum().item()}")
+        del _fbatch, _first, _input_ids, _labels, _label_tokens, _decoded
     except Exception as e:
         print(f"  ⚠️  Warning: Label verification failed: {e}")
     gc.collect()
     torch.cuda.empty_cache()
 
-    # ── Train ──
     print(f"\nGPU: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}")
-    print(f"VRAM total: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB" if torch.cuda.is_available() else "")
-    
+    if torch.cuda.is_available():
+        print(f"VRAM total: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
+
     controller = InteractiveController()
+
+    # ════════════════════════════════════════════════════════════════
+    #  DATASET PHASE A: OpenASL
+    # ════════════════════════════════════════════════════════════════
+    _osl_epoch_offset = 0   # global epoch offset: OpenASL epochs are 1–N
+    _skip_openasl = (_resume_phase_name == 'how2sign')
+
+    if not _skip_openasl:
+        print("\n" + "═" * 80)
+        print("  📦  DATASET PHASE A: OpenASL")
+        print("═" * 80)
+
+        _osl_enable_tp  = CONFIG['openasl_enable_two_phase']
+        _osl_p1_frac    = CONFIG['openasl_phase1_fraction']
+        if _osl_enable_tp:
+            _osl_pt_step = int(_osl_p1_frac * _osl_opt_steps_total)
+            _osl_p2_steps = _osl_opt_steps_total - _osl_pt_step
+        else:
+            _osl_pt_step  = _osl_opt_steps_total + 1   # sentinel: never fires
+            _osl_p2_steps = _osl_opt_steps_total
+
+        # Freeze T1/T3 if two-phase is enabled for OpenASL
+        if _osl_enable_tp:
+            for p in t1_params: p.requires_grad = False
+            for p in t3_params: p.requires_grad = False
+            print(f"  🧊 T1 ({len(t1_params)}) and T3 ({len(t3_params)}) frozen for OpenASL Phase 1")
+        else:
+            for p in t1_params: p.requires_grad = True
+            for p in t3_params: p.requires_grad = True
+
+        # Create OpenASL optimizers
+        opt_tier2 = _create_optimizer(t2_params, CONFIG['lr_tier2'])
+        opt_tier4 = _create_optimizer(t4_params, CONFIG['lr_tier4'])
+        opt_tier1 = None
+        opt_tier3 = None
+        sched_tier2 = torch.optim.lr_scheduler.LambdaLR(
+            opt_tier2, lr_lambda=_make_tier_lambda(
+                CONFIG['lr_tier2'], CONFIG['min_lr_tier2'], _osl_opt_steps_total, CONFIG['warmup_ratio']))
+        sched_tier4 = torch.optim.lr_scheduler.LambdaLR(
+            opt_tier4, lr_lambda=_make_tier_lambda(
+                CONFIG['lr_tier4'], CONFIG['min_lr_tier4'], _osl_opt_steps_total, CONFIG['warmup_ratio']))
+        sched_tier1 = None
+        sched_tier3 = None
+
+        # Restore OpenASL optimizer/scheduler states from checkpoint
+        if training_state is not None and _resume_phase_name == 'openasl':
+            try:
+                if 'opt_tier2_state_dict' in training_state:
+                    opt_tier2.load_state_dict(training_state['opt_tier2_state_dict'])
+                if 'opt_tier4_state_dict' in training_state:
+                    opt_tier4.load_state_dict(training_state['opt_tier4_state_dict'])
+                sched_tier2.load_state_dict(training_state['sched_tier2_state_dict'])
+                sched_tier4.load_state_dict(training_state['sched_tier4_state_dict'])
+                _ckpt_phase = training_state.get('phase', 1)
+                if _ckpt_phase == 2 and 'opt_tier1_state_dict' in training_state:
+                    opt_tier1 = _create_optimizer(t1_params, CONFIG['lr_tier1'])
+                    opt_tier3 = _create_optimizer(t3_params, CONFIG['lr_tier3'])
+                    opt_tier1.load_state_dict(training_state['opt_tier1_state_dict'])
+                    opt_tier3.load_state_dict(training_state['opt_tier3_state_dict'])
+                    sched_tier1 = torch.optim.lr_scheduler.LambdaLR(
+                        opt_tier1, lr_lambda=_make_tier_lambda(
+                            CONFIG['lr_tier1'], CONFIG['min_lr_tier1'], _osl_p2_steps, CONFIG['warmup_ratio']))
+                    sched_tier3 = torch.optim.lr_scheduler.LambdaLR(
+                        opt_tier3, lr_lambda=_make_tier_lambda(
+                            CONFIG['lr_tier3'], CONFIG['min_lr_tier3'], _osl_p2_steps, CONFIG['warmup_ratio']))
+                    sched_tier1.load_state_dict(training_state['sched_tier1_state_dict'])
+                    sched_tier3.load_state_dict(training_state['sched_tier3_state_dict'])
+                    for p in t1_params: p.requires_grad = True
+                    for p in t3_params: p.requires_grad = True
+                    print("  ✅ OpenASL optimizers restored (phase 2: T1 T2 T3 T4)")
+                else:
+                    print("  ✅ OpenASL optimizers restored (phase 1: T2 T4)")
+            except Exception as _re:
+                print(f"  ⚠️  Could not restore OpenASL optimizer state: {_re}")
+
+        _osl_train_config = {
+            **CONFIG,
+            'num_epochs':        CONFIG['openasl_num_epochs'],
+            'enable_two_phase':  CONFIG['openasl_enable_two_phase'],
+            'phase1_fraction':   CONFIG['openasl_phase1_fraction'],
+            'curriculum_epochs': CONFIG['openasl_curriculum_epochs'],
+            'aug_start_epoch':   CONFIG['openasl_aug_start_epoch'],
+        }
+
+        osl_final_step, best_val_loss = train(
+            model=model,
+            processor=processor,
+            train_loader=openasl_train_loader,
+            val_loader=openasl_val_loader,
+            val_dataset=openasl_val_ds,
+            opt_tier2=opt_tier2, sched_tier2=sched_tier2,
+            opt_tier4=opt_tier4, sched_tier4=sched_tier4,
+            opt_tier1=opt_tier1, sched_tier1=sched_tier1,
+            opt_tier3=opt_tier3, sched_tier3=sched_tier3,
+            phase_transition_step=_osl_pt_step,
+            phase2_steps=_osl_p2_steps,
+            train_config=_osl_train_config,
+            ckpt_manager=ckpt_manager,
+            train_csv_logger=train_csv_logger,
+            val_csv_logger=val_csv_logger,
+            gen_samples_csv_logger=gen_samples_csv_logger,
+            tb_writer=tb_writer,
+            _val_collator=val_collator,
+            _train_collator=train_collator,
+            start_epoch=start_epoch if _resume_phase_name == 'openasl' else 1,
+            start_global_step=start_global_step if _resume_phase_name == 'openasl' else 0,
+            start_steps_done_in_epoch=start_steps_done_in_epoch if _resume_phase_name == 'openasl' else None,
+            best_val_loss=best_val_loss,
+            start_evals_without_improvement=start_evals_without_improvement if _resume_phase_name == 'openasl' else 0,
+            start_elapsed_sec=start_elapsed_sec if _resume_phase_name == 'openasl' else 0.0,
+            controller=controller,
+            global_epoch_offset=_osl_epoch_offset,
+            dataset_phase_name='openasl',
+        )
+
+        # Ensure all tiers are unfrozen before How2Sign (safety guard)
+        for p in t1_params: p.requires_grad = True
+        for p in t3_params: p.requires_grad = True
+
+        # Clean up OpenASL optimizer memory
+        del opt_tier1, opt_tier2, opt_tier3, opt_tier4
+        del sched_tier1, sched_tier2, sched_tier3, sched_tier4
+        gc.collect()
+        torch.cuda.empty_cache()
+    else:
+        osl_final_step = start_global_step
+        # Ensure all tiers unfrozen when skipping directly to How2Sign
+        for p in t1_params: p.requires_grad = True
+        for p in t3_params: p.requires_grad = True
+
+    if training_state is not None:
+        del training_state
+        gc.collect()
+
+    # ════════════════════════════════════════════════════════════════
+    #  DATASET PHASE B: How2Sign
+    # ════════════════════════════════════════════════════════════════
+    _h2s_epoch_offset = CONFIG['openasl_num_epochs']
+
+    print("\n" + "═" * 80)
+    print("  📦  DATASET PHASE B: How2Sign  (fine-tuning on clean data)")
+    print("═" * 80)
+
+    _h2s_enable_tp = CONFIG['how2sign_enable_two_phase']
+    _h2s_p1_frac   = CONFIG['how2sign_phase1_fraction']
+    if _h2s_enable_tp:
+        _h2s_pt_step  = int(_h2s_p1_frac * _h2s_opt_steps_total)
+        _h2s_p2_steps = _h2s_opt_steps_total - _h2s_pt_step
+        for p in t1_params: p.requires_grad = False
+        for p in t3_params: p.requires_grad = False
+        print(f"  🧊 T1/T3 frozen for How2Sign Phase 1")
+    else:
+        _h2s_pt_step  = _h2s_opt_steps_total + 1   # sentinel: never fires
+        _h2s_p2_steps = _h2s_opt_steps_total
+
+    # Create How2Sign optimizers (fresh, lower LRs) — all 4 tiers
+    opt_tier1 = _create_optimizer(t1_params, CONFIG['lr_how2sign_tier1'])
+    opt_tier2 = _create_optimizer(t2_params, CONFIG['lr_how2sign_tier2'])
+    opt_tier3 = _create_optimizer(t3_params, CONFIG['lr_how2sign_tier3'])
+    opt_tier4 = _create_optimizer(t4_params, CONFIG['lr_how2sign_tier4'])
+
+    if _h2s_enable_tp:
+        sched_tier1 = None
+        sched_tier3 = None
+    else:
+        sched_tier1 = torch.optim.lr_scheduler.LambdaLR(
+            opt_tier1, lr_lambda=_make_tier_lambda(
+                CONFIG['lr_how2sign_tier1'], CONFIG['min_lr_how2sign_tier1'], _h2s_opt_steps_total, CONFIG['warmup_ratio']))
+        sched_tier3 = torch.optim.lr_scheduler.LambdaLR(
+            opt_tier3, lr_lambda=_make_tier_lambda(
+                CONFIG['lr_how2sign_tier3'], CONFIG['min_lr_how2sign_tier3'], _h2s_opt_steps_total, CONFIG['warmup_ratio']))
+    sched_tier2 = torch.optim.lr_scheduler.LambdaLR(
+        opt_tier2, lr_lambda=_make_tier_lambda(
+            CONFIG['lr_how2sign_tier2'], CONFIG['min_lr_how2sign_tier2'], _h2s_opt_steps_total, CONFIG['warmup_ratio']))
+    sched_tier4 = torch.optim.lr_scheduler.LambdaLR(
+        opt_tier4, lr_lambda=_make_tier_lambda(
+            CONFIG['lr_how2sign_tier4'], CONFIG['min_lr_how2sign_tier4'], _h2s_opt_steps_total, CONFIG['warmup_ratio']))
+
+    # Restore How2Sign optimizer states when resuming directly into this phase
+    _h2s_start_epoch = 1
+    _h2s_start_step  = osl_final_step
+    _h2s_start_steps_in_ep = None
+    _h2s_start_evals = 0
+    _h2s_start_elapsed = 0.0
+
+    if _skip_openasl and training_state is not None:
+        try:
+            if 'opt_tier2_state_dict' in training_state:
+                opt_tier2.load_state_dict(training_state['opt_tier2_state_dict'])
+            if 'opt_tier4_state_dict' in training_state:
+                opt_tier4.load_state_dict(training_state['opt_tier4_state_dict'])
+            sched_tier2.load_state_dict(training_state['sched_tier2_state_dict'])
+            sched_tier4.load_state_dict(training_state['sched_tier4_state_dict'])
+            if 'opt_tier1_state_dict' in training_state and sched_tier1 is not None:
+                opt_tier1.load_state_dict(training_state['opt_tier1_state_dict'])
+                opt_tier3.load_state_dict(training_state['opt_tier3_state_dict'])
+                sched_tier1.load_state_dict(training_state['sched_tier1_state_dict'])
+                sched_tier3.load_state_dict(training_state['sched_tier3_state_dict'])
+            _h2s_start_epoch    = start_epoch - CONFIG['openasl_num_epochs']
+            _h2s_start_step     = start_global_step
+            _h2s_start_steps_in_ep = start_steps_done_in_epoch
+            _h2s_start_evals    = start_evals_without_improvement
+            _h2s_start_elapsed  = start_elapsed_sec
+            best_val_loss       = best_val_loss
+            print("  ✅ How2Sign optimizers restored from checkpoint")
+        except Exception as _re:
+            print(f"  ⚠️  Could not restore How2Sign optimizer state: {_re}")
+
+    _h2s_train_config = {
+        **CONFIG,
+        'num_epochs':        CONFIG['how2sign_num_epochs'],
+        'enable_two_phase':  CONFIG['how2sign_enable_two_phase'],
+        'phase1_fraction':   CONFIG['how2sign_phase1_fraction'],
+        'curriculum_epochs': CONFIG['how2sign_curriculum_epochs'],
+        'aug_start_epoch':   CONFIG['how2sign_aug_start_epoch'],
+        'lr_tier1':          CONFIG['lr_how2sign_tier1'],
+        'min_lr_tier1':      CONFIG['min_lr_how2sign_tier1'],
+        'lr_tier2':          CONFIG['lr_how2sign_tier2'],
+        'min_lr_tier2':      CONFIG['min_lr_how2sign_tier2'],
+        'lr_tier3':          CONFIG['lr_how2sign_tier3'],
+        'min_lr_tier3':      CONFIG['min_lr_how2sign_tier3'],
+        'lr_tier4':          CONFIG['lr_how2sign_tier4'],
+        'min_lr_tier4':      CONFIG['min_lr_how2sign_tier4'],
+    }
+
     final_step, final_best_loss = train(
         model=model,
         processor=processor,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        val_dataset=val_dataset,
-        opt_tier2=opt_tier2,
-        sched_tier2=sched_tier2,
-        opt_tier4=opt_tier4,
-        sched_tier4=sched_tier4,
-        opt_tier1=opt_tier1,
-        sched_tier1=sched_tier1,
-        opt_tier3=opt_tier3,
-        sched_tier3=sched_tier3,
-        phase_transition_step=phase_transition_step,
-        phase2_steps=phase2_steps,
-        train_config=CONFIG,
+        train_loader=how2sign_train_loader,
+        val_loader=how2sign_val_loader,
+        val_dataset=how2sign_val_ds,
+        opt_tier2=opt_tier2, sched_tier2=sched_tier2,
+        opt_tier4=opt_tier4, sched_tier4=sched_tier4,
+        opt_tier1=opt_tier1, sched_tier1=sched_tier1,
+        opt_tier3=opt_tier3, sched_tier3=sched_tier3,
+        phase_transition_step=_h2s_pt_step,
+        phase2_steps=_h2s_p2_steps,
+        train_config=_h2s_train_config,
         ckpt_manager=ckpt_manager,
         train_csv_logger=train_csv_logger,
         val_csv_logger=val_csv_logger,
@@ -3872,13 +4266,15 @@ def main():
         tb_writer=tb_writer,
         _val_collator=val_collator,
         _train_collator=train_collator,
-        start_epoch=start_epoch,
-        start_global_step=start_global_step,
-        start_steps_done_in_epoch=start_steps_done_in_epoch,
+        start_epoch=_h2s_start_epoch,
+        start_global_step=_h2s_start_step,
+        start_steps_done_in_epoch=_h2s_start_steps_in_ep,
         best_val_loss=best_val_loss,
-        start_evals_without_improvement=start_evals_without_improvement,
-        start_elapsed_sec=start_elapsed_sec,
+        start_evals_without_improvement=_h2s_start_evals,
+        start_elapsed_sec=_h2s_start_elapsed,
         controller=controller,
+        global_epoch_offset=_h2s_epoch_offset,
+        dataset_phase_name='how2sign',
     )
 
     print("\n" + "━" * 80)
