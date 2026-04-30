@@ -86,6 +86,27 @@ def _remap_path_for_kaggle(fp: str) -> str:
     filename = parts[3]
     return f'{_KAGGLE_BASE}/{source}/{source}/{split}/{filename}'
 
+def _remap_path_for_modal(fp: str) -> str:
+    """
+    Converts a local Windows file_path from the TSV to its Modal volume equivalent.
+    Expects video clips mirrored under the modal_video_mount volume:
+      D:\\signbridge_dataset\\how2sign\\train\\foo.mp4  →
+        /videos/how2sign/train/foo.mp4
+    Upload with:
+      modal volume put signbridge-videos "D:/signbridge_dataset/how2sign" /how2sign
+      modal volume put signbridge-videos "D:/signbridge_dataset/openasl"  /openasl
+    """
+    video_mount = CONFIG.get('modal_video_mount', '/videos')
+    p = Path(fp.replace('\\', '/'))
+    parts = [x for x in p.parts if x not in ('', '/') and ':' not in x]
+    # Expected: ['signbridge_dataset', <source>, <split>, <filename>]
+    if len(parts) < 4:
+        return fp
+    source   = parts[1]  # 'how2sign' or 'openasl'
+    split    = parts[2]  # 'train', 'val', 'test'
+    filename = parts[3]
+    return f'{video_mount}/{source}/{split}/{filename}'
+
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 # benchmark=True lets cuDNN profile and select the fastest convolution algorithm for each
@@ -136,9 +157,9 @@ CONFIG = {
     'quantize_skip_modules': ['visual'],
 
     # ── Video Processing ──
-    'video_fps': 16,                              # Frames per second to sample (lowered from 18 to fit bigger per-frame budget within 20M total cap)
+    'video_fps': 18,                              # Frames per second to sample (lowered from 18 to reduce peak RAM; raw frames load at full res before resize)
     'video_min_pixels': 4 * 32 * 32,              # Min visual tokens per frame pair (~4 tokens)
-    'video_max_pixels': 100 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
+    'video_max_pixels': 128 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
     'video_total_pixels': 20480 * 32 * 32,        # Total pixel budget cap across all frames (None = no cap)
 
     # ── Signer Cropping (pre-computed MediaPipe bboxes) ──
@@ -187,6 +208,22 @@ CONFIG = {
     'lora_use_rslora': True,                      # Rank-Stabilized LoRA (sqrt(r) scaling; better stability)
     'lora_init_weights': True,                    # Default init (PiSSA not supported for Conv3d layers in vision encoder)
 
+    # ── Core Training ──
+    'batch_size': 4,                              # VRAM constraint with vision LoRA — 1 sample per micro-batch
+    # ── Gradient Accumulation ──
+    'grad_accum_steps': 6,                       # Effective batch = 1 x 24 = 24
+
+    # ── DataLoader Config ──
+    'train_num_workers': 4,                       # reduce to 1 if Windows shared-memory error 1455 reappears
+    'train_prefetch_factor': 3,
+    'train_pin_memory': True,                     # Pinned memory for async CPU→GPU DMA during training (disabled to reduce RAM usage and fragmentation)
+    'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
+
+    'val_num_workers': 3,                          # 1 worker overlaps video decoding with GPU inference during validation
+    'val_prefetch_factor': 2,                      # Pre-load 2 batches ahead during validation
+    'val_pin_memory': True,                        # Pinned memory for async CPU→GPU DMA during validation
+    'val_persistent_workers': True,               # Keep val worker alive across validation runs
+
     # ── Dataset Phases ──────────────────────────────────────────────────────────────────────
     # Phase A: OpenASL  (noisy, larger — pre-training phase)
     'openasl_source_name':             'openasl',
@@ -210,53 +247,37 @@ CONFIG = {
     # Augmentation for How2Sign
     'how2sign_aug_start_epoch':        2,
 
+    # ── Learning Rates (per-tier; each tier owns its intrinsic peak/floor) ──
+    # OpenASL phase LRs
+    # Tier 1 (LM LoRA): attn + MLP. Active only during Phase 2.
+    'lr_openasl_tier1':             3e-5,
+    'min_lr_openasl_tier1':         1.5e-6,
+    # Tier 2 (Vision LoRA). Active from step 0 to end (uninterrupted through phase transition).
+    'lr_openasl_tier2':             5e-5,
+    'min_lr_openasl_tier2':         2.5e-6,
+    # Tier 3 (Head LoRA): lm_head. Active only during Phase 2.
+    'lr_openasl_tier3':             2e-5,
+    'min_lr_openasl_tier3':         1e-6,
+    # Tier 4 (InfoNCE projections: vision_proj + text_proj). Active from step 0 to end.
+    'lr_openasl_tier4':             5e-5,
+    'min_lr_openasl_tier4':         2.5e-6,
+
     # How2Sign fine-tuning LRs — lower than OpenASL (fresh restart at phase transition)
     # Tier 1 (LM LoRA)
     'lr_how2sign_tier1':               1e-5,
-    'min_lr_how2sign_tier1':           1e-7,
+    'min_lr_how2sign_tier1':           5e-7,
     # Tier 2 (Vision LoRA)
     'lr_how2sign_tier2':               2e-5,
-    'min_lr_how2sign_tier2':           2e-7,
+    'min_lr_how2sign_tier2':           1e-6,
     # Tier 3 (Head LoRA)
     'lr_how2sign_tier3':               1e-5,
-    'min_lr_how2sign_tier3':           1e-7,
+    'min_lr_how2sign_tier3':           5e-7,
     # Tier 4 (InfoNCE projections)
-    'lr_how2sign_tier4':               5e-5,
-    'min_lr_how2sign_tier4':           5e-7,
+    'lr_how2sign_tier4':               2e-5,
+    'min_lr_how2sign_tier4':           1e-6,
 
     # easy_threshold_sec: shared across both phases
     'easy_threshold_sec':              4.0,
-
-    # ── Core Training ──
-    'batch_size': 1,                              # VRAM constraint with vision LoRA — 1 sample per micro-batch
-
-    # ── Gradient Accumulation ──
-    'grad_accum_steps': 32,                       # Effective batch = 1 x 32 = 32
-
-    # ── DataLoader Config ──
-    'train_num_workers': 2,                       # reduce to 1 if Windows shared-memory error 1455 reappears
-    'train_prefetch_factor': 2,
-    'train_pin_memory': False,                     # Pinned memory for async CPU→GPU DMA during training (disabled to reduce RAM usage and fragmentation)
-    'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
-
-    'val_num_workers': 1,                          # 1 worker overlaps video decoding with GPU inference during validation
-    'val_prefetch_factor': 1,                      # Pre-load 2 batches ahead during validation
-    'val_pin_memory': False,                        # Pinned memory for async CPU→GPU DMA during validation
-    'val_persistent_workers': False,               # Keep val worker alive across validation runs
-
-    # ── Learning Rates (per-tier; each tier owns its intrinsic peak/floor) ──
-    # Tier 1 (LM LoRA): attn + MLP. Active only during Phase 2.
-    'lr_tier1':             3e-5,
-    'min_lr_tier1':         3e-7,
-    # Tier 2 (Vision LoRA). Active from step 0 to end (uninterrupted through phase transition).
-    'lr_tier2':             5e-5,
-    'min_lr_tier2':         5e-7,
-    # Tier 3 (Head LoRA): lm_head. Active only during Phase 2.
-    'lr_tier3':             2e-5,
-    'min_lr_tier3':         2e-7,
-    # Tier 4 (InfoNCE projections: vision_proj + text_proj). Active from step 0 to end.
-    'lr_tier4':             1e-4,
-    'min_lr_tier4':         1e-6,
 
     # Single shared warmup ratio; each tier applies it against its own active-step count.
     # T2 / T4 active-step count = total_optimizer_steps.
@@ -282,10 +303,10 @@ CONFIG = {
     'eval_every_steps': 80,
     'eval_every_steps_warmup': 80,               # More frequent eval early on
     'eval_warmup_threshold': 1000,                # Switch to normal eval freq after this step
-    'max_eval_batches': 60,
+    'max_eval_batches': 80,
     'num_print_samples': 5,
-    'val_gen_batch_size': 2,                
-    'max_generate_samples': 100,
+    'val_gen_batch_size': 4,                
+    'max_generate_samples': 140,
     'val_beam_size': 1,                             # 1 = greedy (faster validation, honest diagnostic); run beam=4 on final checkpoint
     'val_length_penalty': 1.0,                      # > 1.0 favors longer outputs (counters BLEU brevity penalty); < 1.0 favors shorter
     'val_no_repeat_ngram_size': 0,                  # Block any n-gram from repeating; improves BLEU precision (0 = disabled)
@@ -293,11 +314,11 @@ CONFIG = {
     'val_max_new_tokens': 70,
 
     # ── Early Stopping ──
-    'early_stopping_patience': 12,                # Evals without improvement before stopping
+    'early_stopping_patience': 14,                # Evals without improvement before stopping
 
     # ── Performance & Memory Optimizations ──
     'use_8bit_adam': True,
-    'use_gradient_checkpointing': True,
+    'use_gradient_checkpointing': False,
     'use_liger_kernel': True,                     # Master switch — fused Triton kernels for faster forward/backward + lower VRAM
     'liger_rms_norm': True,                       # LigerRMSNorm: 113 modules (28 LM decoder layers × 4 + 1 final norm)
     'liger_layer_norm': True,                     # LigerLayerNorm: 52 modules (24 vision blocks × 2 + 4 merger norms)
@@ -311,7 +332,7 @@ CONFIG = {
     # vision path), new Tier-3 LoRA rank (2 → 8), and the new InfoNCE projection modules.
     'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': 70,            # None = latest, or specific step number
+    'resume_checkpoint_step': 410,            # None = latest, or specific step number
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -327,12 +348,12 @@ CONFIG = {
     # ─────────────────────────────────────────────────────────────────────────
     'lr_override': {
         'enabled': False,                   # Set True to apply, False after resuming
-        'lr_tier1':             1e-5,       # peak LR for Tier 1 (LM attn + MLP)
-        'lr_tier2':             5e-5,       # peak LR for Tier 2 (Vision encoder)
-        'lr_tier3':             1e-5,       # peak LR for Tier 3 (Embed + LM head)
-        'min_lr_tier1':         1e-6,       # Cosine floor for Tier 1
-        'min_lr_tier2':         5e-7,       # Cosine floor for Tier 2
-        'min_lr_tier3':         1e-6,       # Cosine floor for Tier 3
+        'lr_openasl_tier1':             1e-5,       # peak LR for Tier 1 (LM attn + MLP)
+        'lr_openasl_tier2':             5e-5,       # peak LR for Tier 2 (Vision encoder)
+        'lr_openasl_tier3':             1e-5,       # peak LR for Tier 3 (Embed + LM head)
+        'min_lr_openasl_tier1':         1e-6,       # Cosine floor for Tier 1
+        'min_lr_openasl_tier2':         5e-7,       # Cosine floor for Tier 2
+        'min_lr_openasl_tier3':         1e-6,       # Cosine floor for Tier 3
     },
 
     # ── Bucket Batch Sampling ──
@@ -356,6 +377,7 @@ CONFIG = {
     'enable_infonce': True,
     'infonce_temperature': 0.07,
     'infonce_proj_dim': 256,
+    'infonce_queue_size': 64,                     # MoCo-style queue depth: max number of past (v, t) embeddings retained.
     'infonce_lambda_phase1': 0.3,                 # Strong in Phase 1 (LM frozen; vision's only alignment signal).
     'infonce_lambda_phase2': 0.1,                 # Auxiliary in Phase 2.
     'infonce_min_pairs': 4,                       # Skip InfoNCE if fewer than this many micro-batches succeeded in window.
@@ -373,7 +395,7 @@ CONFIG = {
     'seed': 42,
 
     # ── Runtime ──
-    'wait_for_manual_start': False,               # Interactive safety gate before training loop starts
+    'wait_for_manual_start': True,               # Interactive safety gate before training loop starts
 
     # ────── Data Augmentation ──────
     # ── CLAHE (always-on preprocessing, all splits including inference) ──
@@ -384,7 +406,7 @@ CONFIG = {
     'clahe_tile_grid': [8, 8],
 
     # ── Landmark overlay (pre-computed offline by 21_extract_landmarks.py) ──
-    'use_landmark_overlay': False,            # Enable after running 21_extract_landmarks.py
+    'use_landmark_overlay': True,            # Enable after running 21_extract_landmarks.py
     'landmark_overlay_prob': 1.0,
     'landmark_parquet_train': _REPO_ROOT / 'data' / 'landmarks_train.parquet',
     'landmark_parquet_val':   _REPO_ROOT / 'data' / 'landmarks_val.parquet',
@@ -395,7 +417,7 @@ CONFIG = {
     'aug_temporal_jitter_prob': 0.4,
 
     'aug_color_jitter': True,
-    'aug_color_jitter_prob': 0.45,             
+    'aug_color_jitter_prob': 0.40,             
     'aug_color_jitter_brightness': 0.1,
     'aug_color_jitter_contrast': 0.1,
     'aug_color_jitter_saturation': 0.1,       # Moderate swing
@@ -410,10 +432,9 @@ CONFIG = {
 
     'aug_solarize': True,                     # Inverts pixels above threshold — extreme colour variety
     'aug_solarize_prob': 0.07,
-    'aug_solarize_threshold': 220,            # 0–255; pixels above this get inverted
+    'aug_solarize_threshold': 225,            # 0–255; pixels above this get inverted
 
     'aug_equalize': False,                    # Replaced by always-on CLAHE below
-
 
     'aug_random_erasing': False,              # Randomly blacks out small patches — occlusion robustness
     'aug_random_erasing_prob': 0.2,
@@ -421,26 +442,61 @@ CONFIG = {
     'aug_random_erasing_ratio': (0.3, 3.3),  # Aspect ratio of erased region
 
     'aug_affine': True,                       # Small rotation + translation + scale — camera angle variation
-    'aug_affine_prob': 0.3,
-    'aug_affine_degrees': 4,                  # ±4° rotation
+    'aug_affine_prob': 0.25,
+    'aug_affine_degrees': 2,                  # ±2° rotation
     'aug_affine_translate': 0.05,             # ±5% of frame width/height
     'aug_affine_scale_min': 0.95,             # 95%–105% zoom
-    'aug_affine_scale_max': 1.05,
+    'aug_affine_scale_max': 1.00,
 
     'aug_speed_perturb': True,                # Simulate faster/slower signing by resampling frames
-    'aug_speed_perturb_prob': 0.2,
+    'aug_speed_perturb_prob': 0.15,
     'aug_speed_perturb_min': 0.9,             # 0.9× = 10% slower (frames stretched)
     'aug_speed_perturb_max': 1.0,             # 1.0× = no change (frames compressed, tail padded)
 
     # ── Debug: save augmented frames to disk ──
     'aug_debug_save_images': True,
-    'aug_debug_save_interval': 5,          # Save one frame every N optimiser steps
+    'aug_debug_save_interval': 2,          # Save one frame every N optimiser steps
     'aug_debug_save_dir': _REPO_ROOT / 'data' / 'debugging_images',
 
     # ── Kaggle ──
     # Set True when running on Kaggle. Remaps all paths to /kaggle/input|working.
     # file_path values in the TSVs are remapped on-the-fly; no new TSV files needed.
     'is_kaggle': False,
+
+    # ── Modal ──────────────────────────────────────────────────────────────────
+    # Set 'is_modal': True to run on Modal's cloud GPUs instead of locally.
+    # Run with:  modal run model_training_scripts/qwen3vl_training.py
+    # All paths are remapped to Modal volume mount points automatically.
+    'is_modal': True,
+
+    # Hardware
+    # GPU strings: 'T4', 'A10G', 'A100', 'A100-80GB', 'H100', 'H100:2' (multi-GPU)
+    # Fallback list also accepted: ['H100', 'A100-80GB']
+    'modal_gpu': 'A100-80GB',
+    'modal_cpu': 12,                    # Virtual CPUs allocated to the container
+    'modal_memory': 81920,             # RAM in MB (80 GB)
+    'modal_timeout': 24 * 3600,        # Max wall-clock seconds before Modal kills job
+    'modal_retries': 0,                # Container-level retries on failure (not step-level)
+
+    # App
+    'modal_app_name': 'signbridge-training',
+
+    # Volumes — must be created beforehand with `modal volume create <name>`
+    # signbridge-data  : TSV files, bboxes_all.csv, landmarks parquets
+    # signbridge-videos: raw video clips (mirrors D:\signbridge_dataset\)
+    # signbridge-outputs: checkpoints, logs, tensorboard
+    'modal_data_volume':   'signbridge-data',
+    'modal_video_volume':  'signbridge-videos',
+    'modal_output_volume': 'signbridge-outputs',
+
+    # Mount paths inside the container
+    'modal_data_mount':   '/data',
+    'modal_video_mount':  '/videos',
+    'modal_output_mount': '/outputs',
+
+    # Modal Secret containing HF_TOKEN (create with `modal secret create huggingface-secret HF_TOKEN=...`)
+    # Set to None to skip (model downloaded anonymously — only works for public models)
+    'modal_hf_secret': 'huggingface-secret',
 }
 
 # ── Kaggle path overrides ─────────────────────────────────────────────────────
@@ -469,6 +525,36 @@ if CONFIG.get('is_kaggle'):
         'model_name':             '/kaggle/input/models/qwen-lm/qwen-3-vl/transformers/2b-instruct/1',
     })
     os.environ['TRANSFORMERS_OFFLINE'] = '1'
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Modal path overrides ──────────────────────────────────────────────────────
+# Applied when is_modal=True. Input data is read from Modal volumes; outputs
+# (checkpoints, logs) go to the output volume. Video file_path values in the
+# TSVs are remapped on-the-fly in the dataset loader via _remap_path_for_modal().
+if CONFIG.get('is_modal'):
+    _MDATA = Path(CONFIG['modal_data_mount'])
+    _MOUT  = Path(CONFIG['modal_output_mount'])
+    CONFIG.update({
+        # TSVs were uploaded into a 'data/' subdir of the volume
+        # (modal volume put signbridge-data "data/..." /data/...) so they live
+        # one level deeper than the volume root once mounted at /data.
+        'data_train_tsv':         _MDATA / 'data' / '7_dataset_train.tsv',
+        'data_val_tsv':           _MDATA / 'data' / '7_dataset_val.tsv',
+        'data_test_tsv':          _MDATA / 'data' / '7_dataset_test.tsv',
+        # bboxes and landmarks were uploaded to the volume root, so they sit
+        # directly under the mount point.
+        'bbox_csv':               _MDATA / 'bboxes_all.csv',
+        'landmark_parquet_train': _MDATA / 'landmarks_train.parquet',
+        'landmark_parquet_val':   _MDATA / 'landmarks_val.parquet',
+        'landmark_parquet_test':  _MDATA / 'landmarks_test.parquet',
+        'train_log_file':         _MOUT  / 'saved_metrics' / 'qwen3vl_train_log.csv',
+        'val_log_file':           _MOUT  / 'saved_metrics' / 'qwen3vl_val_log.csv',
+        'gen_samples_log_file':   _MOUT  / 'saved_metrics' / 'qwen3vl_gen_samples_log.csv',
+        'tensorboard_dir':        _MOUT  / 'saved_metrics' / 'tensorboard' / 'qwen3vl_training',
+        'checkpoint_dir':         _MOUT  / 'checkpoints'   / 'qwen3vl',
+        'aug_debug_save_dir':     _MOUT  / 'data'          / 'debugging_images',
+        'wait_for_manual_start':  False,  # no interactive terminal on Modal
+    })
 # ─────────────────────────────────────────────────────────────────────────────
 
 torch.manual_seed(CONFIG['seed'])
@@ -611,9 +697,9 @@ class InteractiveController:
                         continue
                     old_lrs = [pg['lr'] for pg in optimizer.param_groups]
                     min_lrs = [
-                        train_config.get('min_lr_tier1', 1e-6),
-                        train_config.get('min_lr_tier2', 5e-7),
-                        train_config.get('min_lr_tier3', 1e-6),
+                        train_config.get('min_lr_openasl_tier1', 1e-6),
+                        train_config.get('min_lr_openasl_tier2', 5e-7),
+                        train_config.get('min_lr_openasl_tier3', 1e-6),
                     ]
                     for pg, new_lr in zip(optimizer.param_groups, new_lrs):
                         pg['lr']         = new_lr
@@ -721,13 +807,14 @@ class SignLanguageQwen3VLDataset(Dataset):
         no_bbox = 0
         truncated = 0
 
-        # On Kaggle the dataset filesystem is slow for per-file stat calls.
+        # On Kaggle/Modal the dataset filesystem is slow for per-file stat calls.
         # Pre-scan all candidate directories once to build an O(1) existence set.
         existing_files: set[str] | None = None
-        if CONFIG.get('is_kaggle'):
+        if CONFIG.get('is_kaggle') or CONFIG.get('is_modal'):
+            _remap_fn = _remap_path_for_kaggle if CONFIG.get('is_kaggle') else _remap_path_for_modal
             _scan_roots: set[Path] = set()
             for row in df.itertuples(index=False):
-                fp_remapped = _remap_path_for_kaggle(str(row.file_path))
+                fp_remapped = _remap_fn(str(row.file_path))
                 _scan_roots.add(Path(fp_remapped).parent)
             existing_files = set()
             for root in _scan_roots:
@@ -740,6 +827,8 @@ class SignLanguageQwen3VLDataset(Dataset):
             fp = str(row.file_path)
             if CONFIG.get('is_kaggle'):
                 fp = _remap_path_for_kaggle(fp)
+            elif CONFIG.get('is_modal'):
+                fp = _remap_path_for_modal(fp)
             file_exists = (fp in existing_files) if existing_files is not None else Path(fp).exists()
             if not file_exists:
                 missing += 1
@@ -1302,7 +1391,7 @@ class Qwen3VLCollator:
                              (0, 255, 255), 1, cv2.LINE_AA)
                 for i in range(6):
                     if not np.any(np.isnan(pose[i])):
-                        cv2.circle(frame_bgr, to_px(*pose[i]), 3,
+                        cv2.circle(frame_bgr, to_px(*pose[i]), 1,
                                    (0, 255, 255), -1, cv2.LINE_AA)
 
                 # Left hand (green BGR: 0,200,0), right hand (blue BGR: 255,80,0)
@@ -1320,7 +1409,7 @@ class Qwen3VLCollator:
                                  color, 1, cv2.LINE_AA)
                     for i in range(21):
                         if not np.any(np.isnan(hand[i])):
-                            cv2.circle(frame_bgr, to_px(*hand[i]), 3,
+                            cv2.circle(frame_bgr, to_px(*hand[i]), 1,
                                        color, -1, cv2.LINE_AA)
 
                 frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
@@ -1350,14 +1439,27 @@ class Qwen3VLCollator:
                 messages, tokenize=False, add_generation_prompt=False,
                 enable_thinking=False,
             )
-            all_texts.append(text)
 
-            # Extract video frames using qwen_vl_utils
-            images, videos, video_kwargs = process_vision_info(
-                messages, image_patch_size=16,
-                return_video_kwargs=True, return_video_metadata=True,
-            )
+            # Extract video frames using qwen_vl_utils.
+            # High-resolution videos (e.g. 1080p) allocate hundreds of MB of RAM
+            # for the raw frame buffer before any pixel-budget downsampling occurs.
+            # Skip samples that OOM during loading rather than crashing the worker.
+            try:
+                images, videos, video_kwargs = process_vision_info(
+                    messages, image_patch_size=16,
+                    return_video_kwargs=True, return_video_metadata=True,
+                )
+            except (MemoryError, RuntimeError) as e:
+                import warnings
+                warnings.warn(
+                    f"Skipping sample {sample.get('file_path', '?')} — OOM during "
+                    f"video decode: {e}"
+                )
+                del messages
+                continue
             del messages  # free the message dicts (contain video path strings & nested dicts)
+
+            all_texts.append(text)
 
             if images:
                 all_images.extend(images)
@@ -1659,7 +1761,6 @@ class CheckpointManager:
             torch.save(state, path / 'training_state.pt')
 
             self.periodic_checkpoints.append(path)
-            print(f"  💾 Saved periodic checkpoint: {path.name}")
 
         except Exception as e:
             print(f"  ⚠️  Warning: Failed to save checkpoint: {e}")
@@ -1703,7 +1804,6 @@ class CheckpointManager:
             if extra_state:
                 state.update(extra_state)
             torch.save(state, path / 'training_state.pt')
-            print(f"  ⭐ Saved best model: {path.name}")
         except Exception as e:
             print(f"  ⚠️  Warning: Failed to save best model: {e}")
 
@@ -1914,6 +2014,13 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
                     no_repeat_ngram_size=config['val_no_repeat_ngram_size'],
                     repetition_penalty=config['val_repetition_penalty'],
                     do_sample=False,
+                    # Suppress "invalid generation flags" warning: temperature / top_p /
+                    # top_k are baked into the model's generation_config.json but are
+                    # not used during beam search (do_sample=False). Passing None here
+                    # explicitly overrides those baked-in values.
+                    temperature=None,
+                    top_p=None,
+                    top_k=None,
                 )
 
             # Trim input prefix from generated ids
@@ -2030,7 +2137,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
           start_epoch=1, start_global_step=0, start_steps_done_in_epoch=None,
           best_val_loss=float('inf'), start_evals_without_improvement=0, start_elapsed_sec=0.0,
           controller=None,
-          global_epoch_offset=0, dataset_phase_name='openasl'):
+          global_epoch_offset=0, dataset_phase_name='openasl',
+          global_total_optimizer_steps=None, global_steps_offset=0,
+          global_training_start_time=None):
     """Full training loop for one dataset phase (OpenASL or How2Sign)."""
 
     # Unpack config
@@ -2141,7 +2250,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     # this fraction of total to avoid RuntimeError: CUDA error: out of memory,
     # which corrupts the CUDA context and cannot be safely recovered.
     _total_vram = torch.cuda.get_device_properties(device).total_memory
-    _vram_guard_bytes = max(int(_total_vram * 0.12), 1 * 1024 ** 3)  # 12% or 1 GB floor
+    _vram_guard_bytes = max(int(_total_vram * 0.06), 512 * 1024 ** 2)  # 6% or 512 MB
 
     # Pre-collect trainable params for clip_grad_norm_
     _all_trainable_params = [p for p in model.parameters() if p.requires_grad]
@@ -2208,10 +2317,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     print(f"  └{'─' * (_W - 2)}┘")
 
     print(f"\n  ┌─ LEARNING RATES  ({dataset_phase_name}) {'─' * (_W - 25)}┐")
-    _lr1 = train_config.get('lr_tier1', 0);  _fl1 = train_config.get('min_lr_tier1', 0)
-    _lr2 = train_config.get('lr_tier2', 0);  _fl2 = train_config.get('min_lr_tier2', 0)
-    _lr3 = train_config.get('lr_tier3', 0);  _fl3 = train_config.get('min_lr_tier3', 0)
-    _lr4 = train_config.get('lr_tier4', 0);  _fl4 = train_config.get('min_lr_tier4', 0)
+    _lr1 = train_config.get('lr_openasl_tier1', 0);  _fl1 = train_config.get('min_lr_openasl_tier1', 0)
+    _lr2 = train_config.get('lr_openasl_tier2', 0);  _fl2 = train_config.get('min_lr_openasl_tier2', 0)
+    _lr3 = train_config.get('lr_openasl_tier3', 0);  _fl3 = train_config.get('min_lr_openasl_tier3', 0)
+    _lr4 = train_config.get('lr_openasl_tier4', 0);  _fl4 = train_config.get('min_lr_openasl_tier4', 0)
     _born1 = 'at phase transition' if _enable_two_phase else 'from step 0'
     _born3 = 'at phase transition' if _enable_two_phase else 'from step 0'
     print(f"  │  Schedule          : Linear warmup ({_warmup_pct}%) → Cosine decay (fresh for this phase)")
@@ -2254,6 +2363,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     print(f"  │  Status            : {'ENABLED' if infonce_enabled else 'DISABLED'}")
     if infonce_enabled:
         print(f"  │  Temperature (τ)   : {infonce_tau}   │   Queue size : {infonce_queue_max}")
+        print(f"  │  Lambda (Phase 1)  : {CONFIG.get('infonce_lambda_phase1', '?')}   (vision-only phase — primary alignment signal)")
+        print(f"  │  Lambda (Phase 2)  : {CONFIG.get('infonce_lambda_phase2', '?')}   (all-tiers phase — auxiliary signal)")
+        print(f"  │  Min pairs         : {CONFIG.get('infonce_min_pairs', '?')}   (skip InfoNCE if fewer valid pairs in batch)")
+        print(f"  │  Proj dim          : {CONFIG.get('infonce_proj_dim', '?')}   (vision → proj_dim ← text)")
     print(f"  └{'─' * (_W - 2)}┘")
 
     if start_global_step > 0:
@@ -2311,6 +2424,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
             draws = torch.multinomial(w, N, replacement=True, generator=gen).tolist()
             return draws, None
 
+    _prev_epoch_curriculum = None   # track curriculum state across epochs for transition prints
+
     for epoch in range(start_epoch, num_epochs + 1):
         # ── Per-epoch: rebuild weighted-sampled indices ──
         if _sample_weights is not None and hasattr(train_loader, 'batch_sampler') \
@@ -2335,6 +2450,16 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         print(f"  └{'─' * 92}┘\n")
             except Exception as _se:
                 print(f"  ⚠️  Per-epoch sampler rebuild failed: {_se}")
+
+        # ── Curriculum transition print ──
+        _cur_epoch_curriculum = epoch in curriculum_epochs
+        if _prev_epoch_curriculum is not None and _cur_epoch_curriculum != _prev_epoch_curriculum:
+            _g_ep_cl = global_epoch_offset + epoch
+            if _cur_epoch_curriculum:
+                print(f"\n  📚  CURRICULUM LEARNING ON  →  Global Epoch {_g_ep_cl}  [{dataset_phase_name} {epoch}/{num_epochs}]  —  easy-first ordering active")
+            else:
+                print(f"\n  📚  CURRICULUM LEARNING OFF →  Global Epoch {_g_ep_cl}  [{dataset_phase_name} {epoch}/{num_epochs}]  —  switching to uniform weighted sampling")
+        _prev_epoch_curriculum = _cur_epoch_curriculum
 
         # Toggle data augmentation: epoch is within-phase, aug_start_epoch is per-phase config
         if _train_collator is not None:
@@ -2485,6 +2610,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         infonce_skip_count += 1
                         contrast_term = None
                         model._last_merger_out = None
+                        # Log InfoNCE failures so device-mismatch / shape bugs are visible
+                        if infonce_skip_count <= 3 or infonce_skip_count % 100 == 0:
+                            print(f"  ⚠️  InfoNCE skip #{infonce_skip_count}: {type(_ie).__name__}: {_ie}")
 
                 # Compute loss with label smoothing (model's built-in loss ignores it).
                 # Shift logits/labels for causal LM: predict token t+1 from position t.
@@ -2646,7 +2774,15 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     _all_trainable_params, max_norm=train_config['max_grad_norm']
                 ).item()
 
-                # ── Grad-norm spike logging ──
+                # ── Grad-norm clip / spike logging ──
+                _max_norm = train_config['max_grad_norm']
+                if grad_norm > _max_norm:
+                    # Only print when it's a meaningful clip (more than 10% over threshold) to avoid
+                    # flooding the log for borderline norms — spikes below 2× are noted briefly.
+                    if grad_norm > _max_norm * 2:
+                        print(f"  ✂️  grad clipped  step={global_step}  pre-clip={grad_norm:.2f}  →  {_max_norm}  (t1={grad_norm_t1:.2f} t2={grad_norm_t2:.2f} t3={grad_norm_t3:.2f} t4={grad_norm_t4:.2f})")
+                    elif grad_norm > _max_norm * 1.1:
+                        print(f"  ✂️  grad clipped  step={global_step}  {grad_norm:.2f}→{_max_norm}")
                 if grad_norm > CONFIG.get('grad_norm_spike_threshold', 500.0):
                     try:
                         _bshape = tuple(batch_gpu['pixel_values_videos'].shape) if 'batch_gpu' in dir() and isinstance(batch_gpu, dict) and 'pixel_values_videos' in batch_gpu else None
@@ -2687,8 +2823,12 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     print(f"  Reached step {global_step:,} / {total_optimizer_steps:,}  ({_pt_pct}% of training complete)")
                     print(f"")
                     print(f"  What changes now:")
-                    print(f"    ✓  Tier 1 — LM LoRA          : UNFROZEN  →  now training  (lr peak {train_config['lr_tier1']:.2e}, floor {train_config['min_lr_tier1']:.2e}  with fresh warmup)")
-                    print(f"    ✓  Tier 3 — Embed / Head LoRA : UNFROZEN  →  now training  (lr peak {train_config['lr_tier3']:.2e}, floor {train_config['min_lr_tier3']:.2e}  with fresh warmup)")
+                    _pt_t1_peak  = train_config.get('lr_tier1',     train_config.get('lr_openasl_tier1'))
+                    _pt_t1_floor = train_config.get('min_lr_tier1', train_config.get('min_lr_openasl_tier1'))
+                    _pt_t3_peak  = train_config.get('lr_tier3',     train_config.get('lr_openasl_tier3'))
+                    _pt_t3_floor = train_config.get('min_lr_tier3', train_config.get('min_lr_openasl_tier3'))
+                    print(f"    ✓  Tier 1 — LM LoRA          : UNFROZEN  →  now training  (lr peak {_pt_t1_peak:.2e}, floor {_pt_t1_floor:.2e}  with fresh warmup)")
+                    print(f"    ✓  Tier 3 — Embed / Head LoRA : UNFROZEN  →  now training  (lr peak {_pt_t3_peak:.2e}, floor {_pt_t3_floor:.2e}  with fresh warmup)")
                     print(f"    ─  Tier 2 — Vision LoRA       : continues uninterrupted  (lr {lr_t2:.2e})")
                     print(f"    ─  Tier 4 — Projections       : continues uninterrupted  (lr {lr_t4:.2e})")
                     print(f"")
@@ -2702,8 +2842,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         p.requires_grad = True
 
                     # Build Tier 1 and Tier 3 optimizers + schedulers (tier-local warmup)
-                    _t1_peak, _t1_floor = train_config['lr_tier1'], train_config['min_lr_tier1']
-                    _t3_peak, _t3_floor = train_config['lr_tier3'], train_config['min_lr_tier3']
+                    _t1_peak  = train_config.get('lr_tier1',     train_config.get('lr_openasl_tier1'))
+                    _t1_floor = train_config.get('min_lr_tier1', train_config.get('min_lr_openasl_tier1'))
+                    _t3_peak  = train_config.get('lr_tier3',     train_config.get('lr_openasl_tier3'))
+                    _t3_floor = train_config.get('min_lr_tier3', train_config.get('min_lr_openasl_tier3'))
                     _betas = CONFIG['adam_betas']
                     _wd = CONFIG.get('weight_decay', 0.0)
                     if CONFIG.get('use_8bit_adam', True) and _BNB_AVAILABLE:
@@ -2735,6 +2877,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         'sched_tier3_state_dict': sched_tier3.state_dict(),
                         'opt_tier4_state_dict': opt_tier4.state_dict(),
                         'sched_tier4_state_dict': sched_tier4.state_dict(),
+                        'vision_proj_state_dict': model.vision_proj.state_dict(),
+                        'text_proj_state_dict':   model.text_proj.state_dict(),
                     }
                     ckpt_manager.save_periodic(
                         model, opt_tier2, sched_tier2, epoch, global_step,
@@ -2806,19 +2950,73 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     speed = len(step_losses) / max(log_elapsed, 1e-6)
                     cuda_mem, cuda_peak = get_cuda_mem()
 
-                    eta_seconds = (elapsed / global_step) * (total_optimizer_steps - global_step) if global_step > 0 else 0
+                    # ── Phase ETA: time remaining in this dataset phase only ──
+                    # `global_step` carries over from the previous dataset phase.
+                    # `global_steps_offset` is the total steps from all previous phases.
+                    phase_step = global_step - global_steps_offset   # steps done so far in this phase
+                    eta_seconds = (elapsed / phase_step) * (total_optimizer_steps - phase_step) if phase_step > 0 else 0
+
+                    # ── Global ETA: time remaining across ALL dataset phases ──
+                    # We use the average speed of the current phase to estimate remaining global time.
+                    _g_total   = global_total_optimizer_steps if global_total_optimizer_steps is not None else total_optimizer_steps
+                    _g_done    = global_step   # total steps completed across all phases
+                    global_eta_seconds = (elapsed / phase_step) * (_g_total - _g_done) if phase_step > 0 else 0
+
+                    # ── Decide ETA display: last phase → Phase ETA IS Global ETA ──
+                    _is_last_dataset_phase = (
+                        global_total_optimizer_steps is None
+                        or (global_steps_offset + total_optimizer_steps) >= _g_total
+                    )
+                    if _is_last_dataset_phase:
+                        _eta_suffix = (
+                            f" │ ETA {format_time(eta_seconds)}"
+                            f" [{dataset_phase_name}: {phase_step}/{total_optimizer_steps} steps done"
+                            f"  ·  final phase, no further training]"
+                        )
+                    else:
+                        _eta_suffix = (
+                            f" │ Phase ETA {format_time(eta_seconds)}"
+                            f" [{dataset_phase_name}: {phase_step}/{total_optimizer_steps} steps done]"
+                            f" │ Global ETA {format_time(global_eta_seconds)}"
+                            f" [all phases: {_g_done}/{_g_total} steps done]"
+                        )
 
                     train_ppl = math.exp(min(avg_loss, MAX_PPL_CAP))
 
-                    print("─" * 200)
+                    print('━' * 120)
                     _g_ep_log = global_epoch_offset + epoch
                     _total_global_epochs = global_epoch_offset + num_epochs
+                    # ── Main status line ──
                     print(
-                        f"  [{dataset_phase_name}] Phase {current_phase} │ Global Ep {_g_ep_log}/{_total_global_epochs} │ Phase Ep {epoch}/{num_epochs} │ Step {global_step:>6d}/{total_optimizer_steps}"
-                        f" │ Loss {avg_loss:.4f} │ Contrast {avg_contrast:.4f} │ PPL {train_ppl:.3f}"
-                        f" │ LR  T1(LM) {lr_t1:.2e}  T2(Vision) {lr_t2:.2e}  T3(Head) {lr_t3:.2e}  T4(Proj) {lr_t4:.2e}"
-                        f" │ GradNorm  Global {avg_grad_norm:.2f}  T1 {avg_gn_t1:.2f}  T2 {avg_gn_t2:.2f}  T3 {avg_gn_t3:.2f}  T4 {avg_gn_t4:.2f}"
-                        f" │ Speed {speed:.3f} step/s │ VRAM {cuda_mem:.2f}/{cuda_peak:.2f} GB │ Elapsed {format_time(elapsed)} │ ETA {format_time(eta_seconds)}"
+                        f"  [{dataset_phase_name}] Phase: {current_phase}"
+                        f" │ Global Epoch: {_g_ep_log}/{_total_global_epochs}   Phase Epoch: {epoch}/{num_epochs}"
+                        f" │ Phase Step: {phase_step}/{total_optimizer_steps}   Global Step: {global_step}/{_g_total}"
+                        f" │ Loss: {avg_loss:.4f} │ Contrast: {avg_contrast:.4f} │ PPL: {train_ppl:.3f}"
+                    )
+                    # ── Per-tier LR / GradNorm table ──
+                    _tier_rows = [
+                        ("T1 (LM LoRA)",     lr_t1, avg_gn_t1, sched_tier1 is not None),
+                        ("T2 (Vision LoRA)", lr_t2, avg_gn_t2, True),
+                        ("T3 (Head LoRA)",   lr_t3, avg_gn_t3, sched_tier3 is not None),
+                        ("T4 (InfoNCE)",     lr_t4, avg_gn_t4, True),
+                    ]
+                    print('─'*58)
+                    _th = f"  {'Tier':<18}  {'Learn Rate':>12}  {'Grad Norm':>12}  {'Status':<8}"
+                    print(_th)
+                    print(f"  {'─'*18}  {'─'*12}  {'─'*12}  {'─'*8}")
+                    for _tn, _lr, _gn, _active in _tier_rows:
+                        _lr_str = f"{_lr:.3e}"    if _active else "      —     "
+                        _gn_str = f"{_gn:>12.4f}" if _active else "           —"
+                        _st_str = "active" if _active else "frozen"
+                        print(f"  {_tn:<18}  {_lr_str:>12}  {_gn_str}  {_st_str:<8}")
+                    print(f"  {'─'*18}  {'─'*12}  {'─'*12}  {'─'*8}")
+                    print(f"  {'Global (clipped)':<18}  {'':>12}  {avg_grad_norm:>12.4f}")
+                    # ── Footer: throughput / hardware / time ──
+                    print('─'*58)
+                    print(
+                        f"  Speed {speed:.3f} step/s │ VRAM {cuda_mem:.2f}/{cuda_peak:.2f} GB"
+                        f" │ Elapsed {format_time(elapsed)}"
+                        + _eta_suffix
                     )
 
                     train_csv_logger.log({
@@ -2842,6 +3040,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         'steps_per_sec': f"{speed:.2f}",
                         'elapsed_sec': f"{elapsed:.1f}",
                         'eta_sec': f"{eta_seconds:.1f}",
+                        'global_eta_sec': f"{global_eta_seconds:.1f}",
                     })
 
                     tb_writer.add_scalar('Loss/Train', avg_loss, global_step)
@@ -2876,8 +3075,12 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         'dataset_phase_name':     dataset_phase_name,
                         'epoch_within_phase':     epoch,
                         'global_epoch_offset':    global_epoch_offset,
+                        'opt_tier2_state_dict':   opt_tier2.state_dict(),
+                        'sched_tier2_state_dict': sched_tier2.state_dict(),
                         'opt_tier4_state_dict':   opt_tier4.state_dict(),
                         'sched_tier4_state_dict': sched_tier4.state_dict(),
+                        'vision_proj_state_dict': model.vision_proj.state_dict(),
+                        'text_proj_state_dict':   model.text_proj.state_dict(),
                     }
                     if opt_tier1 is not None:
                         _ckpt_extra['opt_tier1_state_dict']  = opt_tier1.state_dict()
@@ -2885,6 +3088,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     if opt_tier3 is not None:
                         _ckpt_extra['opt_tier3_state_dict']  = opt_tier3.state_dict()
                         _ckpt_extra['sched_tier3_state_dict'] = sched_tier3.state_dict()
+                    print(f"  💾  Periodic checkpoint saved  step={global_step}  [{dataset_phase_name} model-phase={current_phase}]  →  {CONFIG['checkpoint_dir']}/checkpoint_step_{global_step}")
                     ckpt_manager.save_periodic(
                         model, opt_tier2, sched_tier2, epoch, global_step,
                         (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
@@ -3012,6 +3216,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                     # Early stopping / best model
                     elapsed = time.time() - training_start
+                    _prev_best = best_val_loss
+                    _prev_ewi  = evals_without_improvement
                     if val_results['val_loss'] < best_val_loss:
                         best_val_loss = val_results['val_loss']
                         evals_without_improvement = 0
@@ -3023,6 +3229,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                             'global_epoch_offset':    global_epoch_offset,
                             'opt_tier4_state_dict':   opt_tier4.state_dict(),
                             'sched_tier4_state_dict': sched_tier4.state_dict(),
+                            'vision_proj_state_dict': model.vision_proj.state_dict(),
+                            'text_proj_state_dict':   model.text_proj.state_dict(),
                         }
                         if opt_tier1 is not None:
                             _best_extra['opt_tier1_state_dict']   = opt_tier1.state_dict()
@@ -3037,10 +3245,13 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                             evals_without_improvement, elapsed,
                             extra_state=_best_extra,
                         )
-                        print(f"\n  ⭐  New best val_loss: {best_val_loss:.4f}")
+                        _delta = (_prev_best - best_val_loss) if _prev_best != float('inf') else float('nan')
+                        _delta_str = f"  (Δ −{_delta:.4f} from {_prev_best:.4f})" if not math.isnan(_delta) else "  (first improvement)"
+                        print(f"\n  ⭐  New best val_loss: {best_val_loss:.4f}{_delta_str}  →  saved best_model checkpoint")
+                        print(f"      patience counter reset  ({_prev_ewi}  →  0 / {patience})")
                     else:
                         evals_without_improvement += 1
-                        print(f"\n  ⚠️  No improvement  ({evals_without_improvement}/{patience} evals)")
+                        print(f"\n  ⚠️  No improvement  ({evals_without_improvement}/{patience} evals)  best={best_val_loss:.4f}  current={val_results['val_loss']:.4f}")
 
                     if evals_without_improvement >= patience:
                         print("\n" + "━" * 80)
@@ -3062,9 +3273,22 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                           if epoch_loss_sum is not None else 0.0)
         epoch_loss_sum = None  # release the accumulated loss tensor for the next epoch
         _g_ep_end = global_epoch_offset + epoch
+        _ep_lr_t1 = sched_tier1.get_last_lr()[0] if sched_tier1 is not None else 0.0
+        _ep_lr_t2 = sched_tier2.get_last_lr()[0]
+        _ep_lr_t3 = sched_tier3.get_last_lr()[0] if sched_tier3 is not None else 0.0
+        _ep_lr_t4 = sched_tier4.get_last_lr()[0]
+        _ep_active_tiers = ' '.join(
+            t for t, active in [('T1', sched_tier1 is not None), ('T2', True), ('T3', sched_tier3 is not None), ('T4', True)]
+            if active
+        )
+        _ep_aug_state = 'ON' if (_train_collator is not None and _train_collator.augmentation_enabled) else 'OFF'
+        _ep_cl_state  = 'YES' if (epoch in curriculum_epochs) else 'NO'
         print(f"\n{'━' * 80}")
         print(f"  ✅  Global Epoch {_g_ep_end}  [{dataset_phase_name} {epoch}/{num_epochs}]  Complete")
-        print(f"      Avg train loss: {epoch_avg_loss:.4f}  ·  Time: {format_time(epoch_time)}")
+        print(f"      Avg train loss : {epoch_avg_loss:.4f}  ·  Time : {format_time(epoch_time)}")
+        print(f"      Model phase    : {current_phase}   Active tiers : {_ep_active_tiers}")
+        print(f"      LR end-of-epoch: T1={_ep_lr_t1:.2e}  T2={_ep_lr_t2:.2e}  T3={_ep_lr_t3:.2e}  T4={_ep_lr_t4:.2e}")
+        print(f"      Curriculum     : {_ep_cl_state}   Augmentation : {_ep_aug_state}   best_val_loss : {best_val_loss:.4f}")
         print(f"{'━' * 80}\n")
 
     return global_step, best_val_loss
@@ -3087,7 +3311,7 @@ def main():
 
     # ── Open timestamped log file ──
     _run_dt = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    _log_dir = Path("../saved_metrics/train_config")
+    _log_dir = Path(CONFIG['train_log_file']).parent / 'train_config'
     _log_dir.mkdir(parents=True, exist_ok=True)
     _log_path = _log_dir / f"qwen3vl_training_config_{_run_dt}.txt"
 
@@ -3184,10 +3408,10 @@ def main():
     print("\n  [ LEARNING RATES ]")
     print(f"    Warmup                 : {CONFIG['warmup_ratio']:.1%} of each tier's active life (per phase)")
     print(f"    Schedule               : Linear warmup → Cosine decay  |  Fresh restart at How2Sign phase")
-    print(f"    OpenASL  T1 (LM)       : peak={CONFIG['lr_tier1']:.2e}  floor={CONFIG['min_lr_tier1']:.2e}")
-    print(f"    OpenASL  T2 (Vision)   : peak={CONFIG['lr_tier2']:.2e}  floor={CONFIG['min_lr_tier2']:.2e}")
-    print(f"    OpenASL  T3 (Head)     : peak={CONFIG['lr_tier3']:.2e}  floor={CONFIG['min_lr_tier3']:.2e}")
-    print(f"    OpenASL  T4 (InfoNCE)  : peak={CONFIG['lr_tier4']:.2e}  floor={CONFIG['min_lr_tier4']:.2e}")
+    print(f"    OpenASL  T1 (LM)       : peak={CONFIG['lr_openasl_tier1']:.2e}  floor={CONFIG['min_lr_openasl_tier1']:.2e}")
+    print(f"    OpenASL  T2 (Vision)   : peak={CONFIG['lr_openasl_tier2']:.2e}  floor={CONFIG['min_lr_openasl_tier2']:.2e}")
+    print(f"    OpenASL  T3 (Head)     : peak={CONFIG['lr_openasl_tier3']:.2e}  floor={CONFIG['min_lr_openasl_tier3']:.2e}")
+    print(f"    OpenASL  T4 (InfoNCE)  : peak={CONFIG['lr_openasl_tier4']:.2e}  floor={CONFIG['min_lr_openasl_tier4']:.2e}")
     print(f"    How2Sign T1 (LM)       : peak={CONFIG['lr_how2sign_tier1']:.2e}  floor={CONFIG['min_lr_how2sign_tier1']:.2e}")
     print(f"    How2Sign T2 (Vision)   : peak={CONFIG['lr_how2sign_tier2']:.2e}  floor={CONFIG['min_lr_how2sign_tier2']:.2e}")
     print(f"    How2Sign T3 (Head)     : peak={CONFIG['lr_how2sign_tier3']:.2e}  floor={CONFIG['min_lr_how2sign_tier3']:.2e}")
@@ -3225,7 +3449,12 @@ def main():
     lr_ov = CONFIG.get('lr_override', {})
     if lr_ov.get('enabled', False):
         print("\n  [ LR OVERRIDE (one-time) ]")
-        print(f"    LR                     : {lr_ov['lr']:.2e} -> {lr_ov['eta_min']:.2e}")
+        print(f"    LR T1 (LM)             : {lr_ov.get('lr_openasl_tier1', '—')}")
+        print(f"    LR T2 (Vision)         : {lr_ov.get('lr_openasl_tier2', '—')}")
+        print(f"    LR T3 (Head)           : {lr_ov.get('lr_openasl_tier3', '—')}")
+        print(f"    Floor T1               : {lr_ov.get('min_lr_openasl_tier1', '—')}")
+        print(f"    Floor T2               : {lr_ov.get('min_lr_openasl_tier2', '—')}")
+        print(f"    Floor T3               : {lr_ov.get('min_lr_openasl_tier3', '—')}")
 
     # Full CONFIG dump so nothing is missed
     print("\n  [ FULL CONFIG DUMP ]")
@@ -3301,7 +3530,11 @@ def main():
             bnb_4bit_compute_dtype=torch.bfloat16,
             bnb_4bit_quant_type=CONFIG['bnb_4bit_quant_type'],
             bnb_4bit_use_double_quant=CONFIG['bnb_4bit_use_double_quant'],
-            bnb_4bit_quant_storage=torch.bfloat16,
+            # bnb_4bit_quant_storage intentionally omitted (defaults to uint8).
+            # Using bfloat16 storage packs 4 NF4 values per element → packed weight shape
+            # (out*in//4, 1); dequantize() then returns this shape instead of (out, in),
+            # causing _dequant_to_bf16 to create a misshapen nn.Linear that makes PEFT
+            # build LoRA matrices of the wrong massive size (3B+ trainable for vision tier).
         )
         model_kwargs['device_map'] = 'auto'
         print(f"  ✓ QLoRA enabled (4-bit quantization); will restore bf16 post-load: {_skip}" if _skip
@@ -3310,15 +3543,80 @@ def main():
         model_kwargs['device_map'] = 'cuda'
         _skip = []
 
-    model = AutoModelForImageTextToText.from_pretrained(CONFIG['model_name'], local_files_only=True, **model_kwargs)
+    model = AutoModelForImageTextToText.from_pretrained(CONFIG['model_name'], local_files_only=CONFIG.get('is_kaggle', False), **model_kwargs)
 
-    # Restore vision tower to bf16. It was quantized to 4-bit during load (GPU path, cheap),
-    # but NF4 is tuned for LM weight distributions and degrades vision encoder quality.
+    # Restore vision tower to bf16 by replacing Linear4bit modules with real bf16 Linear.
+    # .to(bfloat16) alone does NOT dequantize Linear4bit — the weights stay packed NF4.
     if _skip:
+        try:
+            from bitsandbytes.nn import Linear4bit as _Linear4bit_restore
+        except Exception:
+            _Linear4bit_restore = None
+
+        try:
+            import bitsandbytes.functional as _bnb_F
+        except Exception:
+            _bnb_F = None
+
+        def _dequant_to_bf16(parent, child_name, child_mod):
+            """Replace a Linear4bit with a plain bf16 Linear using dequantized weights."""
+            if _Linear4bit_restore is None or not isinstance(child_mod, _Linear4bit_restore):
+                return
+            # Always use in_features/out_features from the Linear4bit attrs — never w.shape.
+            # Params4bit.dequantize() is unreliable: it may return the raw packed storage
+            # tensor (uint8 → out*in//2 elements, or bfloat16 → out*in//4 elements) instead
+            # of the full dequantized weight.  Use bnb.functional.dequantize_4bit directly,
+            # which respects quant_state.shape and always returns (out, in) shaped floats.
+            in_f  = child_mod.in_features
+            out_f = child_mod.out_features
+            qs    = child_mod.weight.quant_state
+            with torch.no_grad():
+                if _bnb_F is not None and qs is not None:
+                    w = _bnb_F.dequantize_4bit(
+                        child_mod.weight.data, qs,
+                        quant_type=child_mod.weight.quant_type,
+                    ).to(torch.bfloat16)
+                else:
+                    # Fallback: Params4bit not yet quantized (CPU, no quant_state).
+                    # The raw data is already the original float weight.
+                    w = child_mod.weight.data.to(torch.bfloat16)
+                if w.shape != (out_f, in_f):
+                    w = w.reshape(out_f, in_f)
+            bias = child_mod.bias
+            new_linear = torch.nn.Linear(in_f, out_f, bias=bias is not None,
+                                         dtype=torch.bfloat16, device=w.device)
+            new_linear.weight = torch.nn.Parameter(w)
+            if bias is not None:
+                new_linear.bias = torch.nn.Parameter(bias.to(torch.bfloat16))
+            setattr(parent, child_name, new_linear)
+
+        def _is_under_skip(name):
+            # Matches e.g. sp='visual' against 'model.visual', 'model.visual.blocks.0.attn', etc.
+            # Uses the same component-boundary check as the audit below.
+            return any(
+                name == sp or name.startswith(sp + '.') or f'.{sp}.' in f'.{name}.'
+                for sp in _skip
+            )
+
+        # Two-pass: collect (parent, attr_name, module) for all Linear4bit under skip prefixes,
+        # then replace (avoids mutating named_modules() during iteration).
+        _to_replace = []
         for _name, _mod in model.named_modules():
-            if any(_name == sp or _name.startswith(sp + '.') for sp in _skip):
-                _mod.to(torch.bfloat16)
-        print(f"  ✓ Restored {_skip} to bf16")
+            if not _is_under_skip(_name):
+                continue
+            for _cname, _cmod in _mod.named_children():
+                if _Linear4bit_restore is not None and isinstance(_cmod, _Linear4bit_restore):
+                    _to_replace.append((_mod, _cname, _cmod))
+        _n_replaced = len(_to_replace)
+        for _parent, _cname, _cmod in _to_replace:
+            _dequant_to_bf16(_parent, _cname, _cmod)
+        del _to_replace
+        # Cast any remaining non-Linear parameters (norms, embeddings, etc.) to bf16.
+        for _name, _mod in model.named_modules():
+            if _is_under_skip(_name):
+                for _p in _mod.parameters(recurse=False):
+                    _p.data = _p.data.to(torch.bfloat16)
+        print(f"  ✓ Restored {_skip} to bf16 (dequantized {_n_replaced} Linear4bit modules)")
     del model_kwargs  # no longer needed after model is loaded
 
     # ── Post-load quantization audit ──
@@ -3389,7 +3687,7 @@ def main():
                 setattr(_parent, _name, _new)
 
             for _parent, _name, _orig in _to_ln:
-                _new = LigerLayerNorm(_orig.normalized_shape, eps=_orig.eps, elementwise_affine=_orig.elementwise_affine)
+                _new = LigerLayerNorm(_orig.normalized_shape, eps=_orig.eps)
                 if _orig.elementwise_affine:
                     _new.weight = _orig.weight
                     _new.bias   = _orig.bias
@@ -3417,7 +3715,7 @@ def main():
         except Exception as _liger_err:
             print(f"  ⚠️  Liger Kernel failed: {_liger_err} — skipping")
 
-    processor = AutoProcessor.from_pretrained(CONFIG['model_name'], local_files_only=True)
+    processor = AutoProcessor.from_pretrained(CONFIG['model_name'], local_files_only=CONFIG.get('is_kaggle', False))
     processor.tokenizer.padding_side = 'left'
 
     load_time = time.time() - load_start
@@ -3485,7 +3783,9 @@ def main():
             ckpt_path = existing[-1] if existing else None
 
         if ckpt_path and ckpt_path.exists():
-            print(f"\n🔄 Resuming from checkpoint: {ckpt_path.name}")
+            _resume_source = 'best_model' if CONFIG['load_best_model'] else ('step ' + str(CONFIG['resume_checkpoint_step']) if CONFIG['resume_checkpoint_step'] is not None else 'latest')
+            print(f"\n🔄 Resuming from checkpoint: {ckpt_path.name}  (source: {_resume_source})")
+            print(f"   Full path: {ckpt_path.resolve()}")
             model = PeftModel.from_pretrained(model, ckpt_path / 'adapter', is_trainable=True)
             training_state = torch.load(ckpt_path / 'training_state.pt', map_location='cpu', weights_only=False)
             start_epoch = training_state['epoch']
@@ -3494,13 +3794,50 @@ def main():
             best_val_loss = training_state['best_val_loss']
             start_evals_without_improvement = training_state['evals_without_improvement']
             start_elapsed_sec = training_state.get('elapsed_sec', 0.0)
-            print(f"  ✅ Resumed at step {start_global_step}, epoch {start_epoch}, best_val_loss: {best_val_loss:.4f}")
+            _resume_phase_from_ckpt = training_state.get('phase', 1)
+            _resume_ds_phase = training_state.get('dataset_phase_name', 'openasl')
+            _resume_pt_step  = training_state.get('phase_transition_step', '?')
+            print(f"  ✅ Resumed at global step {start_global_step}, within-phase epoch {start_epoch}")
+            print(f"     Dataset phase   : {_resume_ds_phase}   Model phase (freeze) : {_resume_phase_from_ckpt}")
+            print(f"     best_val_loss   : {best_val_loss:.4f}   evals_without_improvement : {start_evals_without_improvement}")
+            print(f"     Elapsed so far  : {format_time(start_elapsed_sec)}")
+            print(f"     Phase-transition step : {_resume_pt_step}")
         else:
             print("  No checkpoint found — starting fresh.")
             model = get_peft_model(model, lora_config)
     else:
         model = get_peft_model(model, lora_config)
     del lora_config  # consumed by get_peft_model / PeftModel
+
+    # ── Explicit base-weight freeze ──
+    # prepare_model_for_kbit_training sets requires_grad=True on every non-4bit parameter
+    # (including all ~407 M bf16 vision-encoder weights) so gradient flow works through
+    # frozen embeddings under gradient checkpointing.  PEFT's get_peft_model is documented
+    # to freeze the base model, but in practice it preserves the requires_grad=True state
+    # that prepare_model_for_kbit_training wrote — it does not call requires_grad_(False)
+    # on modules that were explicitly enabled before it ran.
+    #
+    # Consequence without this block:
+    #   • 407 M vision base weights land in the T2 optimizer param group
+    #     (_matches_tier sees ".qkv.", ".proj.", etc. in the base-weight path).
+    #   • Adam m + v states for those weights consume ~3.4 GB of VRAM on top of the
+    #     model weights, immediately exhausting an 8 GB GPU and triggering the proactive
+    #     VRAM skip on every single batch.
+    #   • _trainable_params in the summary counts the base weights as trainable,
+    #     producing the absurd "74 % trainable" figure.
+    #
+    # Fix: after LoRA wrapping, unconditionally freeze everything that is not a LoRA
+    # adapter weight (lora_A / lora_B tensors).  Tier-4 projections are added below
+    # and will naturally have requires_grad=True when they are created.
+    _LORA_KEYWORDS = frozenset(['lora_A', 'lora_B', 'lora_embedding_A', 'lora_embedding_B'])
+    _n_frozen_explicit = 0
+    for _pn, _pp in model.named_parameters():
+        if not any(kw in _pn.split('.') for kw in _LORA_KEYWORDS):
+            if _pp.requires_grad:
+                _pp.requires_grad_(False)
+                _n_frozen_explicit += 1
+    print(f"  ✓ Explicit base-weight freeze: {_n_frozen_explicit} params → requires_grad=False")
+    del _LORA_KEYWORDS, _n_frozen_explicit
 
     # ── Tier 4: InfoNCE projection modules ──
     # Add two trainable Linear projections for InfoNCE contrastive loss.
@@ -3519,18 +3856,40 @@ def main():
     torch.nn.init.zeros_(model.vision_proj.bias)
     torch.nn.init.zeros_(model.text_proj.bias)
 
+    # Move to GPU and cast to bf16 to match model dtype.
+    # Without this, the projections stay on CPU and every InfoNCE forward call
+    # raises a device-mismatch RuntimeError that is silently caught.
+    model.vision_proj = model.vision_proj.to(device=device, dtype=torch.bfloat16)
+    model.text_proj = model.text_proj.to(device=device, dtype=torch.bfloat16)
+
     print(f"  ✓ Tier 4 projections added: vision_proj ({_vision_output_dim}→{_proj_dim}), "
-          f"text_proj ({_text_hidden_dim}→{_proj_dim})")
+          f"text_proj ({_text_hidden_dim}→{_proj_dim})  [device={device}, dtype=bfloat16]")
 
     # ── Register forward hook on visual.merger to capture pooled vision embedding ──
     # Used by InfoNCE contrastive loss. Hook stores merger output on model._last_merger_out.
     if CONFIG.get('enable_infonce', True):
         def _merger_hook(_module, _inputs, output):
-            # output can be [N_tokens, D] or [B, N, D] or tuple — handle generically
             out = output[0] if isinstance(output, (tuple, list)) else output
             model._last_merger_out = out
         try:
-            _merger_mod = model.base_model.model.visual.merger if hasattr(model, 'base_model') else model.visual.merger
+            # Try all possible paths in order
+            _merger_mod = None
+            for _path in [
+                'base_model.model.model.visual.merger',  # QLoRA + PEFT
+                'base_model.model.visual.merger',         # PEFT no QLoRA
+                'model.model.visual.merger',              # no PEFT
+                'model.visual.merger',                    # bare model
+            ]:
+                try:
+                    _merger_mod = model.get_submodule(_path)
+                    print(f"  ✓ Found merger at: {_path}")
+                    break
+                except AttributeError:
+                    continue
+            
+            if _merger_mod is None:
+                raise RuntimeError("merger not found at any expected path")
+            
             _merger_mod.register_forward_hook(_merger_hook)
             model._last_merger_out = None
             print(f"  ✓ InfoNCE forward hook registered on visual.merger")
@@ -3558,6 +3917,18 @@ def main():
                 _tier_params['Tier 4'] += _param.numel()
         _tier_layers['Tier 4'].add(_t4_name)
 
+    # ── DIAGNOSTIC: dump every trainable param's name / shape / numel ──
+    # Remove this block once the Tier-2 inflation is understood.
+    # print("\n  [DIAG] All trainable parameters (requires_grad=True):")
+    # _diag_total = 0
+    # for _pname, _param in model.named_parameters():
+    #     if not _param.requires_grad:
+    #         continue
+    #     _diag_total += _param.numel()
+    #     print(f"    {_pname}  shape={tuple(_param.shape)}  numel={_param.numel():,}  dtype={_param.dtype}")
+    # print(f"  [DIAG] Total trainable numel = {_diag_total:,}")
+    # print()
+
     for _pname, _param in model.named_parameters():
         if not _param.requires_grad:
             continue
@@ -3565,6 +3936,12 @@ def main():
         if 'vision_proj' in _pname or 'text_proj' in _pname:
             continue
         _parts = _pname.split('.')
+        # Guard: only count LoRA adapter tensors, never base-model weights.
+        # After the explicit freeze above all base weights are requires_grad=False,
+        # but this check makes the summary robust to future regressions.
+        _has_lora_mark = any(_p2 in _lora_marks for _p2 in _parts)
+        if not _has_lora_mark:
+            continue
         for _i, _p in enumerate(_parts):
             if _p in _lora_marks and _i > 0:
                 _leaf = _parts[_i - 1]
@@ -3581,20 +3958,25 @@ def main():
     # bitsandbytes Linear4bit packs 2 NF4 values per uint8 byte, so p.numel()
     # returns half the actual logical parameter count for quantized weights.
     # LoRA adapters and non-quantized modules (e.g. vision encoder) are bf16 → numel() is exact.
+    #
+    # Build the module name→module dict ONCE here (O(n_modules)).
+    # The previous implementation called dict(model.named_modules()) inside the closure,
+    # rebuilding it for every single parameter — O(n_params × n_modules) ≈ 100 M ops.
     try:
         from bitsandbytes.nn import Linear4bit as _Linear4bit_count
+        _mod_dict_for_numel = dict(model.named_modules())
     except Exception:
         _Linear4bit_count = None
+        _mod_dict_for_numel = {}
 
     def _logical_numel(p, param_name):
         """Return the logical (unquantized) parameter count for a parameter tensor."""
         if _Linear4bit_count is None:
             return p.numel()
-        # Walk named_modules to find the parent module; if it's Linear4bit, ×2.
+        # Find the parent module; if it is a Linear4bit the weight is NF4-packed at ×2.
         parts = param_name.rsplit('.', 1)
         if len(parts) == 2:
-            mod_name, _ = parts
-            mod = dict(model.named_modules()).get(mod_name)
+            mod = _mod_dict_for_numel.get(parts[0])
             if mod is not None and isinstance(mod, _Linear4bit_count):
                 return p.numel() * 2
         return p.numel()
@@ -3604,6 +3986,7 @@ def main():
     _trainable_params = sum(_logical_numel(p, n) for n, p in _named_params if p.requires_grad)
     _frozen_params    = _total_params - _trainable_params
     _lora_total       = sum(_tier_params.values())
+    del _mod_dict_for_numel
 
     _tier_meta = {
         'Tier 1': (f"LM attention + MLP",       CONFIG['lora_t1_r']),
@@ -3650,7 +4033,7 @@ def main():
         print(f"  →  all tiers active from step 0")
     print(f"    Curriculum epochs: {CONFIG['openasl_curriculum_epochs']}  (easy ≤{CONFIG['easy_threshold_sec']}s first)")
     print(f"    Augmentation ON  : within-phase epoch ≥ {CONFIG['openasl_aug_start_epoch']}")
-    print(f"    LR T1/T2/T3/T4   : {CONFIG['lr_tier1']:.1e}/{CONFIG['lr_tier2']:.1e}/{CONFIG['lr_tier3']:.1e}/{CONFIG['lr_tier4']:.1e}")
+    print(f"    LR T1/T2/T3/T4   : {CONFIG['lr_openasl_tier1']:.1e}/{CONFIG['lr_openasl_tier2']:.1e}/{CONFIG['lr_openasl_tier3']:.1e}/{CONFIG['lr_openasl_tier4']:.1e}")
     _g2_start = CONFIG['openasl_num_epochs'] + 1
     _g2_end   = CONFIG['openasl_num_epochs'] + CONFIG['how2sign_num_epochs']
     print("  " + "─" * (_W - 2))
@@ -3765,6 +4148,7 @@ def main():
     print(f"  How2Sign val:")
     how2sign_val_ds = SignLanguageQwen3VLDataset(
         CONFIG['data_val_tsv'], source_filter=CONFIG['how2sign_source_name'], **_common_val_kwargs)
+    del _common_ds_kwargs, _common_val_kwargs
 
     # Build loaders
     openasl_train_loader  = _make_loader(openasl_train_ds,  is_train=True)
@@ -3838,16 +4222,29 @@ def main():
     print(_lr_hdr)
     print(_lr_sep)
     _lr_rows = [
-        ("T1 (LM)",  CONFIG['lr_tier1'],          CONFIG['min_lr_tier1'],          CONFIG['lr_how2sign_tier1'],  CONFIG['min_lr_how2sign_tier1']),
-        ("T2 (Vis)", CONFIG['lr_tier2'],          CONFIG['min_lr_tier2'],          CONFIG['lr_how2sign_tier2'],  CONFIG['min_lr_how2sign_tier2']),
-        ("T3 (Hd)",  CONFIG['lr_tier3'],          CONFIG['min_lr_tier3'],          CONFIG['lr_how2sign_tier3'],  CONFIG['min_lr_how2sign_tier3']),
-        ("T4 (NCE)", CONFIG['lr_tier4'],          CONFIG['min_lr_tier4'],          CONFIG['lr_how2sign_tier4'],  CONFIG['min_lr_how2sign_tier4']),
+        ("T1 (LM)",  CONFIG['lr_openasl_tier1'],          CONFIG['min_lr_openasl_tier1'],          CONFIG['lr_how2sign_tier1'],  CONFIG['min_lr_how2sign_tier1']),
+        ("T2 (Vis)", CONFIG['lr_openasl_tier2'],          CONFIG['min_lr_openasl_tier2'],          CONFIG['lr_how2sign_tier2'],  CONFIG['min_lr_how2sign_tier2']),
+        ("T3 (Hd)",  CONFIG['lr_openasl_tier3'],          CONFIG['min_lr_openasl_tier3'],          CONFIG['lr_how2sign_tier3'],  CONFIG['min_lr_how2sign_tier3']),
+        ("T4 (NCE)", CONFIG['lr_openasl_tier4'],          CONFIG['min_lr_openasl_tier4'],          CONFIG['lr_how2sign_tier4'],  CONFIG['min_lr_how2sign_tier4']),
     ]
     for _tname, _pk_o, _fl_o, _pk_h, _fl_h in _lr_rows:
         _osl_str = f"peak={_pk_o:.1e}  floor={_fl_o:.1e}"
         _h2s_str = f"peak={_pk_h:.1e}  floor={_fl_h:.1e}"
         print(f"  {_tname:<10}  {_osl_str:<30}  {_h2s_str:<30}")
     print(f"  Schedule : Linear warmup ({_warmup_pct_summary}%) → Cosine decay  |  Fresh restart at How2Sign")
+    print(f"  Warmup step counts (actual steps at warmup_ratio={CONFIG['warmup_ratio']}):")
+    _osl_t2_warmup = int(CONFIG['warmup_ratio'] * _osl_opt_steps_total)
+    _osl_t1_warmup = int(CONFIG['warmup_ratio'] * (_osl_opt_steps_total - (_osl_pt_step_summary or 0))) if _osl_tp_on else int(CONFIG['warmup_ratio'] * _osl_opt_steps_total)
+    _h2s_t2_warmup = int(CONFIG['warmup_ratio'] * _h2s_opt_steps_total)
+    print(f"    OpenASL  T2/T4 : {_osl_t2_warmup} steps   T1/T3 (born at phase-2) : {_osl_t1_warmup} steps" if _osl_tp_on else f"    OpenASL  all tiers : {_osl_t2_warmup} steps")
+    print(f"    How2Sign all tiers : {_h2s_t2_warmup} steps")
+    _infonce_on = CONFIG.get('enable_infonce', False)
+    print()
+    print(f"  INFONCE CONTRASTIVE LOSS")
+    print(f"    Status   : {'ENABLED' if _infonce_on else 'DISABLED'}")
+    if _infonce_on:
+        print(f"    Lambda   : Phase-1 = {CONFIG.get('infonce_lambda_phase1')}  Phase-2 = {CONFIG.get('infonce_lambda_phase2')}")
+        print(f"    Queue    : {CONFIG.get('infonce_queue_size', 64)}   τ = {CONFIG.get('infonce_temperature')}   min_pairs = {CONFIG.get('infonce_min_pairs')}   proj_dim = {CONFIG.get('infonce_proj_dim')}")
     print()
     print(f"  CURRICULUM LEARNING")
     _osl_cl = CONFIG['openasl_curriculum_epochs']
@@ -3978,7 +4375,7 @@ def main():
         'lr_t1', 'lr_t2', 'lr_t3', 'lr_t4',
         'grad_norm_t1', 'grad_norm_t2', 'grad_norm_t3', 'grad_norm_t4',
         'grad_norm', 'cuda_mem_gb', 'cuda_peak_gb',
-        'steps_per_sec', 'elapsed_sec', 'eta_sec',
+        'steps_per_sec', 'elapsed_sec', 'eta_sec', 'global_eta_sec',
     ])
     val_csv_logger = CSVLogger(CONFIG['val_log_file'], [
         'timestamp', 'global_step', 'epoch', 'phase',
@@ -4020,7 +4417,8 @@ def main():
     if torch.cuda.is_available():
         print(f"VRAM total: {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
 
-    controller = InteractiveController()
+    # InteractiveController uses stdin — disable on Modal where there is no TTY.
+    controller = InteractiveController() if not CONFIG.get('is_modal') else None
 
     # ════════════════════════════════════════════════════════════════
     #  DATASET PHASE A: OpenASL
@@ -4032,6 +4430,13 @@ def main():
         print("\n" + "═" * 80)
         print("  📦  DATASET PHASE A: OpenASL")
         print("═" * 80)
+
+        # Shared wall-clock for global ETA — starts once before Phase A
+        # (or before Phase B if resuming directly into How2Sign).
+        # We record it here rather than inside train() so both phases share
+        # the same reference point.
+        _global_training_start_time = time.time()
+        _global_total_opt_steps = _osl_opt_steps_total + _h2s_opt_steps_total
 
         _osl_enable_tp  = CONFIG['openasl_enable_two_phase']
         _osl_p1_frac    = CONFIG['openasl_phase1_fraction']
@@ -4052,16 +4457,16 @@ def main():
             for p in t3_params: p.requires_grad = True
 
         # Create OpenASL optimizers
-        opt_tier2 = _create_optimizer(t2_params, CONFIG['lr_tier2'])
-        opt_tier4 = _create_optimizer(t4_params, CONFIG['lr_tier4'])
+        opt_tier2 = _create_optimizer(t2_params, CONFIG['lr_openasl_tier2'])
+        opt_tier4 = _create_optimizer(t4_params, CONFIG['lr_openasl_tier4'])
         opt_tier1 = None
         opt_tier3 = None
         sched_tier2 = torch.optim.lr_scheduler.LambdaLR(
             opt_tier2, lr_lambda=_make_tier_lambda(
-                CONFIG['lr_tier2'], CONFIG['min_lr_tier2'], _osl_opt_steps_total, CONFIG['warmup_ratio']))
+                CONFIG['lr_openasl_tier2'], CONFIG['min_lr_openasl_tier2'], _osl_opt_steps_total, CONFIG['warmup_ratio']))
         sched_tier4 = torch.optim.lr_scheduler.LambdaLR(
             opt_tier4, lr_lambda=_make_tier_lambda(
-                CONFIG['lr_tier4'], CONFIG['min_lr_tier4'], _osl_opt_steps_total, CONFIG['warmup_ratio']))
+                CONFIG['lr_openasl_tier4'], CONFIG['min_lr_openasl_tier4'], _osl_opt_steps_total, CONFIG['warmup_ratio']))
         sched_tier1 = None
         sched_tier3 = None
 
@@ -4076,16 +4481,16 @@ def main():
                 sched_tier4.load_state_dict(training_state['sched_tier4_state_dict'])
                 _ckpt_phase = training_state.get('phase', 1)
                 if _ckpt_phase == 2 and 'opt_tier1_state_dict' in training_state:
-                    opt_tier1 = _create_optimizer(t1_params, CONFIG['lr_tier1'])
-                    opt_tier3 = _create_optimizer(t3_params, CONFIG['lr_tier3'])
+                    opt_tier1 = _create_optimizer(t1_params, CONFIG['lr_openasl_tier1'])
+                    opt_tier3 = _create_optimizer(t3_params, CONFIG['lr_openasl_tier3'])
                     opt_tier1.load_state_dict(training_state['opt_tier1_state_dict'])
                     opt_tier3.load_state_dict(training_state['opt_tier3_state_dict'])
                     sched_tier1 = torch.optim.lr_scheduler.LambdaLR(
                         opt_tier1, lr_lambda=_make_tier_lambda(
-                            CONFIG['lr_tier1'], CONFIG['min_lr_tier1'], _osl_p2_steps, CONFIG['warmup_ratio']))
+                            CONFIG['lr_openasl_tier1'], CONFIG['min_lr_openasl_tier1'], _osl_p2_steps, CONFIG['warmup_ratio']))
                     sched_tier3 = torch.optim.lr_scheduler.LambdaLR(
                         opt_tier3, lr_lambda=_make_tier_lambda(
-                            CONFIG['lr_tier3'], CONFIG['min_lr_tier3'], _osl_p2_steps, CONFIG['warmup_ratio']))
+                            CONFIG['lr_openasl_tier3'], CONFIG['min_lr_openasl_tier3'], _osl_p2_steps, CONFIG['warmup_ratio']))
                     sched_tier1.load_state_dict(training_state['sched_tier1_state_dict'])
                     sched_tier3.load_state_dict(training_state['sched_tier3_state_dict'])
                     for p in t1_params: p.requires_grad = True
@@ -4093,6 +4498,13 @@ def main():
                     print("  ✅ OpenASL optimizers restored (phase 2: T1 T2 T3 T4)")
                 else:
                     print("  ✅ OpenASL optimizers restored (phase 1: T2 T4)")
+                # Restore InfoNCE projection weights (Tier 4 modules)
+                if 'vision_proj_state_dict' in training_state:
+                    model.vision_proj.load_state_dict(training_state['vision_proj_state_dict'])
+                    model.text_proj.load_state_dict(training_state['text_proj_state_dict'])
+                    print("  ✅ InfoNCE projection weights restored from checkpoint")
+                else:
+                    print("  ℹ️  No projection weights in checkpoint (older save) — starting T4 from fresh init")
             except Exception as _re:
                 print(f"  ⚠️  Could not restore OpenASL optimizer state: {_re}")
 
@@ -4134,6 +4546,9 @@ def main():
             controller=controller,
             global_epoch_offset=_osl_epoch_offset,
             dataset_phase_name='openasl',
+            global_total_optimizer_steps=_global_total_opt_steps,
+            global_steps_offset=0,          # Phase A starts at global step 0
+            global_training_start_time=_global_training_start_time,
         )
 
         # Ensure all tiers are unfrozen before How2Sign (safety guard)
@@ -4145,15 +4560,41 @@ def main():
         del sched_tier1, sched_tier2, sched_tier3, sched_tier4
         gc.collect()
         torch.cuda.empty_cache()
+
+        # ── Dataset phase transition banner ──────────────────────────────────────
+        _dpt_W = 100
+        print(f"\n{'═' * _dpt_W}")
+        print(f"  🔄  DATASET PHASE TRANSITION  —  Phase A (OpenASL) → Phase B (How2Sign)")
+        print(f"{'═' * _dpt_W}")
+        print(f"  OpenASL training complete at global step {osl_final_step:,}  (global epochs 1–{CONFIG['openasl_num_epochs']})")
+        print(f"")
+        print(f"  What changes now:")
+        print(f"    ✓  Dataset       : OpenASL (noisy, large)  →  How2Sign (clean, smaller)")
+        print(f"    ✓  All optimizers: RESET  (fresh AdamW states, no momentum carry-over)")
+        _h2s_tp_preview = CONFIG['how2sign_enable_two_phase']
+        if _h2s_tp_preview:
+            _h2s_p1_pct = int(CONFIG['how2sign_phase1_fraction'] * 100)
+            print(f"    ✓  Freeze schedule: two-phase enabled  (first {_h2s_p1_pct}% T2+T4 only, then all tiers)")
+        else:
+            print(f"    ✓  Freeze schedule: all tiers (T1 T2 T3 T4) active from step 0")
+        print(f"    ✓  Learning rates : fresh cosine schedule  (lower How2Sign LRs)")
+        print(f"       T1 peak {CONFIG['lr_how2sign_tier1']:.2e}  →  floor {CONFIG['min_lr_how2sign_tier1']:.2e}")
+        print(f"       T2 peak {CONFIG['lr_how2sign_tier2']:.2e}  →  floor {CONFIG['min_lr_how2sign_tier2']:.2e}")
+        print(f"       T3 peak {CONFIG['lr_how2sign_tier3']:.2e}  →  floor {CONFIG['min_lr_how2sign_tier3']:.2e}")
+        print(f"       T4 peak {CONFIG['lr_how2sign_tier4']:.2e}  →  floor {CONFIG['min_lr_how2sign_tier4']:.2e}")
+        _h2s_cl_preview = CONFIG['how2sign_curriculum_epochs']
+        print(f"    ✓  Curriculum     : {'epochs ' + str(_h2s_cl_preview) + ' (within-phase)' if _h2s_cl_preview else 'DISABLED'}")
+        print(f"    ✓  Augmentation   : starts at within-phase epoch {CONFIG['how2sign_aug_start_epoch']}")
+        print(f"{'═' * _dpt_W}\n")
+        # ─────────────────────────────────────────────────────────────────────────
     else:
         osl_final_step = start_global_step
+        # Resuming directly into How2Sign — start the global clock now
+        _global_training_start_time = time.time()
+        _global_total_opt_steps = _osl_opt_steps_total + _h2s_opt_steps_total
         # Ensure all tiers unfrozen when skipping directly to How2Sign
         for p in t1_params: p.requires_grad = True
         for p in t3_params: p.requires_grad = True
-
-    if training_state is not None:
-        del training_state
-        gc.collect()
 
     # ════════════════════════════════════════════════════════════════
     #  DATASET PHASE B: How2Sign
@@ -4219,6 +4660,13 @@ def main():
                 opt_tier3.load_state_dict(training_state['opt_tier3_state_dict'])
                 sched_tier1.load_state_dict(training_state['sched_tier1_state_dict'])
                 sched_tier3.load_state_dict(training_state['sched_tier3_state_dict'])
+            # Restore InfoNCE projection weights (Tier 4 modules)
+            if 'vision_proj_state_dict' in training_state:
+                model.vision_proj.load_state_dict(training_state['vision_proj_state_dict'])
+                model.text_proj.load_state_dict(training_state['text_proj_state_dict'])
+                print("  ✅ InfoNCE projection weights restored from checkpoint")
+            else:
+                print("  ℹ️  No projection weights in checkpoint (older save) — starting T4 from fresh init")
             _h2s_start_epoch    = start_epoch - CONFIG['openasl_num_epochs']
             _h2s_start_step     = start_global_step
             _h2s_start_steps_in_ep = start_steps_done_in_epoch
@@ -4228,6 +4676,10 @@ def main():
             print("  ✅ How2Sign optimizers restored from checkpoint")
         except Exception as _re:
             print(f"  ⚠️  Could not restore How2Sign optimizer state: {_re}")
+
+    if training_state is not None:
+        del training_state
+        gc.collect()
 
     _h2s_train_config = {
         **CONFIG,
@@ -4275,6 +4727,9 @@ def main():
         controller=controller,
         global_epoch_offset=_h2s_epoch_offset,
         dataset_phase_name='how2sign',
+        global_total_optimizer_steps=_global_total_opt_steps,
+        global_steps_offset=_osl_opt_steps_total,   # Phase A steps already done
+        global_training_start_time=_global_training_start_time,
     )
 
     print("\n" + "━" * 80)
@@ -4307,3 +4762,140 @@ def _safe_main():
 
 if __name__ == '__main__':
     _safe_main()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  MODAL APP  (only active when is_modal=True)
+#
+#  Usage:
+#    1. Set  'is_modal': True  in CONFIG above.
+#    2. Run: modal run model_training_scripts/qwen3vl_training.py
+#
+#  The container image is built once and cached. Subsequent runs reuse the
+#  cache unless pip packages or the Dockerfile layer changes.
+#
+#  Volume upload commands (run once from your local machine):
+#    modal volume create signbridge-data
+#    modal volume create signbridge-videos
+#    modal volume create signbridge-outputs
+#
+#    # Metadata files
+#    modal volume put signbridge-data "data/7_dataset_train.tsv"  /7_dataset_train.tsv
+#    modal volume put signbridge-data "data/7_dataset_val.tsv"    /7_dataset_val.tsv
+#    modal volume put signbridge-data "data/7_dataset_test.tsv"   /7_dataset_test.tsv
+#    modal volume put signbridge-data "data/bboxes_all.csv"       /bboxes_all.csv
+#    modal volume put signbridge-data "data/landmarks_train.parquet" /landmarks_train.parquet
+#    modal volume put signbridge-data "data/landmarks_val.parquet"   /landmarks_val.parquet
+#    modal volume put signbridge-data "data/landmarks_test.parquet"  /landmarks_test.parquet
+#
+#    # Raw video clips (large — mirrors D:\signbridge_dataset\)
+#    modal volume put signbridge-videos "D:/signbridge_dataset/how2sign" /how2sign
+#    modal volume put signbridge-videos "D:/signbridge_dataset/openasl"  /openasl
+#
+#  HuggingFace secret (for downloading Qwen3-VL-2B-Instruct):
+#    modal secret create huggingface-secret HF_TOKEN=hf_your_token_here
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if CONFIG.get('is_modal'):
+    import modal
+
+    _HOURS = 3600
+
+    # ── Container image ────────────────────────────────────────────────────────
+    # Base: NVIDIA CUDA 12.4 devel image (provides nvcc for flash-attn compilation)
+    _modal_image = (
+        modal.Image.from_registry(
+            "nvidia/cuda:12.4.1-cudnn-devel-ubuntu22.04",
+            add_python="3.11",
+        )
+        .entrypoint([])  # silence verbose CUDA entrypoint logging
+        .apt_install(
+            "git",
+            "ffmpeg",          # video decoding (cv2 / torchvision backend)
+            "libgl1",          # OpenCV headless dependency
+            "libglib2.0-0",
+        )
+        .pip_install(
+            # Core ML
+            "torch==2.4.0",
+            "torchvision==0.19.0",
+            "torchaudio==2.4.0",
+            # Transformers stack
+            "transformers>=4.51.0",
+            "peft>=0.14.0",
+            "accelerate>=1.0.0",
+            "bitsandbytes>=0.43.0",
+            # Qwen3-VL utilities
+            "qwen-vl-utils>=0.0.8",
+            # Training utilities
+            "sacrebleu",
+            "tensorboard",
+            "liger-kernel>=0.3.0",
+            "nltk",
+            "kornia",
+            # Data
+            "pandas",
+            "numpy",
+            "pyarrow",          # parquet support
+            "tqdm",
+            # Vision
+            "opencv-python-headless",
+            "Pillow",
+            # HuggingFace transfer (faster model downloads)
+            "hf-transfer",
+            "huggingface-hub",
+        )
+        # flash-attn must be compiled against the exact torch+CUDA version;
+        # --no-build-isolation ensures it links against the torch already installed above.
+        .run_commands("pip install wheel packaging ninja && pip install flash-attn --no-build-isolation")
+        .env({
+            # Speed up HuggingFace model downloads
+            "HF_HUB_ENABLE_HF_TRANSFER": "1",
+            # Prevent tokenizer thread conflicts with DataLoader workers
+            "TOKENIZERS_PARALLELISM": "false",
+            # Reduce CUDA memory fragmentation from variable-length sequences
+            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+        })
+    )
+
+    # ── Volumes ────────────────────────────────────────────────────────────────
+    _modal_data_vol    = modal.Volume.from_name(CONFIG['modal_data_volume'],   create_if_missing=False)
+    _modal_video_vol   = modal.Volume.from_name(CONFIG['modal_video_volume'],  create_if_missing=False)
+    _modal_output_vol  = modal.Volume.from_name(CONFIG['modal_output_volume'], create_if_missing=True)
+
+    # ── Secrets ────────────────────────────────────────────────────────────────
+    _modal_secrets = []
+    if CONFIG.get('modal_hf_secret'):
+        _modal_secrets.append(modal.Secret.from_name(CONFIG['modal_hf_secret']))
+
+    # ── App ────────────────────────────────────────────────────────────────────
+    app = modal.App(CONFIG['modal_app_name'], image=_modal_image)
+
+    @app.function(
+        gpu=CONFIG['modal_gpu'],
+        cpu=CONFIG['modal_cpu'],
+        memory=CONFIG['modal_memory'],
+        timeout=CONFIG['modal_timeout'],
+        retries=modal.Retries(
+            max_retries=CONFIG['modal_retries'],
+            backoff_coefficient=1.0,
+            initial_delay=5.0,
+        ),
+        volumes={
+            CONFIG['modal_data_mount']:   _modal_data_vol,
+            CONFIG['modal_video_mount']:  _modal_video_vol,
+            CONFIG['modal_output_mount']: _modal_output_vol,
+        },
+        secrets=_modal_secrets,
+    )
+    def run_training_on_modal():
+        """Entry point executed inside the Modal container."""
+        _safe_main()
+
+    @app.local_entrypoint()
+    def modal_entrypoint():
+        """Called on your local machine when you run `modal run <this_file>`."""
+        print(f"  Dispatching training job to Modal ({CONFIG['modal_gpu']} GPU, "
+              f"{CONFIG['modal_cpu']} CPUs, {CONFIG['modal_memory'] // 1024} GB RAM, "
+              f"timeout={CONFIG['modal_timeout'] // 3600}h)...")
+        run_training_on_modal.remote()
