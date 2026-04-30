@@ -3,9 +3,31 @@
 
 import os
 import sys
+import warnings
 from datetime import datetime
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+
+# ── Warning filters ───────────────────────────────────────────────────────────
+# Suppress known-harmless per-step noise from internal HF/PEFT/torchvision code.
+# These are informational deprecation/compatibility warnings that are not
+# actionable for this training setup and flood the log at every forward pass.
+warnings.filterwarnings(
+    'ignore',
+    message='.*use_reentrant.*',           # gradient checkpointing in HF internals
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    'ignore',
+    message='.*video decoding and encoding.*',  # torchvision video API deprecation (qwen-vl-utils)
+    category=UserWarning,
+)
+warnings.filterwarnings(
+    'ignore',
+    message='.*tie_word_embeddings.*',     # tied lm_head LoRA adapter warning on load/resume
+    category=UserWarning,
+)
+# ─────────────────────────────────────────────────────────────────────────────
 # Reduce CUDA memory fragmentation from variable-length video sequences.
 # expandable_segments lets the allocator grow existing segments instead of
 # carving new fixed blocks — critical when sequence length varies each step.
@@ -157,9 +179,9 @@ CONFIG = {
     'quantize_skip_modules': ['visual'],
 
     # ── Video Processing ──
-    'video_fps': 18,                              # Frames per second to sample (lowered from 18 to reduce peak RAM; raw frames load at full res before resize)
+    'video_fps': 18,                              # Frames per second to sample
     'video_min_pixels': 4 * 32 * 32,              # Min visual tokens per frame pair (~4 tokens)
-    'video_max_pixels': 128 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
+    'video_max_pixels': 116 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
     'video_total_pixels': 20480 * 32 * 32,        # Total pixel budget cap across all frames (None = no cap)
 
     # ── Signer Cropping (pre-computed MediaPipe bboxes) ──
@@ -214,15 +236,15 @@ CONFIG = {
     'grad_accum_steps': 6,                       # Effective batch = 1 x 24 = 24
 
     # ── DataLoader Config ──
-    'train_num_workers': 4,                       # reduce to 1 if Windows shared-memory error 1455 reappears
-    'train_prefetch_factor': 3,
+    'train_num_workers': 8,                       
+    'train_prefetch_factor': 4,
     'train_pin_memory': True,                     # Pinned memory for async CPU→GPU DMA during training (disabled to reduce RAM usage and fragmentation)
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
-    'val_num_workers': 3,                          # 1 worker overlaps video decoding with GPU inference during validation
-    'val_prefetch_factor': 2,                      # Pre-load 2 batches ahead during validation
+    'val_num_workers': 7,                          # 1 worker overlaps video decoding with GPU inference during validation
+    'val_prefetch_factor': 4,                      # Pre-load 2 batches ahead during validation
     'val_pin_memory': True,                        # Pinned memory for async CPU→GPU DMA during validation
-    'val_persistent_workers': True,               # Keep val worker alive across validation runs
+    'val_persistent_workers': False,               # Keep val worker alive across validation runs
 
     # ── Dataset Phases ──────────────────────────────────────────────────────────────────────
     # Phase A: OpenASL  (noisy, larger — pre-training phase)
@@ -285,7 +307,19 @@ CONFIG = {
     'warmup_ratio': 0.05,
     'weight_decay': 0.01,
     'adam_betas': (0.9, 0.98),
-    'max_grad_norm': 1.0,
+    # ── Per-tier gradient clipping ────────────────────────────────────────────
+    # Each tier is clipped independently so that a high-norm tier (e.g. T2
+    # Vision LoRA) cannot drag down the gradients of well-behaved tiers.
+    # The joint norm is still computed and logged for diagnostics.
+    # T2 gets a higher limit because vision LoRA gradients are naturally larger.
+    # T4 (InfoNCE projections) gets a generous limit — it's a small head.
+    'max_grad_norm_t1': 4.0,   # LM LoRA (attn + MLP)
+    'max_grad_norm_t2': 6.0,   # Vision LoRA (encoder) — naturally larger grads
+    'max_grad_norm_t3': 2.0,   # Head LoRA (lm_head)
+    'max_grad_norm_t4': 2.0,   # InfoNCE projection layers
+    # Legacy global fallback — used only for the spike-logging threshold and
+    # the interactive-controller clip= command (which now sets all tiers).
+    'max_grad_norm': 2.5,
 
     # ── Logging ──
     'log_every_steps': 1,
@@ -303,10 +337,10 @@ CONFIG = {
     'eval_every_steps': 80,
     'eval_every_steps_warmup': 80,               # More frequent eval early on
     'eval_warmup_threshold': 1000,                # Switch to normal eval freq after this step
-    'max_eval_batches': 80,
+    'max_eval_batches': 72,
     'num_print_samples': 5,
-    'val_gen_batch_size': 4,                
-    'max_generate_samples': 140,
+    'val_gen_batch_size': 12,                
+    'max_generate_samples': 130,
     'val_beam_size': 1,                             # 1 = greedy (faster validation, honest diagnostic); run beam=4 on final checkpoint
     'val_length_penalty': 1.0,                      # > 1.0 favors longer outputs (counters BLEU brevity penalty); < 1.0 favors shorter
     'val_no_repeat_ngram_size': 0,                  # Block any n-gram from repeating; improves BLEU precision (0 = disabled)
@@ -332,7 +366,7 @@ CONFIG = {
     # vision path), new Tier-3 LoRA rank (2 → 8), and the new InfoNCE projection modules.
     'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': 410,            # None = latest, or specific step number
+    'resume_checkpoint_step': 500,            # None = latest, or specific step number
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -375,7 +409,7 @@ CONFIG = {
     # Aligns pooled video embedding with pooled reference-text embedding across
     # the accumulated effective batch. Primary anti-mode-collapse signal.
     'enable_infonce': True,
-    'infonce_temperature': 0.07,
+    'infonce_temperature': 0.10,                  # Relaxed from 0.07 to reduce high-variance logit scaling
     'infonce_proj_dim': 256,
     'infonce_queue_size': 64,                     # MoCo-style queue depth: max number of past (v, t) embeddings retained.
     'infonce_lambda_phase1': 0.3,                 # Strong in Phase 1 (LM frozen; vision's only alignment signal).
@@ -473,13 +507,14 @@ CONFIG = {
     # GPU strings: 'T4', 'A10G', 'A100', 'A100-80GB', 'H100', 'H100:2' (multi-GPU)
     # Fallback list also accepted: ['H100', 'A100-80GB']
     'modal_gpu': 'A100-80GB',
-    'modal_cpu': 12,                    # Virtual CPUs allocated to the container
+    'modal_cpu': 10,                    # Virtual CPUs allocated to the container
     'modal_memory': 81920,             # RAM in MB (80 GB)
     'modal_timeout': 24 * 3600,        # Max wall-clock seconds before Modal kills job
     'modal_retries': 0,                # Container-level retries on failure (not step-level)
 
     # App
     'modal_app_name': 'signbridge-training',
+    'modal_sync_metrics_on_exit': False,       # Pull /saved_metrics back to local machine after run?
 
     # Volumes — must be created beforehand with `modal volume create <name>`
     # signbridge-data  : TSV files, bboxes_all.csv, landmarks parquets
@@ -659,7 +694,7 @@ class InteractiveController:
         print(f"  LR T1 (LM)         : {lr_t1:.4e}")
         print(f"  LR T2 (Vision)     : {lr_t2:.4e}")
         print(f"  LR T3 (Embed/Head) : {lr_t3:.4e}")
-        print(f"  Grad clip : {current_clip}")
+        print(f"  Grad clip : T1={train_config.get('max_grad_norm_t1', train_config['max_grad_norm'])}  T2={train_config.get('max_grad_norm_t2', train_config['max_grad_norm'])}  T3={train_config.get('max_grad_norm_t3', train_config['max_grad_norm'])}  T4={train_config.get('max_grad_norm_t4', train_config['max_grad_norm'])}")
         print(f"  {_THIN}")
         print(f"  Commands (type one then press Enter):")
         print(f"    lr=<t1>,<t2>,<t3>  — set per-tier LRs  (e.g. lr=1e-5,3e-5,1e-5)")
@@ -725,13 +760,33 @@ class InteractiveController:
 
             elif cmd.startswith('clip='):
                 try:
-                    new_clip = float(cmd[5:])
-                    if new_clip <= 0:
-                        print(f"  ✗  Clip must be positive.  Got: {new_clip}")
-                        continue
-                    old_clip = train_config['max_grad_norm']
-                    train_config['max_grad_norm'] = new_clip
-                    print(f"  ✓  Grad clip      :  {old_clip}  →  {new_clip}")
+                    parts = cmd[5:].split(',')
+                    if len(parts) == 4:
+                        new_clips = [float(p) for p in parts]
+                        if any(c <= 0 for c in new_clips):
+                            print(f"  ✗  All clip norms must be positive.")
+                            continue
+                        for key, val in zip(['max_grad_norm_t1','max_grad_norm_t2','max_grad_norm_t3','max_grad_norm_t4'], new_clips):
+                            train_config[key] = val
+                        print(f"  ✓  Per-tier clip norms: T1={new_clips[0]}  T2={new_clips[1]}  T3={new_clips[2]}  T4={new_clips[3]}")
+                    elif len(parts) == 1:
+                        new_clip = float(parts[0])
+                        if new_clip <= 0:
+                            print(f"  ✗  Clip must be positive.  Got: {new_clip}")
+                            continue
+                        old_t1 = train_config.get('max_grad_norm_t1', train_config['max_grad_norm'])
+                        old_t2 = train_config.get('max_grad_norm_t2', train_config['max_grad_norm'])
+                        old_t3 = train_config.get('max_grad_norm_t3', train_config['max_grad_norm'])
+                        old_t4 = train_config.get('max_grad_norm_t4', train_config['max_grad_norm'])
+                        train_config['max_grad_norm'] = new_clip
+                        train_config['max_grad_norm_t1'] = new_clip
+                        train_config['max_grad_norm_t2'] = new_clip
+                        train_config['max_grad_norm_t3'] = new_clip
+                        train_config['max_grad_norm_t4'] = new_clip
+                        print(f"  ✓  All tiers clip: T1 {old_t1}→{new_clip}  T2 {old_t2}→{new_clip}  T3 {old_t3}→{new_clip}  T4 {old_t4}→{new_clip}")
+                        print(f"     Tip: use clip=t1,t2,t3,t4 to set tiers independently  e.g. clip=1.0,5.0,1.0,5.0")
+                    else:
+                        print(f"  ✗  Expected 1 value (all tiers) or 4 comma-separated values (t1,t2,t3,t4).")
                 except ValueError:
                     print(f"  ✗  Invalid value: '{raw}'.  Example: clip=0.5")
 
@@ -1640,16 +1695,36 @@ def compute_wer(references, hypotheses):
 
 
 def compute_meteor(references, hypotheses):
-    """METEOR score using NLTK. Returns 0.0 if nltk is not available."""
+    """METEOR score using NLTK. Returns 0.0 if nltk is not available.
+
+    NLTK's meteor_score requires the 'wordnet' and 'omw-1.4' corpora.
+    These are pre-baked into the Modal image, but we also auto-download
+    them on first use as a fallback (e.g. local runs).
+    """
     try:
         from nltk.translate.meteor_score import meteor_score as _meteor
     except ImportError:
         return 0.0
     if not references or not hypotheses:
         return 0.0
+
+    # Ensure wordnet corpus is available; download silently if missing.
+    try:
+        import nltk
+        from nltk.corpus import wordnet as _wn
+        _wn.ensure_loaded()
+    except LookupError:
+        import nltk
+        nltk.download('wordnet', quiet=True)
+        nltk.download('omw-1.4', quiet=True)
+
     scores = []
     for ref, hyp in zip(references, hypotheses):
-        scores.append(_meteor([ref.strip().split()], hyp.strip().split()))
+        try:
+            scores.append(_meteor([ref.strip().split()], hyp.strip().split()))
+        except LookupError:
+            # wordnet still unavailable — skip this sample
+            scores.append(0.0)
     return (sum(scores) / len(scores)) * 100
 
 
@@ -2139,7 +2214,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
           controller=None,
           global_epoch_offset=0, dataset_phase_name='openasl',
           global_total_optimizer_steps=None, global_steps_offset=0,
-          global_training_start_time=None):
+          global_training_start_time=None, start_infonce_queues=None):
     """Full training loop for one dataset phase (OpenASL or How2Sign)."""
 
     # Unpack config
@@ -2178,10 +2253,15 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
     # ── InfoNCE MoCo-style queue (live anchor vs detached queue of past embeddings) ──
     infonce_enabled = bool(CONFIG.get('enable_infonce', True))
-    infonce_queue_v = []
-    infonce_queue_t = []
+    if start_infonce_queues is not None:
+        infonce_queue_v = start_infonce_queues.get('v', [])
+        infonce_queue_t = start_infonce_queues.get('t', [])
+        print(f"  ✅ InfoNCE queues restored (size: {len(infonce_queue_v)})")
+    else:
+        infonce_queue_v = []
+        infonce_queue_t = []
     infonce_queue_max = int(CONFIG.get('infonce_queue_size', 64))
-    infonce_tau = float(CONFIG.get('infonce_temperature', 0.07))
+    infonce_tau = float(CONFIG.get('infonce_temperature', 0.10))
     infonce_skip_count = 0
 
     # ── Phase management ──
@@ -2770,19 +2850,41 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 grad_norm_t3 = _tier_grad_norm(model._t3_params)
                 grad_norm_t4 = _tier_grad_norm(model._t4_params)
 
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    _all_trainable_params, max_norm=train_config['max_grad_norm']
-                ).item()
+                # ── Per-tier independent gradient clipping ────────────────────
+                # Each tier is clipped against its own max_grad_norm so that a
+                # high-norm tier (T2 Vision) cannot scale down well-behaved tiers.
+                # clip_grad_norm_ returns the pre-clip norm of the passed params.
+                _cn_t1 = train_config.get('max_grad_norm_t1', train_config['max_grad_norm'])
+                _cn_t2 = train_config.get('max_grad_norm_t2', train_config['max_grad_norm'])
+                _cn_t3 = train_config.get('max_grad_norm_t3', train_config['max_grad_norm'])
+                _cn_t4 = train_config.get('max_grad_norm_t4', train_config['max_grad_norm'])
+                _pre_t1 = torch.nn.utils.clip_grad_norm_(model._t1_params, max_norm=_cn_t1).item() if model._t1_params else 0.0
+                _pre_t2 = torch.nn.utils.clip_grad_norm_(model._t2_params, max_norm=_cn_t2).item() if model._t2_params else 0.0
+                _pre_t3 = torch.nn.utils.clip_grad_norm_(model._t3_params, max_norm=_cn_t3).item() if model._t3_params else 0.0
+                _pre_t4 = torch.nn.utils.clip_grad_norm_(model._t4_params, max_norm=_cn_t4).item() if model._t4_params else 0.0
+
+                # Joint global norm (of already-clipped gradients) for diagnostics/logging
+                _clipped_gnorms = [
+                    p.grad.detach().norm(2)
+                    for p in _all_trainable_params if p.grad is not None
+                ]
+                grad_norm = torch.norm(torch.stack(_clipped_gnorms), 2).item() if _clipped_gnorms else 0.0
+                del _clipped_gnorms
 
                 # ── Grad-norm clip / spike logging ──
-                _max_norm = train_config['max_grad_norm']
-                if grad_norm > _max_norm:
-                    # Only print when it's a meaningful clip (more than 10% over threshold) to avoid
-                    # flooding the log for borderline norms — spikes below 2× are noted briefly.
-                    if grad_norm > _max_norm * 2:
-                        print(f"  ✂️  grad clipped  step={global_step}  pre-clip={grad_norm:.2f}  →  {_max_norm}  (t1={grad_norm_t1:.2f} t2={grad_norm_t2:.2f} t3={grad_norm_t3:.2f} t4={grad_norm_t4:.2f})")
-                    elif grad_norm > _max_norm * 1.1:
-                        print(f"  ✂️  grad clipped  step={global_step}  {grad_norm:.2f}→{_max_norm}")
+                # Report when any tier was clipped meaningfully (>10% over its limit).
+                _clipped_tiers = []
+                if _pre_t1 > _cn_t1 * 1.1: _clipped_tiers.append(f"t1={_pre_t1:.2f}→{_cn_t1}")
+                if _pre_t2 > _cn_t2 * 1.1: _clipped_tiers.append(f"t2={_pre_t2:.2f}→{_cn_t2}")
+                if _pre_t3 > _cn_t3 * 1.1: _clipped_tiers.append(f"t3={_pre_t3:.2f}→{_cn_t3}")
+                if _pre_t4 > _cn_t4 * 1.1: _clipped_tiers.append(f"t4={_pre_t4:.2f}→{_cn_t4}")
+                if _clipped_tiers:
+                    _loud = any(v > 2.0 for v in [_pre_t1/_cn_t1, _pre_t2/_cn_t2, _pre_t3/_cn_t3, _pre_t4/_cn_t4])
+                    if _loud:
+                        print(f"  ✂️  grad clipped  step={global_step}  {' | '.join(_clipped_tiers)}  global_post={grad_norm:.2f}")
+                    else:
+                        print(f"  ✂️  step={global_step}  {' | '.join(_clipped_tiers)}")
+                _max_norm = train_config['max_grad_norm']  # kept for spike threshold only
                 if grad_norm > CONFIG.get('grad_norm_spike_threshold', 500.0):
                     try:
                         _bshape = tuple(batch_gpu['pixel_values_videos'].shape) if 'batch_gpu' in dir() and isinstance(batch_gpu, dict) and 'pixel_values_videos' in batch_gpu else None
@@ -2879,6 +2981,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         'sched_tier4_state_dict': sched_tier4.state_dict(),
                         'vision_proj_state_dict': model.vision_proj.state_dict(),
                         'text_proj_state_dict':   model.text_proj.state_dict(),
+                        'infonce_queue_v':        infonce_queue_v,
+                        'infonce_queue_t':        infonce_queue_t,
                     }
                     ckpt_manager.save_periodic(
                         model, opt_tier2, sched_tier2, epoch, global_step,
@@ -3081,6 +3185,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         'sched_tier4_state_dict': sched_tier4.state_dict(),
                         'vision_proj_state_dict': model.vision_proj.state_dict(),
                         'text_proj_state_dict':   model.text_proj.state_dict(),
+                        'infonce_queue_v':        infonce_queue_v,
+                        'infonce_queue_t':        infonce_queue_t,
                     }
                     if opt_tier1 is not None:
                         _ckpt_extra['opt_tier1_state_dict']  = opt_tier1.state_dict()
@@ -3394,7 +3500,7 @@ def main():
     print(f"    Total epochs           : {CONFIG['openasl_num_epochs'] + CONFIG['how2sign_num_epochs']}")
     print(f"    Batch size             : {CONFIG['batch_size']}  (effective: {effective_batch} with {CONFIG['grad_accum_steps']}x accum)")
     print(f"    Mixed precision        : bfloat16")
-    print(f"    Grad clip max_norm     : {CONFIG['max_grad_norm']}")
+    print(f"    Grad clip (per-tier)   : T1={CONFIG.get('max_grad_norm_t1', CONFIG['max_grad_norm'])}  T2={CONFIG.get('max_grad_norm_t2', CONFIG['max_grad_norm'])}  T3={CONFIG.get('max_grad_norm_t3', CONFIG['max_grad_norm'])}  T4={CONFIG.get('max_grad_norm_t4', CONFIG['max_grad_norm'])}  (global fallback={CONFIG['max_grad_norm']})")
     print(f"    Weight decay           : {CONFIG['weight_decay']}")
     print(f"    Adam betas             : {CONFIG['adam_betas']}")
     print(f"    8-bit AdamW            : {CONFIG['use_8bit_adam']}")
@@ -4549,6 +4655,7 @@ def main():
             global_total_optimizer_steps=_global_total_opt_steps,
             global_steps_offset=0,          # Phase A starts at global step 0
             global_training_start_time=_global_training_start_time,
+            start_infonce_queues={'v': training_state.get('infonce_queue_v', []), 't': training_state.get('infonce_queue_t', [])} if training_state else None,
         )
 
         # Ensure all tiers are unfrozen before How2Sign (safety guard)
@@ -4730,6 +4837,7 @@ def main():
         global_total_optimizer_steps=_global_total_opt_steps,
         global_steps_offset=_osl_opt_steps_total,   # Phase A steps already done
         global_training_start_time=_global_training_start_time,
+        start_infonce_queues={'v': training_state.get('infonce_queue_v', []), 't': training_state.get('infonce_queue_t', [])} if training_state else None,
     )
 
     print("\n" + "━" * 80)
@@ -4814,23 +4922,24 @@ if CONFIG.get('is_modal'):
             "ffmpeg",          # video decoding (cv2 / torchvision backend)
             "libgl1",          # OpenCV headless dependency
             "libglib2.0-0",
+            "clang",           # required by flash-attn build system (clang++)
         )
         .pip_install(
             # Core ML
-            "torch==2.4.0",
-            "torchvision==0.19.0",
-            "torchaudio==2.4.0",
+            "torch==2.10.0",
+            "torchvision==0.25.0",   # must match torch major.minor (2.10 → torchvision 0.25)
+            "torchaudio==2.10.0",
             # Transformers stack
-            "transformers>=4.51.0",
-            "peft>=0.14.0",
-            "accelerate>=1.0.0",
-            "bitsandbytes>=0.43.0",
+            "transformers==4.57.3",
+            "peft==0.18.1",
+            "accelerate==1.12.0",
+            "bitsandbytes==0.48.2",
             # Qwen3-VL utilities
-            "qwen-vl-utils>=0.0.8",
+            "qwen-vl-utils==0.0.14",
             # Training utilities
             "sacrebleu",
             "tensorboard",
-            "liger-kernel>=0.3.0",
+            "liger-kernel==0.7.0",
             "nltk",
             "kornia",
             # Data
@@ -4845,9 +4954,15 @@ if CONFIG.get('is_modal'):
             "hf-transfer",
             "huggingface-hub",
         )
-        # flash-attn must be compiled against the exact torch+CUDA version;
-        # --no-build-isolation ensures it links against the torch already installed above.
-        .run_commands("pip install wheel packaging ninja && pip install flash-attn --no-build-isolation")
+        # flash-attn is compiled from source and needs its own build-tool pre-install.
+        # --no-build-isolation lets it link against the torch already in site-packages.
+        # clang/clang++ is installed above via apt; packaging/wheel/ninja are the
+        # remaining build-time deps that setup.py imports before compilation starts.
+        .run_commands(
+            "pip install wheel packaging ninja "
+            "&& pip install flash-attn==2.8.3 --no-build-isolation",
+            gpu="any",  # GPU must be present during compilation
+        )
         .env({
             # Speed up HuggingFace model downloads
             "HF_HUB_ENABLE_HF_TRANSFER": "1",
@@ -4898,4 +5013,18 @@ if CONFIG.get('is_modal'):
         print(f"  Dispatching training job to Modal ({CONFIG['modal_gpu']} GPU, "
               f"{CONFIG['modal_cpu']} CPUs, {CONFIG['modal_memory'] // 1024} GB RAM, "
               f"timeout={CONFIG['modal_timeout'] // 3600}h)...")
-        run_training_on_modal.remote()
+        try:
+            run_training_on_modal.remote()
+        finally:
+            if CONFIG.get('modal_sync_metrics_on_exit'):
+                print("\n  [Syncing metrics (TensorBoard, CSVs) from Modal volume to local machine...]")
+                import subprocess
+                # This pulls everything in /outputs/saved_metrics from the cloud and overwrites your local ./saved_metrics
+                subprocess.run([
+                    "modal", "volume", "get", 
+                    CONFIG['modal_output_volume'], 
+                    "/saved_metrics", 
+                    "./"
+                ])
+            else:
+                print("\n  [Sync skipped: 'modal_sync_metrics_on_exit' is False. Run 'modal volume get signbridge-outputs /saved_metrics ./' manually if needed.]")
