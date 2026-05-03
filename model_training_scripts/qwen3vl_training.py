@@ -249,8 +249,8 @@ CONFIG = {
     'train_pin_memory': True,                   
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
-    'val_num_workers': 4,                          # 1 worker overlaps video decoding with GPU inference during validation
-    'val_prefetch_factor': 3,                      # Pre-load 2 batches ahead during validation
+    'val_num_workers': 7,                          # 1 worker overlaps video decoding with GPU inference during validation
+    'val_prefetch_factor': 5,                      # Pre-load 2 batches ahead during validation
     'val_pin_memory': True,                        # Pinned memory for async CPU→GPU DMA during validation
     'val_persistent_workers': True,               # Keep val worker alive across validation runs
 
@@ -322,7 +322,7 @@ CONFIG = {
     # T2 gets a higher limit because vision LoRA gradients are naturally larger.
     # T4 (InfoNCE projections) gets a generous limit — it's a small head.
     'max_grad_norm_t1': 5.0,   # LM LoRA (attn + MLP)
-    'max_grad_norm_t2': 7.0,   # Vision LoRA (encoder) — naturally larger grads
+    'max_grad_norm_t2': 9.0,   # Vision LoRA (encoder) — naturally larger grads
     'max_grad_norm_t3': 3.0,   # Head LoRA (lm_head)
     'max_grad_norm_t4': 2.0,   # InfoNCE projection layers
     # Legacy global fallback — used only for the spike-logging threshold and
@@ -346,7 +346,7 @@ CONFIG = {
     'eval_every_steps_warmup': 80,               # More frequent eval early on
     'eval_warmup_threshold': 1000,                # Switch to normal eval freq after this step
     'val_loss_batch_size': 6,              # Reduced from 8 to halve peak VRAM from lm_head logit tensor
-    'max_eval_batches': 84,              # Doubled to compensate — same 512 samples evaluated per validation
+    'max_eval_batches': 72,              # Doubled to compensate — same 512 samples evaluated per validation
     'val_gen_batch_size': 6,                
     'max_generate_samples': 120,
     'num_print_samples': 6,
@@ -375,7 +375,7 @@ CONFIG = {
     # vision path), new Tier-3 LoRA rank (2 → 8), and the new InfoNCE projection modules.
     'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': 1370,            # None = latest, or specific step number
+    'resume_checkpoint_step': 1660,            # None = latest, or specific step number
     'eval_on_resume_step': True,              # True = run validation on the first step after resume if it lands on an eval step
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
@@ -519,8 +519,8 @@ CONFIG = {
     # GPU strings: 'T4', 'A10G', 'A100', 'A100-80GB', 'H100', 'H100:2' (multi-GPU)
     # Fallback list also accepted: ['H100', 'A100-80GB']
     'modal_gpu': 'A100-80GB',
-    'modal_cpu': 10,                    # Virtual CPUs allocated to the container
-    'modal_memory': 87040,             # RAM in MB (80 GB)
+    'modal_cpu': 11,                    # Virtual CPUs allocated to the container
+    'modal_memory': 97280,             # RAM in MB (80 GB)
     'modal_timeout': 24 * 3600,        # Max wall-clock seconds before Modal kills job
     'modal_retries': 0,                # Container-level retries on failure (not step-level)
 
@@ -2126,6 +2126,7 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
                     temperature=None,
                     top_p=None,
                     top_k=None,
+                    use_cache=True,
                 )
 
             # Trim input prefix from generated ids
@@ -2152,6 +2153,7 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
 
             del inputs, generated_ids, generated_ids_trimmed, batch_hypotheses, batch_samples
             torch.cuda.empty_cache()
+            gc.collect()  # Force garbage collection to free CPU RAM from strings
 
         except torch.cuda.OutOfMemoryError:
             print(f"  ⚠️  OOM during generation — skipping batch {i}")
@@ -3419,6 +3421,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                             tb_writer.add_scalar(f'ROUGE-L_{_src}',     _m['rouge_l'], global_step)
                             tb_writer.add_scalar(f'WER_{_src}',         _m['wer'], global_step)
                             tb_writer.add_scalar(f'METEOR_{_src}',      _m['meteor'], global_step)
+
+                    # Clear large lists from all_pairs before storing
+                    val_results['all_pairs'] = []
+                    val_results['sample_pairs'] = []
 
                     # Early stopping / best model
                     elapsed = time.time() - training_start
