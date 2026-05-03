@@ -189,7 +189,7 @@ CONFIG = {
     # ── Video Processing ──
     'video_fps': 18,                              # Frames per second to sample
     'video_min_pixels': 4 * 32 * 32,              # Min visual tokens per frame pair (~4 tokens)
-    'video_max_pixels': 116 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
+    'video_max_pixels': 108 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
     'video_total_pixels': 20480 * 32 * 32,        # Total pixel budget cap across all frames (None = no cap)
 
     # ── Signer Cropping (pre-computed MediaPipe bboxes) ──
@@ -239,20 +239,20 @@ CONFIG = {
     'lora_init_weights': True,                    # Default init (PiSSA not supported for Conv3d layers in vision encoder)
 
     # ── Core Training ──
-    'batch_size': 6,                              
+    'batch_size': 12,                              
     # ── Gradient Accumulation ──
-    'grad_accum_steps': 4,                       # Effective batch = 6 x 4 = 24
+    'grad_accum_steps': 2,                       
 
     # ── DataLoader Config ──
-    'train_num_workers': 7,                       
-    'train_prefetch_factor': 4,
+    'train_num_workers': 8,                       
+    'train_prefetch_factor': 8,
     'train_pin_memory': True,                   
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
-    'val_num_workers': 7,                          # 1 worker overlaps video decoding with GPU inference during validation
-    'val_prefetch_factor': 5,                      # Pre-load 2 batches ahead during validation
+    'val_num_workers': 6,                          # 1 worker overlaps video decoding with GPU inference during validation
+    'val_prefetch_factor': 6,                      # Pre-load 2 batches ahead during validation
     'val_pin_memory': True,                        # Pinned memory for async CPU→GPU DMA during validation
-    'val_persistent_workers': True,               # Keep val worker alive across validation runs
+    'val_persistent_workers': False,               # Keep val worker alive across validation runs
 
     # ── Dataset Phases ──────────────────────────────────────────────────────────────────────
     # Phase A: OpenASL  (noisy, larger — pre-training phase)
@@ -345,9 +345,9 @@ CONFIG = {
     'eval_every_steps': 80,
     'eval_every_steps_warmup': 80,               # More frequent eval early on
     'eval_warmup_threshold': 1000,                # Switch to normal eval freq after this step
-    'val_loss_batch_size': 6,              # Reduced from 8 to halve peak VRAM from lm_head logit tensor
+    'val_loss_batch_size': 16,              # Reduced from 8 to halve peak VRAM from lm_head logit tensor
     'max_eval_batches': 72,              # Doubled to compensate — same 512 samples evaluated per validation
-    'val_gen_batch_size': 6,                
+    'val_gen_batch_size': 16,                
     'max_generate_samples': 120,
     'num_print_samples': 6,
     'val_beam_size': 1,                             # 1 = greedy (faster validation, honest diagnostic); run beam=4 on final checkpoint
@@ -375,7 +375,7 @@ CONFIG = {
     # vision path), new Tier-3 LoRA rank (2 → 8), and the new InfoNCE projection modules.
     'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': 1660,            # None = latest, or specific step number
+    'resume_checkpoint_step': 1850,            # None = latest, or specific step number
     'eval_on_resume_step': True,              # True = run validation on the first step after resume if it lands on an eval step
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
@@ -518,9 +518,9 @@ CONFIG = {
     # Hardware
     # GPU strings: 'T4', 'A10G', 'A100', 'A100-80GB', 'H100', 'H100:2' (multi-GPU)
     # Fallback list also accepted: ['H100', 'A100-80GB']
-    'modal_gpu': 'A100-80GB',
-    'modal_cpu': 11,                    # Virtual CPUs allocated to the container
-    'modal_memory': 97280,             # RAM in MB (80 GB)
+    'modal_gpu': 'H200',
+    'modal_cpu': 16,                    # Virtual CPUs allocated to the container
+    'modal_memory': 148480,             # RAM in MB (80 GB)
     'modal_timeout': 24 * 3600,        # Max wall-clock seconds before Modal kills job
     'modal_retries': 0,                # Container-level retries on failure (not step-level)
 
