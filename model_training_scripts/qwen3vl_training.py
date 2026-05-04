@@ -189,7 +189,7 @@ CONFIG = {
     # ── Video Processing ──
     'video_fps': 18,                              # Frames per second to sample
     'video_min_pixels': 4 * 32 * 32,              # Min visual tokens per frame pair (~4 tokens)
-    'video_max_pixels': 108 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
+    'video_max_pixels': 150 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
     'video_total_pixels': 20480 * 32 * 32,        # Total pixel budget cap across all frames (None = no cap)
 
     # ── Signer Cropping (pre-computed MediaPipe bboxes) ──
@@ -239,13 +239,13 @@ CONFIG = {
     'lora_init_weights': True,                    # Default init (PiSSA not supported for Conv3d layers in vision encoder)
 
     # ── Core Training ──
-    'batch_size': 12,                              
+    'batch_size': 6,                              
     # ── Gradient Accumulation ──
-    'grad_accum_steps': 2,                       
+    'grad_accum_steps': 4,                       
 
     # ── DataLoader Config ──
     'train_num_workers': 8,                       
-    'train_prefetch_factor': 8,
+    'train_prefetch_factor': 6,
     'train_pin_memory': True,                   
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
@@ -268,12 +268,16 @@ CONFIG = {
 
     # Phase B: How2Sign  (clean, smaller — fine-tuning phase)
     'how2sign_source_name':            'how2sign',
-    'how2sign_num_epochs':             2,
+    'how2sign_num_epochs':             3,
     # Two-phase freeze for How2Sign (recommended OFF — all tiers active from start)
     'how2sign_enable_two_phase':       False,
     'how2sign_phase1_fraction':        0.20,        # ignored when enable_two_phase=False
     # Curriculum for How2Sign
     'how2sign_curriculum_epochs':      [1],
+    # Cross-dataset generation validation during How2Sign phase (within-phase epoch numbers)
+    # On these epochs, generation metrics (BLEU, ROUGE-L, WER, METEOR) are also computed
+    # on the OpenASL val set. Validation loss is always How2Sign only.
+    'how2sign_cross_val_epochs':       [2, 3],
     # Augmentation for How2Sign
     'how2sign_aug_start_epoch':        2,
 
@@ -294,17 +298,17 @@ CONFIG = {
 
     # How2Sign fine-tuning LRs — lower than OpenASL (fresh restart at phase transition)
     # Tier 1 (LM LoRA)
-    'lr_how2sign_tier1':               1e-5,
+    'lr_how2sign_tier1':               2e-5,
     'min_lr_how2sign_tier1':           5e-7,
     # Tier 2 (Vision LoRA)
-    'lr_how2sign_tier2':               2e-5,
-    'min_lr_how2sign_tier2':           1e-6,
+    'lr_how2sign_tier2':               4e-5,
+    'min_lr_how2sign_tier2':           2e-6,
     # Tier 3 (Head LoRA)
     'lr_how2sign_tier3':               1e-5,
     'min_lr_how2sign_tier3':           5e-7,
     # Tier 4 (InfoNCE projections)
-    'lr_how2sign_tier4':               2e-5,
-    'min_lr_how2sign_tier4':           1e-6,
+    'lr_how2sign_tier4':               3e-5,
+    'min_lr_how2sign_tier4':           1.5e-6,
 
     # easy_threshold_sec: shared across both phases
     'easy_threshold_sec':              4.0,
@@ -345,12 +349,13 @@ CONFIG = {
     'eval_every_steps': 80,
     'eval_every_steps_warmup': 80,               # More frequent eval early on
     'eval_warmup_threshold': 1000,                # Switch to normal eval freq after this step
-    'val_loss_batch_size': 16,              # Reduced from 8 to halve peak VRAM from lm_head logit tensor
+    'val_loss_batch_size': 6,              # Reduced from 8 to halve peak VRAM from lm_head logit tensor
     'max_eval_batches': 72,              # Doubled to compensate — same 512 samples evaluated per validation
-    'val_gen_batch_size': 16,                
+    'val_gen_batch_size': 6,                
     'max_generate_samples': 120,
     'num_print_samples': 6,
     'val_beam_size': 1,                             # 1 = greedy (faster validation, honest diagnostic); run beam=4 on final checkpoint
+    'val_beam_size_schedule': {4: 4},               # At global_step 4+, use beam_size=4; before then use val_beam_size
     'val_length_penalty': 1.0,                      # > 1.0 favors longer outputs (counters BLEU brevity penalty); < 1.0 favors shorter
     'val_no_repeat_ngram_size': 0,                  # Block any n-gram from repeating; improves BLEU precision (0 = disabled)
     'val_repetition_penalty': 1.0,
@@ -375,8 +380,8 @@ CONFIG = {
     # vision path), new Tier-3 LoRA rank (2 → 8), and the new InfoNCE projection modules.
     'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': 1850,            # None = latest, or specific step number
-    'eval_on_resume_step': True,              # True = run validation on the first step after resume if it lands on an eval step
+    'resume_checkpoint_step': 2850,            # None = latest, or specific step number
+    'eval_on_resume_step': False,              # True = run validation on the first step after resume if it lands on an eval step
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -501,7 +506,7 @@ CONFIG = {
 
     # ── Debug: save augmented frames to disk ──
     'aug_debug_save_images': True,
-    'aug_debug_save_interval': 2,          # Save one frame every N optimiser steps
+    'aug_debug_save_interval': 5,          # Save one frame every N optimiser steps
     'aug_debug_save_dir': _REPO_ROOT / 'data' / 'debugging_images',
 
     # ── Kaggle ──
@@ -518,9 +523,9 @@ CONFIG = {
     # Hardware
     # GPU strings: 'T4', 'A10G', 'A100', 'A100-80GB', 'H100', 'H100:2' (multi-GPU)
     # Fallback list also accepted: ['H100', 'A100-80GB']
-    'modal_gpu': 'H200',
-    'modal_cpu': 16,                    # Virtual CPUs allocated to the container
-    'modal_memory': 148480,             # RAM in MB (80 GB)
+    'modal_gpu': 'A100-80GB',
+    'modal_cpu': 12,                    # Virtual CPUs allocated to the container
+    'modal_memory': 105,                # RAM in GB (converted to MiB when passed to Modal)
     'modal_timeout': 24 * 3600,        # Max wall-clock seconds before Modal kills job
     'modal_retries': 0,                # Container-level retries on failure (not step-level)
 
@@ -985,8 +990,15 @@ class BucketBatchSampler(torch.utils.data.Sampler):
         """Skip the first *n* batches on the next iteration (for mid-epoch resume)."""
         self._skip_first_n = n
 
+    def set_epoch(self, epoch: int, base_seed: int = 42):
+        """Set the epoch so __iter__ uses a deterministic, epoch-specific shuffle seed.
+        Must be called before iterating each epoch so that mid-epoch resume reproduces
+        the exact same batch order — and set_skip lands on the correct boundary."""
+        self._epoch_seed = base_seed * 1000 + epoch
+
     def __iter__(self):
         if self.shuffle:
+            rng = random.Random(getattr(self, '_epoch_seed', None))
             if self._partitioned and self._partition_sizes:
                 # Shuffle batches within each partition independently; preserve partition order
                 shuffled = []
@@ -995,15 +1007,15 @@ class BucketBatchSampler(torch.utils.data.Sampler):
                 for psize in self._partition_sizes:
                     # Count batches that belong to this partition
                     nbatches = math.ceil(psize / self.batch_size)
-                    chunk = self.batches[cursor:cursor + nbatches]
-                    random.shuffle(chunk)
+                    chunk = list(self.batches[cursor:cursor + nbatches])
+                    rng.shuffle(chunk)
                     shuffled.extend(chunk)
                     cursor += nbatches
                 shuffled.extend(self.batches[cursor:])
                 iter_batches = shuffled
             else:
                 iter_batches = list(self.batches)
-                random.shuffle(iter_batches)
+                rng.shuffle(iter_batches)
         else:
             iter_batches = self.batches
         for i, batch in enumerate(iter_batches):
@@ -1672,6 +1684,7 @@ class Qwen3VLCollator:
         # Store metadata for logging
         inputs['_vids'] = [s['vid'] for s in batch]
         inputs['_ground_truths'] = [s['text'] for s in batch]
+        inputs['_durations'] = [float(s.get('duration_sec', 0.0)) for s in batch]
         # .clone() so pin_memory never sees a view into the video buffer (which may have
         # non-standard strides left by augmentation or the processor).
         inputs['_debug_frame'] = _debug_frame.clone() if _debug_frame is not None else None
@@ -1684,6 +1697,17 @@ class Qwen3VLCollator:
         # cost for the common case.
         return {k: v.contiguous() if isinstance(v, torch.Tensor) else v
                 for k, v in inputs.items()}
+
+
+def get_effective_beam_size(config, global_step):
+    """Resolve effective beam size from val_beam_size_schedule at a given global_step."""
+    schedule = config.get('val_beam_size_schedule', {})
+    if not schedule:
+        return config.get('val_beam_size', 1)
+    applicable_steps = sorted([s for s in schedule.keys() if s <= global_step])
+    if not applicable_steps:
+        return config.get('val_beam_size', 1)
+    return schedule[applicable_steps[-1]]
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1959,17 +1983,28 @@ def get_cuda_mem():
 # ═══════════════════════════════════════════════════════════════
 
 @torch.inference_mode()
-def validate(model, processor, val_loader, val_dataset, config, val_collator=None):
-    """Full validation: loss + generation metrics."""
+def validate(model, processor, val_loader, val_dataset, config, val_collator=None, compute_loss=True, beam_size=None):
+    """Full validation: loss (optional) + generation metrics.
+
+    beam_size: if provided, overrides config['val_beam_size'] for generation.
+    """
+    if beam_size is not None:
+        config = config.copy()
+        config['val_beam_size'] = beam_size
     model.eval()
     total_loss = 0.0
     num_batches = 0
 
     # ── Part 1: Validation Loss (teacher-forced) ──
-    loss_pbar = tqdm(total=config['max_eval_batches'], desc="  Val loss", unit="batch",
-                     leave=False, ncols=80, dynamic_ncols=False)
+    if not compute_loss:
+        avg_loss = float('nan')
+        perplexity = float('nan')
 
-    for batch_idx, batch in enumerate(val_loader):
+    if compute_loss:
+        loss_pbar = tqdm(total=config['max_eval_batches'], desc="  Val loss", unit="batch",
+                         leave=False, ncols=80, dynamic_ncols=False)
+
+    for batch_idx, batch in enumerate(val_loader if compute_loss else []):
         if batch_idx >= config['max_eval_batches']:
             break
 
@@ -2014,10 +2049,10 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
         num_batches += 1
         del batch_gpu, batch
         loss_pbar.update(1)
-    loss_pbar.close()
-
-    avg_loss = total_loss / max(num_batches, 1)
-    perplexity = math.exp(min(avg_loss, MAX_PPL_CAP))
+    if compute_loss:
+        loss_pbar.close()
+        avg_loss = total_loss / max(num_batches, 1)
+        perplexity = math.exp(min(avg_loss, MAX_PPL_CAP))
 
     # Free VRAM from loss evaluation before starting generation
     gc.collect()
@@ -2212,6 +2247,7 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
         'all_pairs': list(zip(references, hypotheses, sources)),
         'num_eval_batches': num_batches,
         'num_gen_samples': len(hypotheses),
+        'beam_size': config['val_beam_size'],
     }
 
 
@@ -2248,7 +2284,8 @@ def train(model, processor, train_loader, val_loader, val_dataset,
           controller=None,
           global_epoch_offset=0, dataset_phase_name='openasl',
           global_total_optimizer_steps=None, global_steps_offset=0,
-          global_training_start_time=None, start_infonce_queues=None):
+          global_training_start_time=None, start_infonce_queues=None,
+          extra_val_loader=None, extra_val_dataset=None, extra_val_name=None):
     """Full training loop for one dataset phase (OpenASL or How2Sign)."""
 
     # Unpack config
@@ -2256,6 +2293,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     num_epochs = train_config['num_epochs']   # per-phase epoch count (2 for each phase)
     curriculum_epochs = train_config.get('curriculum_epochs', [1])   # within-phase list
     aug_start_epoch   = train_config.get('aug_start_epoch', 2)       # within-phase start
+    cross_val_epochs  = train_config.get('cross_val_epochs', [])     # within-phase epochs to also eval extra_val_dataset
     grad_accum_steps = train_config['grad_accum_steps']
     # max_grad_norm is read live from train_config['max_grad_norm'] each step
     # so that InteractiveController.check() can update it mid-training.
@@ -2283,6 +2321,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     step_grad_norms_t3 = []
     step_grad_norms_t4 = []
     step_contrast_losses = []
+    _step_batch_durations: list = []   # per-micro-batch durations (sec) within the log window
     log_step_start = time.time()
     _step_start_time = time.time()       # marks the start of the current optimizer step
     _step_times_window: deque = deque(maxlen=10)  # last ≤10 step durations (sec) from this run only
@@ -2435,10 +2474,11 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     print(f"  └{'─' * (_W - 2)}┘")
 
     print(f"\n  ┌─ LEARNING RATES  ({dataset_phase_name}) {'─' * (_W - 25)}┐")
-    _lr1 = train_config.get('lr_openasl_tier1', 0);  _fl1 = train_config.get('min_lr_openasl_tier1', 0)
-    _lr2 = train_config.get('lr_openasl_tier2', 0);  _fl2 = train_config.get('min_lr_openasl_tier2', 0)
-    _lr3 = train_config.get('lr_openasl_tier3', 0);  _fl3 = train_config.get('min_lr_openasl_tier3', 0)
-    _lr4 = train_config.get('lr_openasl_tier4', 0);  _fl4 = train_config.get('min_lr_openasl_tier4', 0)
+    _ph = dataset_phase_name
+    _lr1 = train_config.get(f'lr_{_ph}_tier1', 0);  _fl1 = train_config.get(f'min_lr_{_ph}_tier1', 0)
+    _lr2 = train_config.get(f'lr_{_ph}_tier2', 0);  _fl2 = train_config.get(f'min_lr_{_ph}_tier2', 0)
+    _lr3 = train_config.get(f'lr_{_ph}_tier3', 0);  _fl3 = train_config.get(f'min_lr_{_ph}_tier3', 0)
+    _lr4 = train_config.get(f'lr_{_ph}_tier4', 0);  _fl4 = train_config.get(f'min_lr_{_ph}_tier4', 0)
     _born1 = 'at phase transition' if _enable_two_phase else 'from step 0'
     _born3 = 'at phase transition' if _enable_two_phase else 'from step 0'
     print(f"  │  Schedule          : Linear warmup ({_warmup_pct}%) → Cosine decay (fresh for this phase)")
@@ -2491,81 +2531,78 @@ def train(model, processor, train_loader, val_loader, val_dataset,
         print(f"\n  ▶  Resuming from global step {start_global_step}  (within-phase epoch {start_epoch}/{num_epochs})")
     print()
 
-    # Handle mid-epoch resume
-    if start_steps_done_in_epoch is not None:
-        steps_done_in_epoch = start_steps_done_in_epoch
+    # Handle mid-epoch resume.
+    # Always recompute from global_step rather than trusting the checkpoint value:
+    # the old save formula counted VRAM-skipped micro-batches as optimizer steps,
+    # inflating steps_done_in_epoch and causing the next resume to skip too far.
+    if start_global_step > 0:
+        _phase_steps_done = start_global_step - global_steps_offset
+        steps_done_in_epoch = _phase_steps_done - optimizer_steps_per_epoch * (start_epoch - 1)
+        steps_done_in_epoch = max(steps_done_in_epoch, 0)
     else:
-        steps_done_in_epoch = start_global_step % optimizer_steps_per_epoch
-    if steps_done_in_epoch == 0 and start_global_step > 0:
+        steps_done_in_epoch = 0
+    if steps_done_in_epoch == 0 and start_global_step > global_steps_offset:
         start_epoch += 1
         print(f"  ⏭️  Checkpoint was at exact end of Epoch {start_epoch - 1}. Advancing to Epoch {start_epoch}.")
 
-    # ── Build per-sample source info for weighted sampling (once) ──
+    # ── Build easy/hard split for curriculum learning ──
+    # Each dataset phase now contains a single source, so per-source weighting is
+    # meaningless (all weights would be equal) and sampling with replacement would
+    # leave ~37% of clips unseen per epoch.  Instead we always sample without
+    # replacement (every clip seen exactly once) and only rebuild the sampler for
+    # curriculum epochs, where easy clips (≤ easy_threshold_sec) are placed first.
     base_seed = int(CONFIG.get('seed', 42))
     train_ds = getattr(train_loader, 'dataset', None)
-    _sample_weights = None
+    _easy_thr = float(CONFIG.get('easy_threshold_sec', 4.0))
     _easy_mask = None
-    if train_ds is not None and CONFIG.get('sampling_strategy', 'weighted') == 'weighted' and CONFIG.get('balance_by_source', True):
+    _easy_idx: list = []
+    _rest_idx: list = []
+    if train_ds is not None:
         try:
-            _src_counts = {}
-            for s in train_ds.samples:
-                _src = s.get('source', 'unknown')
-                _src_counts[_src] = _src_counts.get(_src, 0) + 1
-            _sample_weights = [1.0 / _src_counts.get(s.get('source', 'unknown'), 1) for s in train_ds.samples]
-            _easy_thr = float(CONFIG.get('easy_threshold_sec', 4.0))
             _easy_mask = [(s['duration_sec'] <= _easy_thr) for s in train_ds.samples]
-            print(f"  ✓ Weighted sampling: source counts={_src_counts}, "
-                  f"easy (≤{_easy_thr}s) = {sum(_easy_mask)}/{len(_easy_mask)}")
+            _easy_idx = [i for i, e in enumerate(_easy_mask) if e]
+            _rest_idx = [i for i, e in enumerate(_easy_mask) if not e]
+            _N_total  = len(_easy_mask)
+            print(f"  ✓ Uniform sampling (without replacement): easy (≤{_easy_thr}s) = {len(_easy_idx):,}/{_N_total:,}")
         except Exception as _we:
-            print(f"  ⚠️  Could not build weighted sampler ({_we}) — falling back to uniform")
-            _sample_weights = None
+            print(f"  ⚠️  Could not build easy/hard split ({_we}) — curriculum disabled")
+            _easy_mask = None
+
+    _all_indices: list = list(range(len(train_ds.samples))) if train_ds is not None else []
 
     def _build_epoch_indices(epoch_num):
-        """Weighted-sampled index list for this epoch. epoch_num is within-phase (1-indexed)."""
-        if _sample_weights is None:
-            return None, None
-        gen = torch.Generator().manual_seed(base_seed + global_epoch_offset + epoch_num)
-        N = len(_sample_weights)
-        if epoch_num in curriculum_epochs:
-            easy_idx = [i for i, e in enumerate(_easy_mask) if e]
-            rest_idx = [i for i, e in enumerate(_easy_mask) if not e]
-            easy_w = torch.tensor([_sample_weights[i] for i in easy_idx], dtype=torch.double)
-            rest_w = torch.tensor([_sample_weights[i] for i in rest_idx], dtype=torch.double)
-            gen2 = torch.Generator().manual_seed(base_seed + global_epoch_offset + epoch_num + 10_000)
-            easy_draws = torch.multinomial(easy_w, len(easy_idx), replacement=True, generator=gen).tolist()
-            rest_draws = torch.multinomial(rest_w, len(rest_idx), replacement=True, generator=gen2).tolist()
-            picked_easy = [easy_idx[j] for j in easy_draws]
-            picked_rest = [rest_idx[j] for j in rest_draws]
-            return picked_easy + picked_rest, [len(picked_easy), len(picked_rest)]
-        else:
-            w = torch.tensor(_sample_weights, dtype=torch.double)
-            draws = torch.multinomial(w, N, replacement=True, generator=gen).tolist()
-            return draws, None
+        """Return (indices, partition_sizes) for the BucketSampler rebuild.
+        Curriculum: all easy clips first, then all hard clips — without replacement.
+        Non-curriculum: full unpartitioned index list so the sampler resets
+        _partitioned=False and __iter__ produces a fully random order."""
+        if epoch_num in curriculum_epochs and _easy_mask is not None:
+            return _easy_idx + _rest_idx, [len(_easy_idx), len(_rest_idx)]
+        return _all_indices, None
 
     _prev_epoch_curriculum = None   # track curriculum state across epochs for transition prints
 
     for epoch in range(start_epoch, num_epochs + 1):
-        # ── Per-epoch: rebuild weighted-sampled indices ──
-        if _sample_weights is not None and hasattr(train_loader, 'batch_sampler') \
+        # ── Per-epoch: rebuild sampler only for curriculum epochs ──
+        if hasattr(train_loader, 'batch_sampler') \
                 and hasattr(train_loader.batch_sampler, 'rebuild_with_indices'):
             try:
                 _ep_idx, _ep_parts = _build_epoch_indices(epoch)
-                if _ep_idx is not None:
-                    train_loader.batch_sampler.rebuild_with_indices(_ep_idx, partition_sizes=_ep_parts)
-                    _ep_hash = hash(tuple(_ep_idx[:1024]))
-                    _g_ep = global_epoch_offset + epoch
-                    if _ep_parts:
-                        print(f"\n  ┌─ EPOCH {_g_ep} [{dataset_phase_name} {epoch}/{num_epochs}]  SAMPLER  (Curriculum Mode) {'─' * 30}┐")
-                        print(f"  │  Strategy   : Easy-first curriculum  (within-phase epoch {epoch})")
-                        print(f"  │  Easy draws : {_ep_parts[0]:,}  (clips ≤ {_easy_thr}s)")
-                        print(f"  │  Hard draws : {_ep_parts[1]:,}  (clips > {_easy_thr}s)")
-                        print(f"  │  Total      : {len(_ep_idx):,}  │  idx_hash : {_ep_hash}")
-                        print(f"  └{'─' * 92}┘\n")
-                    else:
-                        print(f"\n  ┌─ EPOCH {_g_ep} [{dataset_phase_name} {epoch}/{num_epochs}]  SAMPLER  (Weighted Sampling) {'─' * 30}┐")
-                        print(f"  │  Strategy   : Inverse-frequency weighted sampling (balanced per source)")
-                        print(f"  │  Total      : {len(_ep_idx):,}  │  idx_hash : {_ep_hash}")
-                        print(f"  └{'─' * 92}┘\n")
+                _g_ep = global_epoch_offset + epoch
+                train_loader.batch_sampler.rebuild_with_indices(_ep_idx, partition_sizes=_ep_parts)
+                if hasattr(train_loader.batch_sampler, 'set_epoch'):
+                    train_loader.batch_sampler.set_epoch(global_epoch_offset + epoch, base_seed)
+                _ep_hash = hash(tuple(_ep_idx[:1024]))
+                if _ep_parts:
+                    print(f"\n  ┌─ EPOCH {_g_ep} [{dataset_phase_name} {epoch}/{num_epochs}]  SAMPLER  (Curriculum Mode) {'─' * 30}┐")
+                    print(f"  │  Strategy   : Easy-first curriculum  (within-phase epoch {epoch})")
+                    print(f"  │  Easy clips : {_ep_parts[0]:,}  (clips ≤ {_easy_thr}s)  — without replacement")
+                    print(f"  │  Hard clips : {_ep_parts[1]:,}  (clips > {_easy_thr}s)  — without replacement")
+                    print(f"  │  Total      : {len(_ep_idx):,}  │  idx_hash : {_ep_hash}")
+                    print(f"  └{'─' * 92}┘\n")
+                else:
+                    print(f"\n  ┌─ EPOCH {_g_ep} [{dataset_phase_name} {epoch}/{num_epochs}]  SAMPLER  (Uniform, Full Dataset) {'─' * 25}┐")
+                    print(f"  │  Strategy   : All {len(_ep_idx):,} clips, each seen exactly once (BucketSampler shuffle)")
+                    print(f"  └{'─' * 92}┘\n")
             except Exception as _se:
                 print(f"  ⚠️  Per-epoch sampler rebuild failed: {_se}")
 
@@ -2576,7 +2613,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
             if _cur_epoch_curriculum:
                 print(f"\n  📚  CURRICULUM LEARNING ON  →  Global Epoch {_g_ep_cl}  [{dataset_phase_name} {epoch}/{num_epochs}]  —  easy-first ordering active")
             else:
-                print(f"\n  📚  CURRICULUM LEARNING OFF →  Global Epoch {_g_ep_cl}  [{dataset_phase_name} {epoch}/{num_epochs}]  —  switching to uniform weighted sampling")
+                print(f"\n  📚  CURRICULUM LEARNING OFF →  Global Epoch {_g_ep_cl}  [{dataset_phase_name} {epoch}/{num_epochs}]  —  switching to full-dataset uniform sampling")
         _prev_epoch_curriculum = _cur_epoch_curriculum
 
         # Toggle data augmentation: epoch is within-phase, aug_start_epoch is per-phase config
@@ -2636,6 +2673,9 @@ def train(model, processor, train_loader, val_loader, val_dataset,
             batch.pop('_vids', None)
             batch.pop('_ground_truths', None)
             _dbg_frame = batch.pop('_debug_frame', None)
+            _batch_durations = batch.pop('_durations', None)
+            if _batch_durations:
+                _step_batch_durations.extend(_batch_durations)
 
             is_accum_step = (micro_step + 1) % grad_accum_steps == 0
             # Use the number of batches actually yielded this epoch so is_last_step
@@ -3073,7 +3113,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     }
                     ckpt_manager.save_periodic(
                         model, opt_tier2, sched_tier2, epoch, global_step,
-                        (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
+                        global_step - global_steps_offset - optimizer_steps_per_epoch * (epoch - 1),
                         best_val_loss, evals_without_improvement,
                         time.time() - training_start, extra_state=_extra,
                     )
@@ -3207,11 +3247,19 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     print(f"  {'Global (clipped)':<18}  {'':>12}  {avg_grad_norm:>12.4f}")
                     # ── Footer: throughput / hardware / time ──
                     print('─'*58)
+                    if _step_batch_durations:
+                        _dur_min = min(_step_batch_durations)
+                        _dur_max = max(_step_batch_durations)
+                        _dur_avg = sum(_step_batch_durations) / len(_step_batch_durations)
+                        _dur_str = f" │ Clip dur (s): avg={_dur_avg:.1f}  min={_dur_min:.1f}  max={_dur_max:.1f}"
+                    else:
+                        _dur_str = ""
                     print(
                         f"  Speed {speed:.3f} step/s"
                         f" │ Step time: {_current_step_sec:.2f}s  avg10={sec_per_step_avg10:.2f}s"
                         f" │ VRAM {cuda_mem:.2f}/{cuda_peak:.2f} GB"
                         f" │ Elapsed {format_time(elapsed)}"
+                        + _dur_str
                         + _eta_suffix
                     )
 
@@ -3265,6 +3313,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     step_grad_norms_t3.clear()
                     step_grad_norms_t4.clear()
                     step_contrast_losses.clear()
+                    _step_batch_durations.clear()
                     log_step_start = time.time()
 
                 # ── Periodic Checkpoint ──
@@ -3295,7 +3344,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     print(f"  💾  Periodic checkpoint saved  step={global_step}  [{dataset_phase_name} model-phase={current_phase}]  →  {CONFIG['checkpoint_dir']}/checkpoint_step_{global_step}")
                     ckpt_manager.save_periodic(
                         model, opt_tier2, sched_tier2, epoch, global_step,
-                        (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
+                        global_step - global_steps_offset - optimizer_steps_per_epoch * (epoch - 1),
                         best_val_loss,
                         evals_without_improvement, elapsed,
                         extra_state=_ckpt_extra,
@@ -3318,13 +3367,14 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                     print(f"  📊  Validation  ·  Step {global_step}  ·  Epoch {epoch}")
                     print(f"{'━' * 80}")
 
-                    val_results = validate(model, processor, val_loader, val_dataset, train_config, val_collator=_val_collator)
+                    _effective_beam_size = get_effective_beam_size(train_config, global_step)
+                    val_results = validate(model, processor, val_loader, val_dataset, train_config, val_collator=_val_collator, beam_size=_effective_beam_size)
                     print(f"\n{'━' * 80}")
                     print(
                         f"  Val Loss {val_results['val_loss']:.4f} │ Val PPL {val_results['val_ppl']:.3f}"
                         f" │ BLEU-1 {val_results['bleu1']:.4f} │ BLEU-2 {val_results['bleu2']:.4f} │ BLEU-4 {val_results['bleu4']:.4f}"
                         f" │ ROUGE-L {val_results['rouge_l']:.2f}% │ WER {val_results['wer']:.2f}% │ METEOR {val_results['meteor']:.2f}%"
-                        f"  ({val_results['num_eval_batches']} eval batches · {val_results['num_gen_samples']} generated samples)"
+                        f"  ({val_results['num_eval_batches']} eval batches · {val_results['num_gen_samples']} generated samples)  [beam_size={val_results['beam_size']}]"
                     )
 
                     if val_results['sample_pairs']:
@@ -3381,6 +3431,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         'meteor': f"{val_results['meteor']:.4f}",
                         'num_eval_batches': val_results['num_eval_batches'],
                         'num_gen_samples': val_results['num_gen_samples'],
+                        'beam_size': val_results['beam_size'],
                     }
                     for _src in ('how2sign', 'openasl'):
                         _m = ps[_src]
@@ -3453,7 +3504,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                             _best_extra['sched_tier3_state_dict'] = sched_tier3.state_dict()
                         ckpt_manager.save_best(
                             model, opt_tier2, sched_tier2, epoch, global_step,
-                            (_abs_micro_offset + micro_step + 1) // grad_accum_steps,
+                            global_step - global_steps_offset - optimizer_steps_per_epoch * (epoch - 1),
                             best_val_loss,
                             evals_without_improvement, elapsed,
                             extra_state=_best_extra,
@@ -3473,6 +3524,63 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         print(f"      Best val loss: {best_val_loss:.4f}")
                         print("━" * 80)
                         return global_step, best_val_loss
+
+                    # ── Cross-dataset generation validation (generation metrics only, no loss) ──
+                    if (extra_val_loader is not None
+                            and extra_val_dataset is not None
+                            and epoch in cross_val_epochs):
+                        _xname = extra_val_name or 'extra'
+                        print(f"\n{'━' * 80}")
+                        print(f"  📊  Cross-Val Generation  ·  {_xname}  ·  Step {global_step}  ·  Epoch {epoch}")
+                        print(f"{'━' * 80}")
+                        xval = validate(model, processor, extra_val_loader, extra_val_dataset,
+                                        train_config, val_collator=_val_collator, compute_loss=False, beam_size=_effective_beam_size)
+                        _xps = xval['per_source']
+                        print(f"\n  {'metric':<10}  {'combined':>10}  {'how2sign':>10}  {'openasl':>10}")
+                        print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
+                        _xrows = [('BLEU-1','bleu1','{:.2f}'),('BLEU-2','bleu2','{:.2f}'),
+                                  ('BLEU-4','bleu4','{:.2f}'),('ROUGE-L','rouge_l','{:.2f}%'),
+                                  ('WER','wer','{:.2f}%'),('METEOR','meteor','{:.2f}%')]
+                        _xoverall = {k: xval[k] for k in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor')}
+                        for _xl, _xk, _xf in _xrows:
+                            _xov  = _xf.format(_xoverall[_xk])
+                            _xh2s = _xf.format(_xps['how2sign'][_xk]) if _xps['how2sign']['n'] > 0 else '   —'
+                            _xosl = _xf.format(_xps['openasl'][_xk])  if _xps['openasl']['n']  > 0 else '   —'
+                            print(f"  {_xl:<10}  {_xov:>10}  {_xh2s:>10}  {_xosl:>10}")
+                        print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
+                        print(f"  {'samples':<10}  {xval['num_gen_samples']:>10}  "
+                              f"{_xps['how2sign']['n']:>10}  {_xps['openasl']['n']:>10}")
+                        print(f"  [beam_size={xval['beam_size']}]")
+                        if xval['sample_pairs']:
+                            print(f"\n  Sample generations ({_xname})")
+                            for _i, (_r, _h, _s) in enumerate(xval['sample_pairs'], 1):
+                                print(f"    [{_i}] ({_s})")
+                                print(f"        REF  \"{_r}\"")
+                                print(f"        HYP  \"{_h}\"")
+                        # Log cross-val gen metrics to TensorBoard and CSV
+                        for _xk2, _xv2 in (('bleu1', xval['bleu1']), ('bleu2', xval['bleu2']),
+                                            ('bleu4', xval['bleu4']), ('rouge_l', xval['rouge_l']),
+                                            ('wer', xval['wer']), ('meteor', xval['meteor'])):
+                            tb_writer.add_scalar(f'cross_val_{_xname}/{_xk2}', _xv2, global_step)
+                        for _xsrc in ('how2sign', 'openasl'):
+                            _xm = _xps[_xsrc]
+                            if _xm['n'] > 0:
+                                for _xk2 in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor'):
+                                    tb_writer.add_scalar(f'cross_val_{_xname}/{_xk2}_{_xsrc}', _xm[_xk2], global_step)
+                        _xval_row = {'global_step': global_step, 'epoch': epoch, 'phase': current_phase,
+                                     'cross_val_name': _xname, 'num_gen_samples': xval['num_gen_samples']}
+                        for _xk2 in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor'):
+                            _xval_row[_xk2] = f"{xval[_xk2]:.4f}"
+                        for _xsrc in ('how2sign', 'openasl'):
+                            _xm = _xps[_xsrc]
+                            for _xk2 in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor'):
+                                _xval_row[f'{_xk2}_{_xsrc}'] = f"{_xm[_xk2]:.4f}"
+                            _xval_row[f'n_{_xsrc}'] = _xm['n']
+                        val_csv_logger.log(_xval_row)
+                        for _r, _h, _s in xval['all_pairs']:
+                            gen_samples_csv_logger.log({'global_step': global_step, 'epoch': epoch,
+                                                        'source': _s, 'reference': _r, 'hypothesis': _h})
+                        del xval, _xps
 
                     # Reclaim VRAM from validation before resuming training
                     del val_results, ps
@@ -4640,7 +4748,7 @@ def main():
         'rouge_l_how2sign', 'wer_how2sign', 'meteor_how2sign', 'n_how2sign',
         'bleu1_openasl', 'bleu2_openasl', 'bleu4_openasl',
         'rouge_l_openasl', 'wer_openasl', 'meteor_openasl', 'n_openasl',
-        'num_eval_batches', 'num_gen_samples',
+        'num_eval_batches', 'num_gen_samples', 'beam_size',
     ])
     gen_samples_csv_logger = CSVLogger(CONFIG['gen_samples_log_file'], [
         'timestamp', 'global_step', 'epoch', 'source', 'reference', 'hypothesis',
@@ -4980,7 +5088,7 @@ def main():
     # Restore How2Sign optimizer states when resuming directly into this phase
     _h2s_start_epoch = 1
     _h2s_start_step  = osl_final_step
-    _h2s_start_steps_in_ep = None
+    _h2s_start_steps_in_ep = 0
     _h2s_start_evals = 0
     _h2s_start_elapsed = 0.0
 
@@ -5006,7 +5114,7 @@ def main():
                 print("  ✅ InfoNCE projection weights restored from checkpoint")
             else:
                 print("  ℹ️  No projection weights in checkpoint (older save) — starting T4 from fresh init")
-            _h2s_start_epoch    = start_epoch - CONFIG['openasl_num_epochs']
+            _h2s_start_epoch    = start_epoch
             _h2s_start_step     = start_global_step
             _h2s_start_steps_in_ep = start_steps_done_in_epoch
             _h2s_start_evals    = start_evals_without_improvement
@@ -5032,6 +5140,7 @@ def main():
         'phase1_fraction':   CONFIG['how2sign_phase1_fraction'],
         'curriculum_epochs': CONFIG['how2sign_curriculum_epochs'],
         'aug_start_epoch':   CONFIG['how2sign_aug_start_epoch'],
+        'cross_val_epochs':  CONFIG['how2sign_cross_val_epochs'],
         'lr_tier1':          CONFIG['lr_how2sign_tier1'],
         'min_lr_tier1':      CONFIG['min_lr_how2sign_tier1'],
         'lr_tier2':          CONFIG['lr_how2sign_tier2'],
@@ -5075,6 +5184,9 @@ def main():
         global_steps_offset=_osl_opt_steps_total,   # Phase A steps already done
         global_training_start_time=_global_training_start_time,
         start_infonce_queues=_h2s_infonce_queues,
+        extra_val_loader=openasl_val_loader,
+        extra_val_dataset=openasl_val_ds,
+        extra_val_name='openasl',
     )
 
     print("\n" + "━" * 80)
@@ -5226,7 +5338,7 @@ if CONFIG.get('is_modal'):
     @app.function(
         gpu=CONFIG['modal_gpu'],
         cpu=CONFIG['modal_cpu'],
-        memory=CONFIG['modal_memory'],
+        memory=CONFIG['modal_memory'] * 1024,
         timeout=CONFIG['modal_timeout'],
         retries=modal.Retries(
             max_retries=CONFIG['modal_retries'],
@@ -5248,7 +5360,7 @@ if CONFIG.get('is_modal'):
     def modal_entrypoint():
         """Called on your local machine when you run `modal run <this_file>`."""
         print(f"  Dispatching training job to Modal ({CONFIG['modal_gpu']} GPU, "
-              f"{CONFIG['modal_cpu']} CPUs, {CONFIG['modal_memory'] // 1024} GB RAM, "
+              f"{CONFIG['modal_cpu']} CPUs, {CONFIG['modal_memory']} GB RAM, "
               f"timeout={CONFIG['modal_timeout'] // 3600}h)...")
         try:
             run_training_on_modal.remote()
