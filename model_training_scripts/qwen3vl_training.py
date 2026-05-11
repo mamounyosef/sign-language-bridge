@@ -187,9 +187,9 @@ CONFIG = {
     'quantize_skip_modules': ['visual'],
 
     # ── Video Processing ──
-    'video_fps': 18,                              # Frames per second to sample
+    'video_fps': 20,                              # Frames per second to sample
     'video_min_pixels': 4 * 32 * 32,              # Min visual tokens per frame pair (~4 tokens)
-    'video_max_pixels': 150 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
+    'video_max_pixels': 180 * 32 * 32,            # Max visual tokens per frame pair (100 = 320*320 at patch_size=16, merge=2)
     'video_total_pixels': 20480 * 32 * 32,        # Total pixel budget cap across all frames (None = no cap)
 
     # ── Signer Cropping (pre-computed MediaPipe bboxes) ──
@@ -206,7 +206,7 @@ CONFIG = {
     'user_prompt': 'Translate this American Sign Language video into English.',
 
     # ── Sequence Lengths ──
-    'max_text_tokens': 70,                        # Max tokens for the assistant response (translation)
+    'max_text_tokens': 80,                        # Max tokens for the assistant response (translation)
 
     # ── LoRA ──
     # Alpha = 2x rank throughout, consistent with RSLoRA (alpha/sqrt(r)) scaling.
@@ -249,7 +249,7 @@ CONFIG = {
     'train_pin_memory': True,                   
     'train_persistent_workers': True,             # Keep worker alive across epochs — avoids re-spawn overhead
 
-    'val_num_workers': 6,                          # 1 worker overlaps video decoding with GPU inference during validation
+    'val_num_workers': 8,                          # 1 worker overlaps video decoding with GPU inference during validation
     'val_prefetch_factor': 6,                      # Pre-load 2 batches ahead during validation
     'val_pin_memory': True,                        # Pinned memory for async CPU→GPU DMA during validation
     'val_persistent_workers': False,               # Keep val worker alive across validation runs
@@ -268,7 +268,7 @@ CONFIG = {
 
     # Phase B: How2Sign  (clean, smaller — fine-tuning phase)
     'how2sign_source_name':            'how2sign',
-    'how2sign_num_epochs':             3,
+    'how2sign_num_epochs':             6,
     # Two-phase freeze for How2Sign (recommended OFF — all tiers active from start)
     'how2sign_enable_two_phase':       False,
     'how2sign_phase1_fraction':        0.20,        # ignored when enable_two_phase=False
@@ -310,6 +310,26 @@ CONFIG = {
     'lr_how2sign_tier4':               3e-5,
     'min_lr_how2sign_tier4':           1.5e-6,
 
+    # ── How2Sign-only ablation (skip OpenASL pretraining) ─────────────────────
+    # When enabled, all values in this section override the relevant fields
+    # above. Designed to test the claim: "OpenASL pretraining helps How2Sign."
+    # Compute matching: original two-phase run = 2,448 (OpenASL) + 3,540 (H2S)
+    # = 5,988 total opt-steps. How2Sign opt-steps/epoch = 708. So 8 epochs
+    # ≈ 5,664 steps (matched within ~5%). Use 8 unless you have a reason not to.
+    'how2sign_only_ablation':           False,         # MASTER TOGGLE
+    'h2s_only_num_epochs':              8,             # ≈ matches original total compute
+    'h2s_only_enable_two_phase':        True,          # warm-up freeze (T1/T3) for from-scratch start
+    'h2s_only_phase1_fraction':         0.20,
+    # From-scratch LRs (use OpenASL-style peaks, not the lower fine-tune values)
+    'h2s_only_lr_tier1':                3e-5,
+    'h2s_only_lr_tier2':                5e-5,
+    'h2s_only_lr_tier3':                2e-5,
+    'h2s_only_lr_tier4':                5e-5,
+    'h2s_only_min_lr_tier1':            1.5e-6,
+    'h2s_only_min_lr_tier2':            2.5e-6,
+    'h2s_only_min_lr_tier3':            1e-6,
+    'h2s_only_min_lr_tier4':            2.5e-6,
+
     # easy_threshold_sec: shared across both phases
     'easy_threshold_sec':              4.0,
 
@@ -346,8 +366,8 @@ CONFIG = {
     'checkpoint_dir': _REPO_ROOT / 'checkpoints' / 'qwen3vl',
 
     # ── Evaluation ──
-    'eval_every_steps': 80,
-    'eval_every_steps_warmup': 80,               # More frequent eval early on
+    'eval_every_steps': 100,
+    'eval_every_steps_warmup': 100,               # More frequent eval early on
     'eval_warmup_threshold': 1000,                # Switch to normal eval freq after this step
     'val_loss_batch_size': 6,              # Reduced from 8 to halve peak VRAM from lm_head logit tensor
     'max_eval_batches': 72,              # Doubled to compensate — same 512 samples evaluated per validation
@@ -357,12 +377,12 @@ CONFIG = {
     'val_beam_size': 1,                             # 1 = greedy (faster validation, honest diagnostic); run beam=4 on final checkpoint
     'val_beam_size_schedule': {4: 4},               # At global_step 4+, use beam_size=4; before then use val_beam_size
     'val_length_penalty': 1.0,                      # > 1.0 favors longer outputs (counters BLEU brevity penalty); < 1.0 favors shorter
-    'val_no_repeat_ngram_size': 0,                  # Block any n-gram from repeating; improves BLEU precision (0 = disabled)
-    'val_repetition_penalty': 1.0,
+    'val_no_repeat_ngram_size': 3,                  # Block any n-gram from repeating; improves BLEU precision (0 = disabled)
+    'val_repetition_penalty': 1.3,
     'val_max_new_tokens': 70,
 
     # ── Early Stopping ──
-    'early_stopping_patience': 14,                # Evals without improvement before stopping
+    'early_stopping_patience': 50,                # Evals without improvement before stopping
 
     # ── Performance & Memory Optimizations ──
     'use_gradient_checkpointing': True,          # Activates gradient checkpointing in the model; must also set attn_implementation to 'flash_attention_2' for max VRAM reduction
@@ -380,8 +400,8 @@ CONFIG = {
     # vision path), new Tier-3 LoRA rank (2 → 8), and the new InfoNCE projection modules.
     'resume_training': True,
     'load_best_model': False,
-    'resume_checkpoint_step': 2850,            # None = latest, or specific step number
-    'eval_on_resume_step': False,              # True = run validation on the first step after resume if it lands on an eval step
+    'resume_checkpoint_step': 5800,            # None = latest, or specific step number
+    'eval_on_resume_step': True,              # True = run validation on the first step after resume if it lands on an eval step
 
     # ── Mid-Training LR Override ──────────────────────────────────────────────
     # SPECIAL USE ONLY: Use this block to manually correct the learning rate when
@@ -425,13 +445,14 @@ CONFIG = {
     # ── InfoNCE auxiliary contrastive loss ──
     # Aligns pooled video embedding with pooled reference-text embedding across
     # the accumulated effective batch. Primary anti-mode-collapse signal.
-    'enable_infonce': True,
-    'infonce_temperature': 0.10,                  # Relaxed from 0.07 to reduce high-variance logit scaling
+    'enable_infonce': False,
+    'infonce_temperature': 0.07,                  # CLIP-style temperature: sharper logit distribution = larger gradients when there is signal
     'infonce_proj_dim': 256,
-    'infonce_queue_size': 64,                     # MoCo-style queue depth: max number of past (v, t) embeddings retained.
+    'infonce_queue_size': 64,                     # Restored to 64: log(65)≈4.17 baseline — more negatives = stronger collapse resistance
     'infonce_lambda_phase1': 0.3,                 # Strong in Phase 1 (LM frozen; vision's only alignment signal).
     'infonce_lambda_phase2': 0.3,                 # Auxiliary in Phase 2.
     'infonce_min_pairs': 4,                       # Skip InfoNCE if fewer than this many micro-batches succeeded in window.
+    'infonce_warmup_steps': 200,                  # Ramp lambda 0→full over first N steps to prevent gradient explosion from fresh proj init.
 
     # ── Diagnostics ──
     'grad_norm_spike_threshold': 500.0,           # Log batch shape + detailed info when global grad_norm exceeds this.
@@ -475,17 +496,17 @@ CONFIG = {
     'aug_color_jitter_hue': 0.1,             # ±43° — covers green-screen variation without being extreme
 
     'aug_random_grayscale': True,
-    'aug_random_grayscale_prob': 0.08,        # Forces shape/motion reliance over colour
+    'aug_random_grayscale_prob': 0.07,        # Forces shape/motion reliance over colour
 
     'aug_gaussian_blur': False,
     'aug_gaussian_blur_prob': 0.1,
     'aug_gaussian_blur_kernel': (3, 3),
 
-    'aug_solarize': True,                     # Inverts pixels above threshold — extreme colour variety
+    'aug_solarize': False,                     # Inverts pixels above threshold — extreme colour variety
     'aug_solarize_prob': 0.07,
     'aug_solarize_threshold': 225,            # 0–255; pixels above this get inverted
 
-    'aug_equalize': False,                    # Replaced by always-on CLAHE below
+    'aug_equalize': False,                    # Replaced by always-on CLAHE 
 
     'aug_random_erasing': False,              # Randomly blacks out small patches — occlusion robustness
     'aug_random_erasing_prob': 0.2,
@@ -607,6 +628,59 @@ if CONFIG.get('is_modal'):
         'aug_debug_save_dir':     _MOUT  / 'data'          / 'debugging_images',
         'wait_for_manual_start':  False,  # no interactive terminal on Modal
     })
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── How2Sign-only ablation overrides ──────────────────────────────────────────
+# Applied last (after Kaggle/Modal path overrides) so the toggle has final say.
+# When 'how2sign_only_ablation' is True, this remaps the run to skip OpenASL
+# entirely and train How2Sign from scratch with from-scratch-appropriate LRs
+# and a Phase-1 freeze warm-up.
+if CONFIG.get('how2sign_only_ablation'):
+    CONFIG.update({
+        'openasl_num_epochs':              0,
+        'how2sign_num_epochs':             CONFIG['h2s_only_num_epochs'],
+        'how2sign_enable_two_phase':       CONFIG['h2s_only_enable_two_phase'],
+        'how2sign_phase1_fraction':        CONFIG['h2s_only_phase1_fraction'],
+        'how2sign_cross_val_epochs':       [],   # no OpenASL-side eval — model never sees it
+        'lr_how2sign_tier1':               CONFIG['h2s_only_lr_tier1'],
+        'lr_how2sign_tier2':               CONFIG['h2s_only_lr_tier2'],
+        'lr_how2sign_tier3':               CONFIG['h2s_only_lr_tier3'],
+        'lr_how2sign_tier4':               CONFIG['h2s_only_lr_tier4'],
+        'min_lr_how2sign_tier1':           CONFIG['h2s_only_min_lr_tier1'],
+        'min_lr_how2sign_tier2':           CONFIG['h2s_only_min_lr_tier2'],
+        'min_lr_how2sign_tier3':           CONFIG['h2s_only_min_lr_tier3'],
+        'min_lr_how2sign_tier4':           CONFIG['h2s_only_min_lr_tier4'],
+    })
+
+    # Suffix output folders so the ablation run does not overwrite the main run.
+    # Rewrites the folder segment in each output path: e.g.
+    #   .../checkpoints/qwen3vl  →  .../checkpoints_h2s_only/qwen3vl
+    # Works across local / Kaggle / Modal because it operates on whatever path
+    # was set by the preceding environment-specific override blocks.
+    _SUFFIX = '_h2s_only'
+    def _suffix_folder(path, folder_name):
+        parts = list(Path(path).parts)
+        new_parts = [(p + _SUFFIX) if p == folder_name else p for p in parts]
+        return Path(*new_parts)
+
+    for _key in ('train_log_file', 'val_log_file', 'gen_samples_log_file', 'tensorboard_dir'):
+        CONFIG[_key] = _suffix_folder(CONFIG[_key], 'saved_metrics')
+    CONFIG['checkpoint_dir']     = _suffix_folder(CONFIG['checkpoint_dir'],     'checkpoints')
+    CONFIG['aug_debug_save_dir'] = _suffix_folder(CONFIG['aug_debug_save_dir'], 'data')
+
+    print("\n" + "═" * 80)
+    print("  ABLATION MODE: How2Sign-only (OpenASL pretraining skipped)")
+    print("═" * 80)
+    print(f"  How2Sign epochs        : {CONFIG['how2sign_num_epochs']}")
+    print(f"  Two-phase freeze       : {CONFIG['how2sign_enable_two_phase']} "
+          f"(phase1_fraction={CONFIG['how2sign_phase1_fraction']})")
+    print(f"  LRs T1/T2/T3/T4        : "
+          f"{CONFIG['lr_how2sign_tier1']:.1e} / {CONFIG['lr_how2sign_tier2']:.1e} / "
+          f"{CONFIG['lr_how2sign_tier3']:.1e} / {CONFIG['lr_how2sign_tier4']:.1e}")
+    print(f"  Checkpoint dir         : {CONFIG['checkpoint_dir']}")
+    print(f"  Saved-metrics dir      : {CONFIG['train_log_file'].parent}")
+    print(f"  Debug images dir       : {CONFIG['aug_debug_save_dir']}")
+    print("═" * 80 + "\n")
 # ─────────────────────────────────────────────────────────────────────────────
 
 torch.manual_seed(CONFIG['seed'])
@@ -2336,8 +2410,14 @@ def train(model, processor, train_loader, val_loader, val_dataset,
     else:
         infonce_queue_v = []
         infonce_queue_t = []
-    infonce_queue_max = int(CONFIG.get('infonce_queue_size', 64))
-    infonce_tau = float(CONFIG.get('infonce_temperature', 0.10))
+    infonce_queue_max = int(CONFIG.get('infonce_queue_size', 16))
+    infonce_tau = float(CONFIG.get('infonce_temperature', 0.25))
+    # Truncate restored queue to current max (handles queue-size reduction mid-run)
+    while len(infonce_queue_v) > infonce_queue_max:
+        infonce_queue_v.pop(0)
+        infonce_queue_t.pop(0)
+    if start_infonce_queues is not None and len(infonce_queue_v) < len(start_infonce_queues.get('v', [])):
+        print(f"  ℹ️  InfoNCE queue truncated to {len(infonce_queue_v)} (new max={infonce_queue_max})")
     infonce_skip_count = 0
 
     # ── Phase management ──
@@ -2730,7 +2810,11 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 if infonce_enabled and model._last_merger_out is not None:
                     try:
                         with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-                            _mo = model._last_merger_out
+                            # Detach from main graph: gradient checkpointing creates two separate
+                            # computation graphs (CE loss recomputes, InfoNCE uses captured hook tensor)
+                            # that conflict during backward. Detaching here gives clean, correct
+                            # gradients to vision_proj/vision_attn_pool (the actual T4 params).
+                            _mo = model._last_merger_out.detach()
                             _mo_flat = _mo.reshape(-1, _mo.shape[-1])
                             batch_size = len(batch_gpu['labels'])
 
@@ -2778,6 +2862,18 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                                 _t_live = torch.nn.functional.normalize(model.text_proj(_temb), dim=-1)
 
+                                # Diagnostic: positive sim should be noticeably higher than mean negative sim.
+                                # If pos_sim ≈ neg_sim_mean (gap ≈ 0), projectors have collapsed.
+                                if global_step % 10 == 0 and b_idx == 0:
+                                    _pos_sim = (_v_live * _t_live).sum().item()
+                                    if infonce_queue_t:
+                                        _qt_diag = torch.stack(infonce_queue_t, dim=0).to(dtype=_t_live.dtype, device=_t_live.device)
+                                        _neg_sims = (_v_live.unsqueeze(0) @ _qt_diag.T).squeeze(0)
+                                        _mean_neg = _neg_sims.mean().item()
+                                        print(f"  [InfoNCE diag] pos_sim={_pos_sim:.4f}  neg_sim_mean={_mean_neg:.4f}  gap={_pos_sim - _mean_neg:.4f}")
+                                    else:
+                                        print(f"  [InfoNCE diag] pos_sim={_pos_sim:.4f}  (queue empty, no neg_sim yet)")
+
                                 # Build contrast with queue negatives (detached, no grad)
                                 if infonce_queue_v:
                                     if infonce_queue_v[0].device != _v_live.device or infonce_queue_v[0].dtype != _v_live.dtype:
@@ -2785,9 +2881,14 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                                         infonce_queue_t = [x.to(device=_t_live.device, dtype=_t_live.dtype) for x in infonce_queue_t]
                                     _qv = torch.stack(infonce_queue_v, dim=0)  # [K, D]
                                     _qt = torch.stack(infonce_queue_t, dim=0)  # [K, D]
-                                    
-                                    _cand_t = torch.cat([_t_live.unsqueeze(0), _qt], dim=0)
-                                    _cand_v = torch.cat([_v_live.unsqueeze(0), _qv], dim=0)
+
+                                    # Stop-gradient on the live positive placed in the candidate set:
+                                    # _cand_t contains detached _t_live → only vision_proj gets gradient from _logits_v
+                                    # _cand_v contains detached _v_live → only text_proj gets gradient from _logits_t
+                                    # This prevents both projectors from co-adapting through the positive pair,
+                                    # which is the primary mechanism driving representation collapse.
+                                    _cand_t = torch.cat([_t_live.detach().unsqueeze(0), _qt], dim=0)
+                                    _cand_v = torch.cat([_v_live.detach().unsqueeze(0), _qv], dim=0)
                                     _logits_v = (_v_live.unsqueeze(0) @ _cand_t.T) / infonce_tau
                                     _logits_t = (_t_live.unsqueeze(0) @ _cand_v.T) / infonce_tau
                                     _tgt = torch.zeros(1, dtype=torch.long, device=_v_live.device)
@@ -2806,11 +2907,10 @@ def train(model, processor, train_loader, val_loader, val_dataset,
 
                             if _valid_items > 0:
                                 _lam_full = CONFIG['infonce_lambda_phase1'] if current_phase == 1 else CONFIG['infonce_lambda_phase2']
-                                # One-time warmup after projector reset at step 1370.
-                                # Ramps lambda 0→full over steps 1370–1570 to prevent gradient
-                                # explosion on freshly re-initialized projection weights.
-                                # Has no effect on any future resume (global_step will be >1570).
-                                _lam = _lam_full * min(1.0, max(0.0, (global_step - 1370) / 200.0))
+                                # Ramp lambda 0→full over infonce_warmup_steps to prevent gradient explosion
+                                # from freshly initialized (or reset) projection weights.
+                                _infonce_warmup = CONFIG.get('infonce_warmup_steps', 200)
+                                _lam = _lam_full * min(1.0, global_step / max(1, _infonce_warmup))
                                 _lc_mean = _lc_accum / _valid_items
                                 contrast_term = _lam * _lc_mean
                                 contrast_loss_val = float(_lc_mean.detach().item())
@@ -3359,8 +3459,11 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                 else:
                     _should_eval = ((global_step - eval_warmup_threshold) % eval_every == 0)
 
-                if _should_eval and global_step == start_global_step and not train_config.get('eval_on_resume_step', True):
-                    _should_eval = False
+                # On the first new step after a resume, force eval if eval_on_resume_step is True.
+                # global_step is already incremented before this check, so the first new step
+                # is start_global_step + 1, not start_global_step.
+                if not _should_eval and start_global_step > 0 and global_step == start_global_step + 1 and train_config.get('eval_on_resume_step', False):
+                    _should_eval = True
 
                 if _should_eval:
                     print(f"\n{'━' * 80}")
@@ -3384,36 +3487,18 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                             print(f"        REF  \"{ref}\"")
                             print(f"        HYP  \"{hyp}\"")
 
-                    # Per-source breakdown
+                    # Per-source breakdown table is printed below after cross-val (if any),
+                    # so both dataset scores appear together in one unified table.
                     ps = val_results['per_source']
-                    _w = 60
-                    print(f"\n  {'metric':<10}  {'combined':>10}  {'how2sign':>10}  {'openasl':>10}")
-                    print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
-                    _overall = {k: val_results[k] for k in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor')}
-                    _rows = [
-                        ('BLEU-1',   'bleu1',   '{:.2f}'),
-                        ('BLEU-2',   'bleu2',   '{:.2f}'),
-                        ('BLEU-4',   'bleu4',   '{:.2f}'),
-                        ('ROUGE-L',  'rouge_l', '{:.2f}%'),
-                        ('WER',      'wer',     '{:.2f}%'),
-                        ('METEOR',   'meteor',  '{:.2f}%'),
-                    ]
-                    for _label, _key, _fmt in _rows:
-                        _ov  = _fmt.format(_overall[_key])
-                        _h2s = _fmt.format(ps['how2sign'][_key]) if ps['how2sign']['n'] > 0 else '   —'
-                        _osl = _fmt.format(ps['openasl'][_key])  if ps['openasl']['n']  > 0 else '   —'
-                        print(f"  {_label:<10}  {_ov:>10}  {_h2s:>10}  {_osl:>10}")
-                    print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
-                    print(f"  {'samples':<10}  {val_results['num_gen_samples']:>10}  "
-                          f"{ps['how2sign']['n']:>10}  {ps['openasl']['n']:>10}")
 
-                    # Compute distinct_N on all generated hypotheses (mode-collapse detector)
+                    # Compute distinct_N now while all_pairs is still populated (printed later)
                     _all_hyps = [hyp for (_r, hyp, _s) in val_results.get('all_pairs', [])]
                     _distinct_n = CONFIG.get('log_distinct_n', 2)
                     _distinct_val = compute_distinct_n(_all_hyps, n=_distinct_n)
-                    print(f"  distinct-{_distinct_n}  {_distinct_val:.4f}  (diversity; low = mode collapse)")
                     tb_writer.add_scalar(f'val/distinct_{_distinct_n}', _distinct_val, global_step)
                     del _all_hyps
+
+                    _xm_osl = None  # filled below if cross-val runs
 
                     # Log to CSV
                     val_row = {
@@ -3442,7 +3527,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         val_row[f'wer_{_src}']     = f"{_m['wer']:.4f}"
                         val_row[f'meteor_{_src}']  = f"{_m['meteor']:.4f}"
                         val_row[f'n_{_src}']       = _m['n']
-                    val_csv_logger.log(val_row)
+                    # val_row is logged below, after cross-val may update openasl columns
 
                     # Log generated samples
                     for ref, hyp, src in val_results['all_pairs']:
@@ -3523,6 +3608,7 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         print(f"  🛑  EARLY STOPPING  at step {global_step}, epoch {epoch}")
                         print(f"      Best val loss: {best_val_loss:.4f}")
                         print("━" * 80)
+                        val_csv_logger.log(val_row)
                         return global_step, best_val_loss
 
                     # ── Cross-dataset generation validation (generation metrics only, no loss) ──
@@ -3536,20 +3622,6 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                         xval = validate(model, processor, extra_val_loader, extra_val_dataset,
                                         train_config, val_collator=_val_collator, compute_loss=False, beam_size=_effective_beam_size)
                         _xps = xval['per_source']
-                        print(f"\n  {'metric':<10}  {'combined':>10}  {'how2sign':>10}  {'openasl':>10}")
-                        print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
-                        _xrows = [('BLEU-1','bleu1','{:.2f}'),('BLEU-2','bleu2','{:.2f}'),
-                                  ('BLEU-4','bleu4','{:.2f}'),('ROUGE-L','rouge_l','{:.2f}%'),
-                                  ('WER','wer','{:.2f}%'),('METEOR','meteor','{:.2f}%')]
-                        _xoverall = {k: xval[k] for k in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor')}
-                        for _xl, _xk, _xf in _xrows:
-                            _xov  = _xf.format(_xoverall[_xk])
-                            _xh2s = _xf.format(_xps['how2sign'][_xk]) if _xps['how2sign']['n'] > 0 else '   —'
-                            _xosl = _xf.format(_xps['openasl'][_xk])  if _xps['openasl']['n']  > 0 else '   —'
-                            print(f"  {_xl:<10}  {_xov:>10}  {_xh2s:>10}  {_xosl:>10}")
-                        print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
-                        print(f"  {'samples':<10}  {xval['num_gen_samples']:>10}  "
-                              f"{_xps['how2sign']['n']:>10}  {_xps['openasl']['n']:>10}")
                         print(f"  [beam_size={xval['beam_size']}]")
                         if xval['sample_pairs']:
                             print(f"\n  Sample generations ({_xname})")
@@ -3567,20 +3639,56 @@ def train(model, processor, train_loader, val_loader, val_dataset,
                             if _xm['n'] > 0:
                                 for _xk2 in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor'):
                                     tb_writer.add_scalar(f'cross_val_{_xname}/{_xk2}_{_xsrc}', _xm[_xk2], global_step)
-                        _xval_row = {'global_step': global_step, 'epoch': epoch, 'phase': current_phase,
-                                     'cross_val_name': _xname, 'num_gen_samples': xval['num_gen_samples']}
-                        for _xk2 in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor'):
-                            _xval_row[_xk2] = f"{xval[_xk2]:.4f}"
-                        for _xsrc in ('how2sign', 'openasl'):
-                            _xm = _xps[_xsrc]
-                            for _xk2 in ('bleu1','bleu2','bleu4','rouge_l','wer','meteor'):
-                                _xval_row[f'{_xk2}_{_xsrc}'] = f"{_xm[_xk2]:.4f}"
-                            _xval_row[f'n_{_xsrc}'] = _xm['n']
-                        val_csv_logger.log(_xval_row)
+                        # Merge openasl cross-val scores into val_row (no separate row)
+                        _xm_osl = _xps['openasl']
+                        for _xk2 in ('bleu1', 'bleu2', 'bleu4', 'rouge_l', 'wer', 'meteor'):
+                            val_row[f'{_xk2}_openasl'] = f"{_xm_osl[_xk2]:.4f}"
+                        val_row['n_openasl'] = _xm_osl['n']
                         for _r, _h, _s in xval['all_pairs']:
                             gen_samples_csv_logger.log({'global_step': global_step, 'epoch': epoch,
                                                         'source': _s, 'reference': _r, 'hypothesis': _h})
                         del xval, _xps
+
+                    # ── Unified per-source breakdown table ──
+                    _metric_keys = ('bleu1', 'bleu2', 'bleu4', 'rouge_l', 'wer', 'meteor')
+                    _metric_rows = [
+                        ('BLEU-1',  'bleu1',   '{:.2f}'),
+                        ('BLEU-2',  'bleu2',   '{:.2f}'),
+                        ('BLEU-4',  'bleu4',   '{:.2f}'),
+                        ('ROUGE-L', 'rouge_l', '{:.2f}%'),
+                        ('WER',     'wer',     '{:.2f}%'),
+                        ('METEOR',  'meteor',  '{:.2f}%'),
+                    ]
+                    if _xm_osl is not None and _xm_osl['n'] > 0 and ps['how2sign']['n'] > 0:
+                        # Both datasets evaluated: combined = per-metric average of how2sign + openasl
+                        _h2s_m = ps['how2sign']
+                        _combined_avg = {k: (_h2s_m[k] + _xm_osl[k]) / 2.0 for k in _metric_keys}
+                        print(f"\n  {'metric':<10}  {'comb.(avg)':>10}  {'how2sign':>10}  {'openasl':>10}")
+                        print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
+                        for _label, _key, _fmt in _metric_rows:
+                            print(f"  {_label:<10}  {_fmt.format(_combined_avg[_key]):>10}  "
+                                  f"{_fmt.format(_h2s_m[_key]):>10}  {_fmt.format(_xm_osl[_key]):>10}")
+                        print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
+                        print(f"  {'samples':<10}  {'—':>10}  {_h2s_m['n']:>10}  {_xm_osl['n']:>10}")
+                        for _k in _metric_keys:
+                            tb_writer.add_scalar(f'combined_avg/{_k}', _combined_avg[_k], global_step)
+                    else:
+                        # No cross-val: combined = overall from the single validation dataset
+                        _overall = {k: val_results[k] for k in _metric_keys}
+                        print(f"\n  {'metric':<10}  {'combined':>10}  {'how2sign':>10}  {'openasl':>10}")
+                        print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
+                        for _label, _key, _fmt in _metric_rows:
+                            _ov  = _fmt.format(_overall[_key])
+                            _h2s = _fmt.format(ps['how2sign'][_key]) if ps['how2sign']['n'] > 0 else '   —'
+                            _osl = _fmt.format(ps['openasl'][_key])  if ps['openasl']['n']  > 0 else '   —'
+                            print(f"  {_label:<10}  {_ov:>10}  {_h2s:>10}  {_osl:>10}")
+                        print(f"  {'─'*10}  {'─'*10}  {'─'*10}  {'─'*10}")
+                        print(f"  {'samples':<10}  {val_results['num_gen_samples']:>10}  "
+                              f"{ps['how2sign']['n']:>10}  {ps['openasl']['n']:>10}")
+                    print(f"  distinct-{_distinct_n}  {_distinct_val:.4f}  (diversity; low = mode collapse)")
+
+                    # Log one complete val row (openasl columns filled if cross-val ran)
+                    val_csv_logger.log(val_row)
 
                     # Reclaim VRAM from validation before resuming training
                     del val_results, ps

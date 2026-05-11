@@ -100,43 +100,160 @@ from tqdm import tqdm
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR     = PROJECT_ROOT / "data"
 
-SPLITS = {
-    "train": DATA_DIR / "7_dataset_train.tsv",
-    "val":   DATA_DIR / "7_dataset_val.tsv",
-    "test":  DATA_DIR / "7_dataset_test.tsv",
+CONFIG = {
+    # ── Data paths (local) ──
+    'data_dir':    PROJECT_ROOT / 'data',
+    'splits': {
+        'train': PROJECT_ROOT / 'data' / '7_dataset_train.tsv',
+        'val':   PROJECT_ROOT / 'data' / '7_dataset_val.tsv',
+        'test':  PROJECT_ROOT / 'data' / '7_dataset_test.tsv',
+    },
+    'bbox_csv': PROJECT_ROOT / 'data' / 'bboxes_all.csv',
+    'output_parquets': {
+        'train': PROJECT_ROOT / 'data' / 'landmarks_train.parquet',
+        'val':   PROJECT_ROOT / 'data' / 'landmarks_val.parquet',
+        'test':  PROJECT_ROOT / 'data' / 'landmarks_test.parquet',
+    },
+
+    # ── Landmark extraction settings ──
+    # Cap stored landmark density to this FPS.  For clips whose native FPS is
+    # above this value, every ceil(native_fps / TARGET_SAMPLE_FPS)-th frame is
+    # sampled.  20 FPS gives headroom above the training decoder's 15 FPS.
+    'target_sample_fps': 20,
+    'snap_align': 32,           # must match CollatorForVideoTextChat._snap_align
+
+    # RTMPose model quality: 'performance' (best accuracy) or 'balanced' (faster).
+    'rtmpose_mode': 'performance',
+
+    # Confidence thresholds
+    'pose_conf_threshold': 0.3,  # joints below this → NaN
+    'hand_conf_threshold': 0.2,  # whole hand rejected if mean conf below this
+
+    # ── Local runtime ──
+    # Worker processes for the local multiprocessing pool.
+    # Each loads one RTMPose model instance; keep ≤ 4 on an 8 GB VRAM GPU.
+    'local_workers': 2,
+
+    # ── Modal ──────────────────────────────────────────────────────────────────
+    # Set 'is_modal': True to run on Modal's cloud GPUs instead of locally.
+    # Run with:  modal run data_code/21_extract_landmarks.py
+    # All data paths are remapped to Modal volume mount points automatically.
+    'is_modal': True,
+
+    # Hardware
+    # GPU: A10G (24 GB VRAM) — RTMPose performance model uses ~1.5 GB/worker,
+    #   giving room for 8+ parallel workers while staying well within budget.
+    #   Significantly cheaper than A100 for a data-processing job.
+    # CPU: 16 vCPUs — feeds 8 video-decoding (decord) workers without starving the GPU.
+    # RAM: 32 GB — comfortable for video frame buffers and NumPy arrays across 8 workers.
+    # GPU strings: 'T4', 'A10G', 'A100', 'A100-80GB', 'H100'
+    'modal_gpu':     'A10G',
+    'modal_cpu':     16,
+    'modal_memory':  32,          # GB (converted to MiB when passed to Modal)
+    'modal_timeout': 6 * 3600,   # Max wall-clock seconds; 6 h covers a full 3-split run
+    'modal_retries': 0,
+
+    # Modal worker count: how many parallel RTMPose instances inside the container.
+    # A10G (24 GB VRAM) comfortably fits 8 workers with the performance model.
+    # Increase to 10 if memory headroom allows; reduce to 4 for T4 (16 GB VRAM).
+    'modal_workers': 8,
+
+    # App
+    'modal_app_name': 'signbridge-landmarks',
+
+    # Volumes — shared with the training script (create once with `modal volume create <name>`)
+    #   signbridge-data   : TSV files, bboxes_all.csv (READ only here)
+    #   signbridge-videos : raw video clips (READ only)
+    #   signbridge-outputs: landmark parquets are WRITTEN here (same volume as training checkpoints)
+    'modal_data_volume':   'signbridge-data',
+    'modal_video_volume':  'signbridge-videos',
+    'modal_output_volume': 'signbridge-outputs',
+
+    # Mount paths inside the container
+    'modal_data_mount':   '/data',
+    'modal_video_mount':  '/videos',
+    'modal_output_mount': '/outputs',
 }
-BBOX_CSV = DATA_DIR / "bboxes_all.csv"
-OUTPUT_PARQUETS = {
-    "train": DATA_DIR / "landmarks_train.parquet",
-    "val":   DATA_DIR / "landmarks_val.parquet",
-    "test":  DATA_DIR / "landmarks_test.parquet",
-}
 
-# Cap the stored landmark density to this FPS.  For clips whose native FPS is
-# above this value, every ceil(native_fps / TARGET_SAMPLE_FPS)-th frame is
-# sampled.  For clips at or below this value every frame is stored.
-# 20 FPS gives headroom above the training decoder's current 15 FPS without
-# processing unnecessary duplicates from 24/25/30 FPS source clips.
-TARGET_SAMPLE_FPS = 20
+# ── Modal path overrides ──────────────────────────────────────────────────────
+# Applied when is_modal=True. Reads come from signbridge-data and signbridge-videos;
+# output parquets are written to signbridge-outputs (separate from the old lower-quality
+# parquets still sitting in signbridge-data).
+#
+# Volume upload commands (run once — same volumes as training, no re-upload needed):
+#
+#   modal volume put signbridge-data "data/7_dataset_train.tsv"        /data/7_dataset_train.tsv
+#   modal volume put signbridge-data "data/7_dataset_val.tsv"          /data/7_dataset_val.tsv
+#   modal volume put signbridge-data "data/7_dataset_test.tsv"         /data/7_dataset_test.tsv
+#   modal volume put signbridge-data "data/bboxes_all.csv"             /bboxes_all.csv
+#
+#   # Video clips (mirrors D:\signbridge_dataset\)
+#   modal volume put signbridge-videos "D:/signbridge_dataset/how2sign" /how2sign
+#   modal volume put signbridge-videos "D:/signbridge_dataset/openasl"  /openasl
+#
+# Output landmark parquets land in signbridge-outputs at:
+#   /outputs/landmarks_train.parquet
+#   /outputs/landmarks_val.parquet
+#   /outputs/landmarks_test.parquet
+# After the job, download with:
+#   modal volume get signbridge-outputs /outputs/landmarks_train.parquet data/
+#   modal volume get signbridge-outputs /outputs/landmarks_val.parquet   data/
+#   modal volume get signbridge-outputs /outputs/landmarks_test.parquet  data/
+if CONFIG['is_modal']:
+    _MDATA = Path(CONFIG['modal_data_mount'])
+    _MOUT  = Path(CONFIG['modal_output_mount'])
+    CONFIG.update({
+        'splits': {
+            'train': _MDATA / 'data' / '7_dataset_train.tsv',
+            'val':   _MDATA / 'data' / '7_dataset_val.tsv',
+            'test':  _MDATA / 'data' / '7_dataset_test.tsv',
+        },
+        'bbox_csv': _MDATA / 'bboxes_all.csv',
+        'output_parquets': {
+            'train': _MOUT / 'landmarks_train.parquet',
+            'val':   _MOUT / 'landmarks_val.parquet',
+            'test':  _MOUT / 'landmarks_test.parquet',
+        },
+    })
+# ─────────────────────────────────────────────────────────────────────────────
 
-SNAP_ALIGN      = 32    # must match CollatorForVideoTextChat._snap_align
-DEFAULT_WORKERS = 2    # 3 GPU workers; balanced model is small enough to allow this on 8 GB VRAM
+# Derive module-level constants from CONFIG so the rest of the code is unchanged.
+DATA_DIR         = CONFIG['data_dir']
+SPLITS           = CONFIG['splits']
+BBOX_CSV         = CONFIG['bbox_csv']
+OUTPUT_PARQUETS  = CONFIG['output_parquets']
+TARGET_SAMPLE_FPS = CONFIG['target_sample_fps']
+SNAP_ALIGN       = CONFIG['snap_align']
+DEFAULT_WORKERS  = CONFIG['local_workers'] if not CONFIG['is_modal'] else CONFIG['modal_workers']
+RTMPOSE_MODE     = CONFIG['rtmpose_mode']
 
 # RTMPose COCO-WholeBody upper-body indices (shoulders, elbows, wrists)
 POSE_INDICES     = [5, 6, 7, 8, 9, 10]
 LEFT_HAND_SLICE  = slice(91, 112)   # 21 keypoints
 RIGHT_HAND_SLICE = slice(112, 133)  # 21 keypoints
 
-# Confidence threshold: keypoints below this are treated as undetected (NaN).
-POSE_CONF_THRESHOLD = 0.3
-# Hand accepted if mean keypoint confidence across all 21 joints exceeds this.
-HAND_CONF_THRESHOLD = 0.2
-
-# RTMPose model quality: 'performance' (best accuracy) or 'balanced' (faster).
-RTMPOSE_MODE = 'balanced'
+POSE_CONF_THRESHOLD = CONFIG['pose_conf_threshold']
+HAND_CONF_THRESHOLD = CONFIG['hand_conf_threshold']
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _remap_path_for_modal(fp: str) -> str:
+    """Convert a local Windows file_path from the TSV to its Modal volume path.
+
+    D:\\signbridge_dataset\\how2sign\\train\\foo.mp4  →  /videos/how2sign/train/foo.mp4
+    D:\\signbridge_dataset\\openasl\\train\\foo.mp4   →  /videos/openasl/train/foo.mp4
+    """
+    video_mount = CONFIG['modal_video_mount']
+    p = Path(fp.replace('\\', '/'))
+    parts = [x for x in p.parts if x not in ('', '/') and ':' not in x]
+    # Expected: ['signbridge_dataset', <source>, <split>, <filename>]
+    if len(parts) < 4:
+        return fp
+    source   = parts[1]   # 'how2sign' or 'openasl'
+    split    = parts[2]   # 'train', 'val', 'test'
+    filename = parts[3]
+    return f'{video_mount}/{source}/{split}/{filename}'
 
 
 # ── Crop logic (mirrors _apply_signer_crop exactly) ──────────────────────────
@@ -606,8 +723,9 @@ def _load_bbox_lookup() -> dict[str, tuple]:
 
 def _load_tasks(tsv_path: Path, bbox_by_vid: dict[str, tuple]) -> list[tuple]:
     df = pd.read_csv(tsv_path, sep="\t")
+    remap = _remap_path_for_modal if CONFIG['is_modal'] else (lambda fp: fp)
     return [
-        (str(r.vid), str(r.file_path), str(r.source), bbox_by_vid[str(r.vid)])
+        (str(r.vid), remap(str(r.file_path)), str(r.source), bbox_by_vid[str(r.vid)])
         for r in df.itertuples(index=False)
         if str(r.vid) in bbox_by_vid
     ]
@@ -771,3 +889,122 @@ def main() -> None:
 if __name__ == "__main__":
     mp_proc.freeze_support()
     main()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  MODAL APP  (only active when is_modal=True)
+#
+#  Usage:
+#    1. Set  'is_modal': True  in CONFIG above.
+#    2. Run: modal run data_code/21_extract_landmarks.py
+#
+#  The container image is built once and cached.  The RTMPose ONNX models are
+#  baked into the image at build time so cold-start containers need no download.
+#
+#  Volume layout (shared with qwen3vl_training.py — no re-upload needed):
+#    signbridge-data   → /data   (read TSVs + bboxes; landmark parquets WRITTEN here)
+#    signbridge-videos → /videos (read video clips)
+#
+#  If the volumes are not yet populated, upload with:
+#    modal volume put signbridge-data "data/7_dataset_train.tsv" /data/7_dataset_train.tsv
+#    modal volume put signbridge-data "data/7_dataset_val.tsv"   /data/7_dataset_val.tsv
+#    modal volume put signbridge-data "data/7_dataset_test.tsv"  /data/7_dataset_test.tsv
+#    modal volume put signbridge-data "data/bboxes_all.csv"      /bboxes_all.csv
+#    modal volume put signbridge-videos "D:/signbridge_dataset/how2sign" /how2sign
+#    modal volume put signbridge-videos "D:/signbridge_dataset/openasl"  /openasl
+#
+#  Output landmark parquets land at:
+#    /data/landmarks_train.parquet  (signbridge-data volume)
+#    /data/landmarks_val.parquet
+#    /data/landmarks_test.parquet
+#  These paths match exactly what qwen3vl_training.py reads when is_modal=True.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+if CONFIG['is_modal']:
+    import modal
+
+    # ── Container image ────────────────────────────────────────────────────────
+    # Base: CUDA 12.4 runtime (no nvcc needed — ONNX Runtime ships its own CUDA
+    # kernels; no source compilation required unlike flash-attn in training).
+    _modal_image = (
+        modal.Image.from_registry(
+            "nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04",
+            add_python="3.11",
+        )
+        .entrypoint([])   # silence verbose CUDA entrypoint logging
+        .apt_install(
+            "ffmpeg",           # video decoding backend for decord
+            "libgl1",           # OpenCV headless dependency
+            "libglib2.0-0",
+        )
+        .pip_install(
+            # ONNX Runtime GPU must be installed BEFORE rtmlib so rtmlib's
+            # dependency resolver does not pull in the CPU-only onnxruntime.
+            "onnxruntime-gpu==1.20.1",
+            # Pose estimation
+            "rtmlib",
+            # Video decoding
+            "decord",
+            # Vision / data
+            "opencv-python-headless",
+            "numpy",
+            "pandas",
+            "pyarrow",    # parquet support
+            "tqdm",
+        )
+        # Pre-download RTMPose ONNX model weights into the image at build time.
+        # Workers find the weights in the on-disk cache on cold start — no HTTP
+        # download delay per container.  GPU is not available during image build
+        # so we use the CPU backend just to trigger the download.
+        .run_commands(
+            "python -c \""
+            "from rtmlib import RTMPose, Wholebody; "
+            "cfg = Wholebody.MODE['performance']; "
+            "RTMPose(cfg['pose'], model_input_size=cfg['pose_input_size'], "
+            "backend='onnxruntime', device='cpu')"
+            "\""
+        )
+    )
+
+    # ── Volumes ────────────────────────────────────────────────────────────────
+    _modal_data_vol   = modal.Volume.from_name(CONFIG['modal_data_volume'],   create_if_missing=False)
+    _modal_video_vol  = modal.Volume.from_name(CONFIG['modal_video_volume'],  create_if_missing=False)
+    _modal_output_vol = modal.Volume.from_name(CONFIG['modal_output_volume'], create_if_missing=True)
+
+    # ── App ────────────────────────────────────────────────────────────────────
+    app = modal.App(CONFIG['modal_app_name'], image=_modal_image)
+
+    @app.function(
+        gpu=CONFIG['modal_gpu'],
+        cpu=CONFIG['modal_cpu'],
+        memory=CONFIG['modal_memory'] * 1024,   # MiB
+        timeout=CONFIG['modal_timeout'],
+        retries=modal.Retries(
+            max_retries=CONFIG['modal_retries'],
+            backoff_coefficient=1.0,
+            initial_delay=5.0,
+        ),
+        volumes={
+            CONFIG['modal_data_mount']:   _modal_data_vol,
+            CONFIG['modal_video_mount']:  _modal_video_vol,
+            CONFIG['modal_output_mount']: _modal_output_vol,
+        },
+    )
+    def run_extraction_on_modal():
+        """Entry point executed inside the Modal container."""
+        main()
+        print("\n[modal] Committing signbridge-outputs volume ...")
+        _modal_output_vol.commit()
+        print("[modal] Volume committed — landmark parquets are now persisted.")
+
+    @app.local_entrypoint()
+    def modal_entrypoint():
+        """Called on your local machine when you run `modal run <this_file>`."""
+        print(
+            f"  Dispatching landmark extraction to Modal "
+            f"({CONFIG['modal_gpu']} GPU, {CONFIG['modal_cpu']} CPUs, "
+            f"{CONFIG['modal_memory']} GB RAM, "
+            f"timeout={CONFIG['modal_timeout'] // 3600}h, "
+            f"workers={CONFIG['modal_workers']}) ..."
+        )
+        run_extraction_on_modal.remote()
