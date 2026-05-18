@@ -1,0 +1,195 @@
+{
+  "run_label": "Two-phase (OpenASL \u2192 How2Sign)",
+  "phase_transition_step": 2449,
+  "train": {
+    "final_step": 5988,
+    "final_loss": 3.046875,
+    "min_loss": 2.53125,
+    "min_loss_step": 1895,
+    "n_train_rows": 5988
+  },
+  "val": {
+    "overall": {
+      "val_loss": {
+        "best_value": 2.779132,
+        "best_step": 2280,
+        "final_value": 2.83466,
+        "final_step": 5900,
+        "n_eval_rows": 67,
+        "plateaued_in_tail": false
+      },
+      "val_ppl": {
+        "best_value": 16.105,
+        "best_step": 2280,
+        "final_value": 17.0246,
+        "final_step": 5900,
+        "n_eval_rows": 67,
+        "plateaued_in_tail": false
+      },
+      "distinct_2": {
+        "best_value": 0.6565,
+        "best_step": 1960,
+        "final_value": 0.3077,
+        "final_step": 5900,
+        "n_eval_rows": 67,
+        "plateaued_in_tail": false
+      },
+      "bleu1": {
+        "best_value": 20.8268,
+        "best_step": 2840,
+        "final_value": 19.6659,
+        "final_step": 5900,
+        "n_eval_rows": 67,
+        "plateaued_in_tail": false
+      },
+      "bleu2": {
+        "best_value": 8.0234,
+        "best_step": 4280,
+        "final_value": 7.4674,
+        "final_step": 5900,
+        "n_eval_rows": 67,
+        "plateaued_in_tail": false
+      },
+      "bleu4": {
+        "best_value": 2.4314,
+        "best_step": 3960,
+        "final_value": 2.0988,
+        "final_step": 5900,
+        "n_eval_rows": 67,
+        "plateaued_in_tail": false
+      },
+      "rouge_l": {
+        "best_value": 11.5393,
+        "best_step": 4280,
+        "final_value": 10.6608,
+        "final_step": 5900,
+        "n_eval_rows": 67,
+        "plateaued_in_tail": false
+      },
+      "meteor": {
+        "best_value": 11.4457,
+        "best_step": 4600,
+        "final_value": 10.2126,
+        "final_step": 5900,
+        "n_eval_rows": 67,
+        "plateaued_in_tail": false
+      },
+      "wer": {
+        "best_value": 100.3707,
+        "best_step": 320,
+        "final_value": 123.0245,
+        "final_step": 5900,
+        "n_eval_rows": 67,
+        "plateaued_in_tail": false
+      }
+    },
+    "how2sign": {
+      "bleu1_how2sign": {
+        "best_value": 20.8268,
+        "best_step": 2840,
+        "final_value": 19.6659,
+        "final_step": 5900,
+        "n_eval_rows": 40,
+        "plateaued_in_tail": false
+      },
+      "bleu2_how2sign": {
+        "best_value": 8.0234,
+        "best_step": 4280,
+        "final_value": 7.4674,
+        "final_step": 5900,
+        "n_eval_rows": 40,
+        "plateaued_in_tail": false
+      },
+      "bleu4_how2sign": {
+        "best_value": 2.4314,
+        "best_step": 3960,
+        "final_value": 2.0988,
+        "final_step": 5900,
+        "n_eval_rows": 40,
+        "plateaued_in_tail": false
+      },
+      "rouge_l_how2sign": {
+        "best_value": 11.5393,
+        "best_step": 4280,
+        "final_value": 10.6608,
+        "final_step": 5900,
+        "n_eval_rows": 40,
+        "plateaued_in_tail": false
+      },
+      "meteor_how2sign": {
+        "best_value": 11.4457,
+        "best_step": 4600,
+        "final_value": 10.2126,
+        "final_step": 5900,
+        "n_eval_rows": 40,
+        "plateaued_in_tail": false
+      },
+      "wer_how2sign": {
+        "best_value": 114.0816,
+        "best_step": 2520,
+        "final_value": 123.0245,
+        "final_step": 5900,
+        "n_eval_rows": 40,
+        "plateaued_in_tail": false
+      }
+    },
+    "openasl": {
+      "bleu1_openasl": {
+        "best_value": 17.1301,
+        "best_step": 1560,
+        "final_value": 10.1281,
+        "final_step": 4520,
+        "n_eval_rows": 43,
+        "plateaued_in_tail": false
+      },
+      "bleu2_openasl": {
+        "best_value": 4.0296,
+        "best_step": 1560,
+        "final_value": 2.2214,
+        "final_step": 4520,
+        "n_eval_rows": 43,
+        "plateaued_in_tail": false
+      },
+      "bleu4_openasl": {
+        "best_value": 0.987,
+        "best_step": 2120,
+        "final_value": 0.1851,
+        "final_step": 4520,
+        "n_eval_rows": 43,
+        "plateaued_in_tail": false
+      },
+      "rouge_l_openasl": {
+        "best_value": 9.8848,
+        "best_step": 2040,
+        "final_value": 5.9251,
+        "final_step": 4520,
+        "n_eval_rows": 43,
+        "plateaued_in_tail": false
+      },
+      "meteor_openasl": {
+        "best_value": 7.2571,
+        "best_step": 2040,
+        "final_value": 6.4806,
+        "final_step": 4520,
+        "n_eval_rows": 43,
+        "plateaued_in_tail": false
+      },
+      "wer_openasl": {
+        "best_value": 100.3707,
+        "best_step": 320,
+        "final_value": 184.8091,
+        "final_step": 4520,
+        "n_eval_rows": 43,
+        "plateaued_in_tail": false
+      }
+    }
+  },
+  "total_training_time_sec": 413732.9,
+  "total_training_time_str": "4d 18h 55m 32s",
+  "overfitting_gap_at_end": {
+    "train_loss": 3.0625,
+    "val_loss": 2.83466,
+    "gap_val_minus_train": -0.22784000000000004,
+    "step": 5900
+  }
+}

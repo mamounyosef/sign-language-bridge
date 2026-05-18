@@ -1,0 +1,55 @@
+{
+  "checkpoint": "/outputs/checkpoints/qwen3vl/checkpoint_step_4610",
+  "beam_size": 5,
+  "compute_loss": false,
+  "test_loss": NaN,
+  "test_ppl": NaN,
+  "overall": {
+    "n": 944,
+    "bleu1": 19.758441211797678,
+    "bleu2": 6.947185818481809,
+    "bleu4": 1.6382682407775209,
+    "chrf": 17.419449730558846,
+    "chrf_pp": 16.03739531512652,
+    "rouge_l": 10.43324718306375,
+    "meteor": 9.70942791109725,
+    "wer": 112.5092341787737,
+    "distinct_1": 0.04506627393225331,
+    "distinct_2": 0.10295979740424185,
+    "mean_ref_len": 12.90572033898305,
+    "mean_hyp_len": 14.385593220338983,
+    "len_ratio": 1.1146679799720922,
+    "median_hyp_len": 14
+  },
+  "per_source": {
+    "how2sign": {
+      "n": 944,
+      "bleu1": 19.758441211797678,
+      "bleu2": 6.947185818481809,
+      "bleu4": 1.6382682407775209,
+      "chrf": 17.419449730558846,
+      "chrf_pp": 16.03739531512652,
+      "rouge_l": 10.43324718306375,
+      "meteor": 9.70942791109725,
+      "wer": 112.5092341787737,
+      "distinct_1": 0.04506627393225331,
+      "distinct_2": 0.10295979740424185,
+      "mean_ref_len": 12.90572033898305,
+      "mean_hyp_len": 14.385593220338983,
+      "len_ratio": 1.1146679799720922,
+      "median_hyp_len": 14
+    }
+  },
+  "decoding": {
+    "beam_size": 5,
+    "length_penalty": 0.6,
+    "no_repeat_ngram_size": 4,
+    "repetition_penalty": 1.1,
+    "max_new_tokens": 32
+  },
+  "timing_minutes": {
+    "loss_pass": NaN,
+    "gen_pass": 83.46,
+    "total": 83.89
+  }
+}

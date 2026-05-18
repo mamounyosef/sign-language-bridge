@@ -1,0 +1,44 @@
+Generated : 2026-05-10 20:54:25
+
+=== Training run summary — Two-phase (OpenASL → How2Sign) ===
+
+Phase 1→2 transition step : 2449
+Total training time       : 4d 18h 55m 32s
+
+Train:
+  rows logged       : 5988
+  final step        : 5988
+  final train_loss  : 3.0469
+  min train_loss    : 2.5312 (at step 1895)
+
+Overfitting gap (at last val):
+  train_loss        : 3.0625
+  val_loss          : 2.8347
+  gap (val - train) : -0.2278
+
+Val [overall]  (67 eval rows total):
+  val_loss             best=   2.7791 (step  2280)  final=   2.8347 (step  5900)  ↓  plateau_tail=no
+  val_ppl              best=  16.1050 (step  2280)  final=  17.0246 (step  5900)  ↓  plateau_tail=no
+  distinct_2           best=   0.6565 (step  1960)  final=   0.3077 (step  5900)  ↑  plateau_tail=no
+  bleu1                best=  20.8268 (step  2840)  final=  19.6659 (step  5900)  ↑  plateau_tail=no
+  bleu2                best=   8.0234 (step  4280)  final=   7.4674 (step  5900)  ↑  plateau_tail=no
+  bleu4                best=   2.4314 (step  3960)  final=   2.0988 (step  5900)  ↑  plateau_tail=no
+  rouge_l              best=  11.5393 (step  4280)  final=  10.6608 (step  5900)  ↑  plateau_tail=no
+  meteor               best=  11.4457 (step  4600)  final=  10.2126 (step  5900)  ↑  plateau_tail=no
+  wer                  best= 100.3707 (step   320)  final= 123.0245 (step  5900)  ↓  plateau_tail=no
+
+Val [how2sign]  (67 eval rows total):
+  bleu1_how2sign       best=  20.8268 (step  2840)  final=  19.6659 (step  5900)  ↑  plateau_tail=no
+  bleu2_how2sign       best=   8.0234 (step  4280)  final=   7.4674 (step  5900)  ↑  plateau_tail=no
+  bleu4_how2sign       best=   2.4314 (step  3960)  final=   2.0988 (step  5900)  ↑  plateau_tail=no
+  rouge_l_how2sign     best=  11.5393 (step  4280)  final=  10.6608 (step  5900)  ↑  plateau_tail=no
+  meteor_how2sign      best=  11.4457 (step  4600)  final=  10.2126 (step  5900)  ↑  plateau_tail=no
+  wer_how2sign         best= 114.0816 (step  2520)  final= 123.0245 (step  5900)  ↓  plateau_tail=no
+
+Val [openasl]  (67 eval rows total):
+  bleu1_openasl        best=  17.1301 (step  1560)  final=  10.1281 (step  4520)  ↑  plateau_tail=no
+  bleu2_openasl        best=   4.0296 (step  1560)  final=   2.2214 (step  4520)  ↑  plateau_tail=no
+  bleu4_openasl        best=   0.9870 (step  2120)  final=   0.1851 (step  4520)  ↑  plateau_tail=no
+  rouge_l_openasl      best=   9.8848 (step  2040)  final=   5.9251 (step  4520)  ↑  plateau_tail=no
+  meteor_openasl       best=   7.2571 (step  2040)  final=   6.4806 (step  4520)  ↑  plateau_tail=no
+  wer_openasl          best= 100.3707 (step   320)  final= 184.8091 (step  4520)  ↓  plateau_tail=no

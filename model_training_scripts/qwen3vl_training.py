@@ -67,6 +67,7 @@ import time
 import csv
 import threading
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 import sacrebleu
 
@@ -2090,7 +2091,7 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
         batch_gpu = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
 
-        with torch.amp.autocast('cuda', dtype=torch.bfloat16):
+        with torch.inference_mode(), torch.amp.autocast('cuda', dtype=torch.bfloat16):
             labels = batch_gpu.pop('labels')
             outputs = model(**batch_gpu, labels=None)  # logits only — avoids OOM from full [B,T,V] cross-entropy
             logits = outputs.logits
@@ -2143,9 +2144,18 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
     sample_pairs = []
 
     num_samples = min(config['max_generate_samples'], len(val_dataset))
+    # Always pick samples randomly (reproducible seed), then optionally
+    # bucket-sort the selected indices by duration for batching efficiency.
+    # This avoids the old bias where sort+slice only picked the shortest clips.
     sample_indices = torch.randperm(
         len(val_dataset), generator=torch.Generator().manual_seed(42)
     )[:num_samples].tolist()
+    if config.get('gen_sort_by_duration', False):
+        # Bucket-sort the randomly chosen indices by clip duration so each
+        # batch contains similar-length videos → less padding → faster beam search.
+        # Which samples are evaluated is unchanged; only batching order differs.
+        _durations = [val_dataset[i]['duration_sec'] for i in sample_indices]
+        sample_indices = [sample_indices[i] for i in sorted(range(num_samples), key=lambda i: _durations[i])]
 
     # Reuse the passed-in collator, or create one if not provided
     gen_collator = val_collator if val_collator is not None else Qwen3VLCollator(processor, config, is_training=False)
@@ -2153,129 +2163,153 @@ def validate(model, processor, val_loader, val_dataset, config, val_collator=Non
     gen_pbar = tqdm(total=num_samples, desc="  Val gen ", unit="sample",
                     leave=False, ncols=80, dynamic_ncols=False)
 
-    for i in range(0, num_samples, config['val_gen_batch_size']):
-        batch_end = min(i + config['val_gen_batch_size'], num_samples)
-        batch_indices = sample_indices[i:batch_end]
+    # ── Prefetch pipeline: one background thread decodes video for batch N+1
+    # while the GPU runs model.generate() for batch N. With max_workers=1 the
+    # thread pool executes tasks strictly in submission order, so the collator's
+    # shared snap-stat counters are never accessed concurrently.
+    def _prep_gen_batch(batch_indices):
+        """CPU preprocessing for one generation batch. Runs in background thread."""
         batch_samples = [val_dataset[idx] for idx in batch_indices]
-
-        try:
-            # Build messages WITHOUT assistant response for generation
-            all_texts = []
-            all_images = []
-            all_videos = []
-            all_video_metadatas = []
-            all_video_kwargs = {}
-            sample_bboxes = []  # parallel to all_videos
-
-            for sample in batch_samples:
-                messages = gen_collator._build_messages(sample, include_assistant=False)
-                text = processor.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True,
-                    enable_thinking=False,
-                )
-                all_texts.append(text)
-
-                images, videos, video_kwargs = process_vision_info(
-                    messages, image_patch_size=16,
-                    return_video_kwargs=True, return_video_metadata=True,
-                )
-                del messages
-                if images:
-                    all_images.extend(images)
-                if videos is not None:
-                    vids, metas = zip(*videos)
-                    all_videos.extend(list(vids))
-                    all_video_metadatas.extend(list(metas))
-                    sample_bboxes.extend([sample.get('bbox')] * len(vids))
-                del images, videos
-                if video_kwargs:
-                    all_video_kwargs.update(video_kwargs)
-
-            # Apply the SAME signer crop as training to keep train/eval distributions matched.
-            all_videos = gen_collator._apply_signer_crop(all_videos, sample_bboxes)
-
-            inputs = processor(
-                text=all_texts,
-                images=all_images if all_images else None,
-                videos=all_videos if all_videos else None,
-                video_metadata=all_video_metadatas if all_video_metadatas else None,
-                return_tensors="pt",
-                padding=True,
-                do_resize=False,
-                **all_video_kwargs,
+        all_texts, all_images, all_videos, all_video_metadatas = [], [], [], []
+        all_video_kwargs, sample_bboxes = {}, []
+        for sample in batch_samples:
+            messages = gen_collator._build_messages(sample, include_assistant=False)
+            text = processor.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False,
             )
-            # Free decoded video frames before moving tensors to GPU
-            del all_texts, all_images, all_videos, all_video_metadatas, all_video_kwargs
-            inputs = {k: v.to(device) if isinstance(v, torch.Tensor) else v
-                      for k, v in inputs.items()}
+            all_texts.append(text)
+            images, videos, video_kwargs = process_vision_info(
+                messages, image_patch_size=16,
+                return_video_kwargs=True, return_video_metadata=True,
+            )
+            del messages
+            if images:
+                all_images.extend(images)
+            if videos is not None:
+                vids, metas = zip(*videos)
+                all_videos.extend(list(vids))
+                all_video_metadatas.extend(list(metas))
+                sample_bboxes.extend([sample.get('bbox')] * len(vids))
+            del images, videos
+            if video_kwargs:
+                all_video_kwargs.update(video_kwargs)
+        # Apply the SAME signer crop as training to keep train/eval distributions matched.
+        all_videos = gen_collator._apply_signer_crop(all_videos, sample_bboxes)
+        inputs_cpu = processor(
+            text=all_texts,
+            images=all_images if all_images else None,
+            videos=all_videos if all_videos else None,
+            video_metadata=all_video_metadatas if all_video_metadatas else None,
+            return_tensors="pt",
+            padding=True,
+            do_resize=False,
+            **all_video_kwargs,
+        )
+        del all_texts, all_images, all_videos, all_video_metadatas, all_video_kwargs
+        return inputs_cpu, batch_samples
 
-            # Qwen3-VL uses per-frame timestamps, so _expand_inputs_for_generation
-            # (called by beam search) splits video_grid_thw by video_nums which equals
-            # the number of frames T. Pre-convert from [[T,H,W]] to T×[[1,H,W]] so
-            # the split matches and beam search works correctly.
-            if inputs.get('video_grid_thw') is not None and config['val_beam_size'] > 1:
-                vgt = inputs['video_grid_thw']
-                vgt = torch.repeat_interleave(vgt, vgt[:, 0], dim=0).clone()
-                vgt[:, 0] = 1
-                inputs['video_grid_thw'] = vgt
+    # Build ordered list of per-batch index slices upfront.
+    batch_ranges = [
+        sample_indices[i:min(i + config['val_gen_batch_size'], num_samples)]
+        for i in range(0, num_samples, config['val_gen_batch_size'])
+    ]
 
-            with torch.amp.autocast('cuda', dtype=torch.bfloat16):
-                generated_ids = model.generate(
-                    **inputs,
-                    max_new_tokens=config['val_max_new_tokens'],
-                    num_beams=config['val_beam_size'],
-                    length_penalty=config['val_length_penalty'],
-                    no_repeat_ngram_size=config['val_no_repeat_ngram_size'],
-                    repetition_penalty=config['val_repetition_penalty'],
-                    do_sample=False,
-                    # Suppress "invalid generation flags" warning: temperature / top_p /
-                    # top_k are baked into the model's generation_config.json but are
-                    # not used during beam search (do_sample=False). Passing None here
-                    # explicitly overrides those baked-in values.
-                    temperature=None,
-                    top_p=None,
-                    top_k=None,
-                    use_cache=True,
+    with ThreadPoolExecutor(max_workers=1) as _gen_executor:
+        # Submit all tasks at once. With max_workers=1 they queue and execute one
+        # at a time in order, so batch N+1 starts immediately after batch N
+        # finishes preprocessing — overlapping with GPU generation of batch N.
+        all_futures = [_gen_executor.submit(_prep_gen_batch, br) for br in batch_ranges]
+
+        for batch_num in range(len(batch_ranges)):
+            future = all_futures[batch_num]
+            all_futures[batch_num] = None  # release ref so past results can be GC'd
+
+            batch_size_this = len(batch_ranges[batch_num])
+
+            # Wait for CPU preprocessing to finish (usually already done).
+            try:
+                inputs_cpu, batch_samples = future.result()
+                del future
+            except Exception as e:
+                print(f"  ⚠️  Preprocessing error for batch {batch_num}: {e}")
+                gc.collect()
+                gen_pbar.update(batch_size_this)
+                continue
+
+            # GPU phase: transfer → fix video_grid_thw → generate → decode.
+            try:
+                # non_blocking=True overlaps H2D transfer with any residual CPU work.
+                inputs = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
+                          for k, v in inputs_cpu.items()}
+                del inputs_cpu
+
+                # Qwen3-VL uses per-frame timestamps, so _expand_inputs_for_generation
+                # (called by beam search) splits video_grid_thw by video_nums which equals
+                # the number of frames T. Pre-convert from [[T,H,W]] to T×[[1,H,W]] so
+                # the split matches and beam search works correctly.
+                if inputs.get('video_grid_thw') is not None and config['val_beam_size'] > 1:
+                    vgt = inputs['video_grid_thw']
+                    vgt = torch.repeat_interleave(vgt, vgt[:, 0], dim=0).clone()
+                    vgt[:, 0] = 1
+                    inputs['video_grid_thw'] = vgt
+
+                with torch.inference_mode(), torch.amp.autocast('cuda', dtype=torch.bfloat16):
+                    generated_ids = model.generate(
+                        **inputs,
+                        max_new_tokens=config['val_max_new_tokens'],
+                        num_beams=config['val_beam_size'],
+                        length_penalty=config['val_length_penalty'],
+                        no_repeat_ngram_size=config['val_no_repeat_ngram_size'],
+                        repetition_penalty=config['val_repetition_penalty'],
+                        do_sample=False,
+                        # Suppress "invalid generation flags" warning: temperature / top_p /
+                        # top_k are baked into the model's generation_config.json but are
+                        # not used during beam search (do_sample=False). Passing None here
+                        # explicitly overrides those baked-in values.
+                        temperature=None,
+                        top_p=None,
+                        top_k=None,
+                        use_cache=True,
+                    )
+
+                # Trim input prefix from generated ids
+                generated_ids_trimmed = [
+                    out_ids[len(in_ids):]
+                    for in_ids, out_ids in zip(inputs['input_ids'], generated_ids)
+                ]
+                batch_hypotheses = processor.batch_decode(
+                    generated_ids_trimmed, skip_special_tokens=True,
+                    clean_up_tokenization_spaces=False,
                 )
 
-            # Trim input prefix from generated ids
-            generated_ids_trimmed = [
-                out_ids[len(in_ids):]
-                for in_ids, out_ids in zip(inputs['input_ids'], generated_ids)
-            ]
-            batch_hypotheses = processor.batch_decode(
-                generated_ids_trimmed, skip_special_tokens=True,
-                clean_up_tokenization_spaces=False,
-            )
+                for sample, hyp_text in zip(batch_samples, batch_hypotheses):
+                    ref_text = sample['text'].strip()
+                    hyp_text = hyp_text.strip()
+                    src = sample.get('source', 'unknown')
+                    references.append(ref_text)
+                    hypotheses.append(hyp_text)
+                    sources.append(src)
+                    if len(sample_pairs) < config['num_print_samples']:
+                        sample_pairs.append((ref_text, hyp_text, src))
 
-            for j, (sample, hyp_text) in enumerate(zip(batch_samples, batch_hypotheses)):
-                ref_text = sample['text'].strip()
-                hyp_text = hyp_text.strip()
-                src = sample.get('source', 'unknown')
+                del inputs, generated_ids, generated_ids_trimmed, batch_hypotheses, batch_samples
+                torch.cuda.empty_cache()
+                gc.collect()  # free CPU RAM from decoded strings
 
-                references.append(ref_text)
-                hypotheses.append(hyp_text)
-                sources.append(src)
+            except torch.cuda.OutOfMemoryError:
+                print(f"  ⚠️  OOM during generation — skipping batch {batch_num}")
+                gc.collect()
+                torch.cuda.empty_cache()
+            except Exception as e:
+                print(f"  ⚠️  Error during generation batch {batch_num}: {e}")
+                gc.collect()
+                torch.cuda.empty_cache()
 
-                if len(sample_pairs) < config['num_print_samples']:
-                    sample_pairs.append((ref_text, hyp_text, src))
+            gen_pbar.update(batch_size_this)
 
-            del inputs, generated_ids, generated_ids_trimmed, batch_hypotheses, batch_samples
-            torch.cuda.empty_cache()
-            gc.collect()  # Force garbage collection to free CPU RAM from strings
-
-        except torch.cuda.OutOfMemoryError:
-            print(f"  ⚠️  OOM during generation — skipping batch {i}")
-            gc.collect()
-            torch.cuda.empty_cache()
-        except Exception as e:
-            print(f"  ⚠️  Error during generation batch {i}: {e}")
-            gc.collect()
-            torch.cuda.empty_cache()
-
-        gen_pbar.update(batch_end - i)
     gen_pbar.close()
-    del sample_indices  # no longer needed after generation loop
+    del sample_indices, batch_ranges  # no longer needed after generation loop
 
     def _metrics_for(refs, hyps):
         if not refs:

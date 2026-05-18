@@ -1,0 +1,57 @@
+════════════════════════════════════════════════════════════════════════════════
+  QWEN3-VL TEST-SET EVALUATION — SUMMARY
+════════════════════════════════════════════════════════════════════════════════
+
+── Checkpoint ─────────────────────────────────────────────────────────────
+  Path         : /outputs/checkpoints/qwen3vl/checkpoint_step_4610
+  Model        : Qwen/Qwen3-VL-2B-Instruct
+
+── Dataset ────────────────────────────────────────────────────────────────
+  Eval sources : how2sign
+  Total clips  : 944
+    how2sign    : 944 clips
+  Data TSV     : /data/data/7_dataset_test.tsv
+
+── Loss Pass ──────────────────────────────────────────────────────────────
+  Computed     : no  (compute_loss=False)
+
+── Generation Pass ────────────────────────────────────────────────────────
+  Batch size         : 8
+  Batches            : 118
+  Beam size          : 5
+  Length penalty     : 0.6
+  No-repeat ngram    : 4
+  Repetition penalty : 1.1
+  Max new tokens     : 32
+  Time               : 83.5 min
+
+── Video / Vision Config ──────────────────────────────────────────────────
+  FPS              : 20
+  Min pixels       : 4096
+  Max pixels       : 184320
+  Signer crop      : True
+  Landmark overlay : True
+
+── Timing ─────────────────────────────────────────────────────────────────
+  Loss pass : n/a
+  Gen pass  : 83.5 min
+  Total     : 83.9 min
+
+── Metrics ────────────────────────────────────────────────────────────────
+  metric              overall    how2sign
+  ───────────────────────────────────────
+  count                   944         944
+  BLEU-1              19.7584     19.7584
+  BLEU-2               6.9472      6.9472
+  BLEU-4               1.6383      1.6383
+  chrF                17.4194     17.4194
+  chrF++              16.0374     16.0374
+  ROUGE-L             10.4332     10.4332
+  METEOR               9.7094      9.7094
+  WER%               112.5092    112.5092
+  distinct-1           0.0451      0.0451
+  distinct-2           0.1030      0.1030
+  mean ref len        12.9057     12.9057
+  mean hyp len        14.3856     14.3856
+  len ratio            1.1147      1.1147
+

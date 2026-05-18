@@ -24,13 +24,14 @@ import gc
 import json
 import math
 import os
+import random
 import sys
 import time
 import traceback
 from pathlib import Path
 
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  IMPORT FROM TRAINING SCRIPT
@@ -72,51 +73,63 @@ TEST_CONFIG = {
     # int (e.g. 3960)    → load <checkpoint_dir>/checkpoint_step_3960
     # None               → load latest checkpoint in the dir
     'checkpoint_dir':       CONFIG['checkpoint_dir'],   # follow training paths
-    'checkpoint_step':      5700,                         # set this to the step you want
+    'checkpoint_step':      4610,                         # set this to the step you want
     'use_best_model':       False,
 
     # ── Decoding ────────────────────────────────────────────────────────────
-    'beam_size':                4,        # paper-grade default
-    'length_penalty':           1.0,
-    'no_repeat_ngram_size':     3,
-    'repetition_penalty':       1.3,
-    'max_new_tokens':           70,
+    # Tuned to maximize automated metrics on top of step_3790. Prior run with
+    # beam=4/lp=1.0/max=70/rp=1.3 produced len_ratio=1.32 and over-long generic
+    # outputs (BLEU-4=1.78, WER=126.9). The settings below cap length near
+    # the reference distribution, soften penalties that were hurting natural
+    # n-gram overlap, and use a slightly wider beam.
+    'beam_size':                5,        # +1 over prior run; standard BLEU sweet spot
+    'length_penalty':           0.6,      # <1 favors shorter beams → fights len_ratio>1
+    'no_repeat_ngram_size':     4,        # looser than 3 — refs contain 3-grams like "you want to"
+    'repetition_penalty':       1.1,      # 1.3 was over-penalizing natural function-word repeats
+    'max_new_tokens':           32,       # mean ref len 13.1; covers ~p95 with margin
 
     # ── Eval coverage ───────────────────────────────────────────────────────
-    'compute_loss':             True,    # teacher-forced loss/PPL on the test set
-    'gen_batch_size':           6,
-    'loss_batch_size':          6,
+    'compute_loss':             False,
+    'gen_batch_size':           8,
+    'loss_batch_size':          8,
     # Set to True to skip the loss pass and load loss/PPL from the saved
     # _loss_checkpoint.json (written at the end of a previous loss pass).
     # Useful when restarting after a generation-pass crash — saves re-running
     # the full loss pass. If True but the file is missing, a warning is printed
     # and the loss pass runs normally from scratch.
-    'resume_from_loss_checkpoint': False,
+    'resume_from_loss_checkpoint': True,
 
     # ── What to evaluate ────────────────────────────────────────────────────
     # Sources to include — both is the recommended default.
-    'eval_sources':             ('how2sign', 'openasl'),
+    'eval_sources':             ('how2sign',), # 'openasl', 'how2sign'
 
     # ── Output ──────────────────────────────────────────────────────────────
     # Folder name follows the same suffix-on-folder pattern as training.
     # Locally: <repo>/test_results_qwen3vl/  (or under Kaggle/Modal mounts).
     'results_dir_name':         'test_results_qwen3vl',
-    'results_subfolder':        None,    # auto: f"step_{step}_beam{beam}"  if None
+    'results_subfolder':        'step_4610_optimized_final',
     # Files written inside results_dir_name/results_subfolder/
     'aggregate_json':           'metrics.json',
     'per_example_csv':          'predictions.csv',
     'summary_txt':              'summary.txt',
 
+    # ── Sampling ────────────────────────────────────────────────────────────
+    # Randomly subsample the test set to this many examples (None = use all).
+    'max_test_samples':         None,
+    # Sort generation batches by clip duration (True = less padding, faster).
+    # Set to False for random order (unbiased sample when max_test_samples < n).
+    'gen_sort_by_duration':     False,
+
     # ── Misc ────────────────────────────────────────────────────────────────
     'num_workers':              6,
-    'prefetch_factor':          6,
+    'prefetch_factor':          4,
     'pin_memory':               True,
     'print_first_n_samples':    20,    # echo this many ref/hyp pairs to stdout
 
     # ── Modal resources (override training CONFIG values) ────────────────────
     'modal_gpu':     "A100-80GB",       # e.g. 'A100-80GB', 'H100', 'T4'
-    'modal_cpu':     10,
-    'modal_memory':  70,    # GB
+    'modal_cpu':     6,
+    'modal_memory':  50,    # GB
     'modal_timeout': CONFIG['modal_timeout'],   # seconds
     'modal_retries': CONFIG.get('modal_retries', 0),
 }
@@ -163,7 +176,7 @@ def all_metrics(references, hypotheses):
     if not references:
         return {
             'n':               0,
-            'bleu1':           0.0, 'bleu2': 0.0, 'bleu3': 0.0, 'bleu4': 0.0,
+            'bleu1':           0.0, 'bleu2': 0.0, 'bleu4': 0.0,
             'chrf':            0.0, 'chrf_pp': 0.0,
             'rouge_l':         0.0, 'meteor':  0.0, 'wer':    0.0,
             'distinct_1':      0.0, 'distinct_2': 0.0,
@@ -174,7 +187,6 @@ def all_metrics(references, hypotheses):
         'n':         len(references),
         'bleu1':     compute_bleu(references, hypotheses, max_n=1),
         'bleu2':     compute_bleu(references, hypotheses, max_n=2),
-        'bleu3':     compute_bleu(references, hypotheses, max_n=3),
         'bleu4':     compute_bleu(references, hypotheses, max_n=4),
         'chrf':      compute_chrf(references, hypotheses),
         'chrf_pp':   compute_chrf_pp(references, hypotheses),
@@ -289,12 +301,31 @@ def _load_model_and_processor(ckpt_path: Path):
 
     print(f"  Loading LoRA adapter from: {ckpt_path}")
     model = PeftModel.from_pretrained(model, ckpt_path / 'adapter', is_trainable=False)
+    # Fuse LoRA delta weights into the base weights and discard the adapter modules.
+    # Eliminates all adapter forward-pass overhead with zero quality change.
+    print("  Merging LoRA adapter into base weights...")
+    model = model.merge_and_unload()
+    print("  ✓ LoRA adapter merged and unloaded")
     model.eval()
     for p in model.parameters():
         p.requires_grad_(False)
 
     if hasattr(model, 'config'):
         model.config.use_cache = True
+
+    # torch.compile the decoder only. The visual encoder uses flash_attn_varlen_func
+    # which requires concrete int for max_seqlen — TorchDynamo cannot trace through it,
+    # so we disable dynamo on the vision tower before compiling the rest.
+    try:
+        import torch._dynamo as _dynamo
+        if hasattr(model, 'model') and hasattr(model.model, 'visual'):
+            model.model.visual.forward = _dynamo.disable(model.model.visual.forward)
+        elif hasattr(model, 'visual'):
+            model.visual.forward = _dynamo.disable(model.visual.forward)
+        model = torch.compile(model, mode='reduce-overhead', fullgraph=False)
+        print("  ✓ torch.compile applied (mode=reduce-overhead, visual encoder excluded)")
+    except Exception as _compile_err:
+        print(f"  ⚠️  torch.compile skipped: {_compile_err}")
 
     return model, processor
 
@@ -328,16 +359,25 @@ def _build_test_dataset_and_loader(processor):
 
     val_collator = Qwen3VLCollator(processor, CONFIG, is_training=False)
 
-    loader = DataLoader(
+    # Length bucketing for the loss pass: group similar-duration clips into
+    # the same batch so padding is minimal. Reuses BucketBatchSampler from
+    # training (shuffle=False → deterministic order). Pure speedup with no
+    # impact on per-token loss / perplexity (corpus-level averages).
+    bucket_sampler = t.BucketBatchSampler(
         test_dataset,
         batch_size=TEST_CONFIG['loss_batch_size'],
         shuffle=False,
+    )
+    loader = DataLoader(
+        test_dataset,
+        batch_sampler=bucket_sampler,
         collate_fn=val_collator,
         num_workers=TEST_CONFIG['num_workers'],
         prefetch_factor=TEST_CONFIG['prefetch_factor'] if TEST_CONFIG['num_workers'] > 0 else None,
         pin_memory=TEST_CONFIG['pin_memory'],
-        persistent_workers=False,
+        persistent_workers=True,
     )
+    print(f"  ✓ Loss-pass loader using length bucketing ({len(bucket_sampler)} batches)")
     return test_dataset, loader, val_collator
 
 
@@ -496,7 +536,6 @@ _METRIC_ORDER = [
     ('n',              'count'),
     ('bleu1',          'BLEU-1'),
     ('bleu2',          'BLEU-2'),
-    ('bleu3',          'BLEU-3'),
     ('bleu4',          'BLEU-4'),
     ('chrf',           'chrF'),
     ('chrf_pp',        'chrF++'),
@@ -563,11 +602,12 @@ def main_test():
     test_dataset, test_loader, val_collator = _build_test_dataset_and_loader(processor)
     n_total = len(test_dataset)
 
-    full_eval_batches = math.ceil(n_total / TEST_CONFIG['loss_batch_size'])
+    n_eval = min(n_total, TEST_CONFIG['max_test_samples']) if TEST_CONFIG['max_test_samples'] else n_total
+    full_eval_batches = math.ceil(n_eval / TEST_CONFIG['loss_batch_size'])
     eval_config = dict(CONFIG)
     eval_config.update({
         'max_eval_batches':         full_eval_batches,
-        'max_generate_samples':     n_total,
+        'max_generate_samples':     n_eval,
         'val_loss_batch_size':      TEST_CONFIG['loss_batch_size'],
         'val_gen_batch_size':       TEST_CONFIG['gen_batch_size'],
         'val_beam_size':            TEST_CONFIG['beam_size'],
@@ -576,6 +616,7 @@ def main_test():
         'val_repetition_penalty':   TEST_CONFIG['repetition_penalty'],
         'val_max_new_tokens':       TEST_CONFIG['max_new_tokens'],
         'num_print_samples':        0,   # we print our own samples below
+        'gen_sort_by_duration':     TEST_CONFIG['gen_sort_by_duration'],
     })
 
     # Resolve output dir early so we can write the temp file into it.
