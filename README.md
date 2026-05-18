@@ -13,6 +13,8 @@ replaced by the single end-to-end fine-tune described here.
 
 A full technical write-up is available in
 [`report/sign_language_bridge.pdf`](report/sign_language_bridge.pdf).
+Trained weights (LoRA adapter + training state) are published on Hugging
+Face: [mamounyosef/sign-language-bridge](https://huggingface.co/mamounyosef/sign-language-bridge).
 
 ---
 
@@ -65,6 +67,23 @@ OpenASL in orange). How2Sign metrics rise sharply once fine-tuning begins
 at step 2,449, while OpenASL metrics plateau.
 
 <!-- markdownlint-enable MD033 -->
+
+### Qualitative examples
+
+Three good generated predictions alongside one clear mismatch, drawn from
+the How2Sign test set:
+
+| Reference | Hypothesis |
+| --- | --- |
+| "Well, today I'm going to show you how." | "I'm going to show you how to do that." |
+| "Now with anything, practice makes perfect." | "I'm going to show you how to do that in the next segment." |
+| "It really just takes some practice." | "We're going to do the same thing on the other side." |
+| "Don't panic, don't freak out, it's really not difficult." | "We're going to talk about how to choose a good pair of running shoes." |
+
+The first three are good cases: fluent, on-style, often capturing the
+meaning even when the exact wording differs. The last row is a clear
+failure: the reference and the hypothesis are about completely different
+things.
 
 ---
 
@@ -275,6 +294,21 @@ This is a transparent engineering write-up, not a state-of-the-art claim:
   reference.
 - All training was done on a single A100-80GB, a larger compute budget, a
   larger backbone and a larger dataset, are the most obvious next steps.
+
+---
+
+## Acknowledgements
+
+This project builds on [Qwen3-VL-2B-Instruct](https://github.com/QwenLM/Qwen3-VL)
+by the Qwen team at Alibaba Cloud, released under the Apache License 2.0.
+The fine-tuned weights produced by this work are a derivative of that model
+and remain subject to the Apache 2.0 license.
+
+The datasets used are [How2Sign](https://how2sign.github.io/) and
+[OpenASL](https://github.com/chevalierNoir/OpenASL), each under its own
+upstream terms of use. Only derived metadata (cleaned TSV manifests and
+precomputed bounding boxes) is included in this repository, not the raw
+videos.
 
 ---
 

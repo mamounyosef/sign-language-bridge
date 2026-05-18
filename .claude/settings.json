@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "mcp__plugin_context7_context7__query-docs",
-      "Read(//c/Users/mamou/AppData/Roaming/Python/Python312/site-packages/transformers/models/qwen3_vl/**)"
-    ]
-  }
-}
