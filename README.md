@@ -11,8 +11,8 @@ CNN feature extractor paired with a separate Transformer encoder and a
 trainable LLM decoder did not seem to produce coherent translations, and were
 replaced by the single end-to-end fine-tune described here.
 
-A full technical write-up is available in
-[`report/sign_language_bridge.pdf`](report/sign_language_bridge.pdf).
+The full technical report is published on
+[ResearchGate](https://www.researchgate.net/publication/404975806_Fine-Tuning_Qwen3-VL-2B_for_ASL_to_English_Translation).
 Trained weights (LoRA adapter + training state) are published on Hugging
 Face: [mamounyosef/sign-language-bridge](https://huggingface.co/mamounyosef/sign-language-bridge).
 
@@ -271,6 +271,9 @@ sign-language-bridge/
   checkpoints/                model checkpoints (gitignored)
 ```
 
+Main file with the model setup, training pipeline:
+[`model_training_scripts/model_training.py`](model_training_scripts/model_training.py).
+
 ---
 
 ## Report
@@ -278,7 +281,8 @@ sign-language-bridge/
 For the full write-up, including the dataset cleaning passes, the
 rationale behind each architecture and recipe choice, the training and
 generation-metric curves, qualitative examples, limitations, and future
-work, see [`report/sign_language_bridge.pdf`](report/sign_language_bridge.pdf)
+work, see the technical report on
+[ResearchGate](https://www.researchgate.net/publication/404975806_Fine-Tuning_Qwen3-VL-2B_for_ASL_to_English_Translation)
 (LaTeX source in [`report/template.tex`](report/template.tex)).
 
 ---
